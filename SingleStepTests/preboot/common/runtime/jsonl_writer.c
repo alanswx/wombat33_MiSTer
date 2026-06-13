@@ -21,6 +21,17 @@ static u8 g_pb[PB_SIZE];
 extern i16 jw_backend_write(const JwCtx *ctx, u32 sector_idx, const u8 *buf);
 #define driver_write_sector jw_backend_write
 #else
+/* recovery.s I/O bracket: flip the WHOLE vector base between our table
+ * and the OS/ROM original. The Quadra 800 SCSI driver takes traps and
+ * faults of its own while servicing an interrupt-driven DMA _Write; with
+ * the bench VBR active those would hijack our recovery stubs (vectors
+ * 2..9, 11..15, 32..47) and longjmp out of the write, corrupting it.
+ * Running _Write under the OS VBR puts it in the exact environment the
+ * boot block's _Read (which works) runs in. Declared weak so benches that
+ * don't link recovery.o (iotest/keytest) just skip the bracket. */
+extern void use_os_vbr(void)       __attribute__((weak));
+extern void use_recovery_vbr(void) __attribute__((weak));
+
 /* Single-sector _Write at byte offset (ctx.base_offset + sector_idx * 512).
  * Returns ioResult (0 = noErr). Inline asm calls $A003 _Write. */
 static i16 driver_write_sector(const JwCtx *ctx, u32 sector_idx, const u8 *buf)
@@ -51,6 +62,12 @@ static i16 driver_write_sector(const JwCtx *ctx, u32 sector_idx, const u8 *buf)
      * so it never needed this.) */
     asm volatile (".short 0xF478" ::: "memory");   /* cpusha dc */
 
+    /* Restore the OS/ROM VBR so the SCSI driver's own traps/faults +
+     * completion IRQ are serviced by the ROM (not our recovery stubs),
+     * then switch back to our table. IPL stays at the bench's level (the
+     * boot block's _Read runs masked and works, so the driver polls or
+     * lowers IPL itself). */
+    if (&use_os_vbr) use_os_vbr();
     asm volatile (
         "movel %0, %%a0   \n"
         ".short 0xA003    \n"   /* _Write */
@@ -58,6 +75,7 @@ static i16 driver_write_sector(const JwCtx *ctx, u32 sector_idx, const u8 *buf)
         : "g" (pb)
         : "a0", "a1", "d0", "d1", "d2", "cc", "memory"
     );
+    if (&use_recovery_vbr) use_recovery_vbr();
 
     return *(i16 *)(pb + PB_OFF_IORESULT);
 #endif

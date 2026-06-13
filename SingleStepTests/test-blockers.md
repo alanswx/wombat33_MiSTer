@@ -49,7 +49,24 @@ First real-Quadra-800 run surfaced two display/IO issues:
    `hw_unsafe` unless the runner save/restores that state. (SR-write tests
    are fine — the runner re-masks SR after every test.)
 
-4. **MAME won't boot the SCSI `.hda`** (CPU stays in ROM at `$408046C8`,
+5. **SCSI `_Write` ran with the bench VBR (not the OS VBR) — FIXED, the
+   real supervisor-environment bug.** The `_Write` ($A003) goes through
+   the ROM's SCSI driver, which takes its own traps/faults while servicing
+   the interrupt-driven DMA. But the bench runs with its OWN VBR
+   (vectors 2..9, 11..15, 32..47 are recovery stubs), so any trap/fault
+   the driver took mid-write hijacked `recovery_core` and longjmp'd out —
+   corrupting the write (the intermittent crashes / slowness). The boot
+   block's `_Read` works precisely because it runs in the ROM's VBR
+   (before `install_vbr`). Fix: `jsonl_writer.c` now brackets each
+   `_Write` with `use_os_vbr()` / `use_recovery_vbr()` (the I/O-bracket
+   machinery built for the Amiga port but never wired into the Mac path),
+   so the driver runs in the OS/ROM environment. IPL is left at the
+   bench's level (the `_Read` runs masked and works — the driver polls or
+   lowers IPL itself); if the write is still unreliable, lowering IPL
+   around the bracket is the next lever. (`use_os_vbr`/`use_recovery_vbr`
+   declared weak so iotest/keytest, which don't link recovery.o, skip it.)
+
+6. **MAME won't boot the SCSI `.hda`** (CPU stays in ROM at `$408046C8`,
    our boot block's screen-wipe never runs) — a MAME `macqd800` boot-
    device quirk; the disk attaches and is read, but the ROM doesn't
    execute the HFS boot block. Real hardware DOES boot it (the bench
