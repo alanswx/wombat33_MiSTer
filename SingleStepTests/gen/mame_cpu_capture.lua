@@ -865,13 +865,19 @@ tests[#tests + 1] = {
 }
 -- Writing CACR: the 68040 CACR is almost empty -- only DE (bit 31,
 -- data-cache enable) and IE (bit 15, instruction-cache enable) exist.
--- Writing 0 disables both caches on any 020/030/040. Safe round-trip.
+-- HW_UNSAFE: writing CACR changes the 68040 cache enable state mid-run.
+-- The supervisor bench relies on the caches it boots with (it manages
+-- coherency for its self-modifying program buffer via CPUSHA); toggling
+-- DE/IE -- especially re-enabling the data cache WITHOUT a CINV first --
+-- leaves stale cache lines that corrupt the bench's own next
+-- instructions (observed on a real Quadra 800: the run wedged here).
+-- So skip on hardware; the MAME golden still adjudicates the mask offline.
 tests[#tests + 1] = {
     name = "MOVEC.L D0,CACR; CACR,D1  write 0 (privileged)",
     preload = preload_dregs({[0] = 0x00000000, [1] = 0xAAAAAAAA}),
     test    = concat(bw(0x4E7B), bw(movec_ext(false, 0, 0x002)),
                      bw(0x4E7A), bw(movec_ext(false, 1, 0x002))),
-    privileged = true,
+    privileged = true, hw_unsafe = true,
 }
 -- 68040 DISCRIMINATOR: CACR write mask. On real 68040 silicon CACR
 -- implements ONLY DE ($80000000) and IE ($00008000), so writing all-ones
@@ -882,12 +888,15 @@ tests[#tests + 1] = {
 -- divergence to adjudicate on the Quadra 800: a correct core reading
 -- back $80008000 will FAIL against the MAME golden, and that failure is
 -- the CORRECT behavior. Replace this golden with a hardware capture.
+-- HW_UNSAFE for the same reason as the write-0 row above: this one
+-- RE-ENABLES the data cache (DE) without invalidating it, which is the
+-- exact instruction the real Quadra 800 wedged on (test index 191).
 tests[#tests + 1] = {
     name = "MOVEC.L D0,CACR; CACR,D1  write all-ones (040 mask=$80008000; MAME golden over-wide)",
     preload = preload_dregs({[0] = 0xFFFFFFFF, [1] = 0xAAAAAAAA}),
     test    = concat(bw(0x4E7B), bw(movec_ext(false, 0, 0x002)),
                      bw(0x4E7A), bw(movec_ext(false, 1, 0x002))),
-    privileged = true,
+    privileged = true, hw_unsafe = true,
 }
 -- 68040 DISCRIMINATOR: MOVE16 is 68040-NEW (illegal/F-line on 020/030).
 -- MOVE16 (A0)+,(A1)+ copies one 16-byte burst line between two
@@ -897,16 +906,19 @@ tests[#tests + 1] = {
 -- copied to +0x20; the diff is visible in the scratch window and in
 -- A0/A1 (each += 16). A core that traps this is not implementing the
 -- 040 burst-copy unit.
--- ram_init plants the 16-byte source pattern at scratch+0 (aligned: the
--- scratch base is 16-byte aligned on both MAME and the Mac bench, which
--- matters because MOVE16 forces 16-byte alignment of both operands).
+-- ram_init plants the 16-byte source pattern at scratch+0.
+-- HW_UNSAFE: MOVE16 forces 16-byte alignment of both operands, but the
+-- Mac bench's scratch base isn't guaranteed 16-byte aligned, so on real
+-- hardware the burst can read/write a line straddling adjacent payload
+-- memory and corrupt the bench. It also moves data through the 68040
+-- burst/cache path. Skip on hardware; the MAME golden covers it offline.
 tests[#tests + 1] = {
     name = "MOVE16 (A0)+,(A1)+  16-byte line copy (040-only)",
     preload = preload_an_scratch({[0] = 0, [1] = 0x20}),
     ram_init = {0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,
                 0x99,0xAA,0xBB,0xCC,0xDD,0xEE,0xFF,0x01},
     test    = concat(bw(0xF620), bw(0x9000)),
-    privileged = true,
+    privileged = true, hw_unsafe = true,
 }
 
 -- ---------- MOVE An,USP / MOVE USP,An ---------------------------------

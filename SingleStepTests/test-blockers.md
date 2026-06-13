@@ -35,7 +35,21 @@ First real-Quadra-800 run surfaced two display/IO issues:
    CDEFS=-DJW_NO_WRITE`) to confirm write-vs-CPU-hang, then move the
    results channel to the SCC serial port (polled, no DMA/cache/IRQ).
 
-3. **MAME won't boot the SCSI `.hda`** (CPU stays in ROM at `$408046C8`,
+3. **CACR-write + MOVE16 discriminators wedged the bench at test 191 —
+   FIXED (marked hw_unsafe).** With the write fix in place, the CPU run
+   reached test 191 = `MOVEC.L D0,CACR; CACR,D1 write all-ones`, which
+   RE-ENABLES the 68040 data cache (DE) without a preceding CINV. The
+   bench's own next instructions then read stale cache lines → corruption
+   → intermittent hang/crash (sometimes a reboot to the Happy Mac). The
+   neighboring `CACR write 0` (190) and `MOVE16` (192, also alignment-/
+   burst-sensitive) have the same hazard. These three rows now carry
+   `hw_unsafe` so the live bench skips them (like STOP/RESET); their MAME
+   goldens remain for offline adjudication. General rule: a test that
+   writes global CPU state the bench depends on (CACR, VBR, MMU) must be
+   `hw_unsafe` unless the runner save/restores that state. (SR-write tests
+   are fine — the runner re-masks SR after every test.)
+
+4. **MAME won't boot the SCSI `.hda`** (CPU stays in ROM at `$408046C8`,
    our boot block's screen-wipe never runs) — a MAME `macqd800` boot-
    device quirk; the disk attaches and is read, but the ROM doesn't
    execute the HFS boot block. Real hardware DOES boot it (the bench
