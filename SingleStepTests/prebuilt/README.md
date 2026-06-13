@@ -1,7 +1,7 @@
 # Prebuilt Quadra 800 bench disks (committed fixtures)
 
 Compressed, ready-to-run bootable disk images of the three 68040 benches.
-Each `.tgz` holds the SCSI hard-disk image (`.hda`) and the 800 K HFS
+Each `.tgz` holds the SCSI hard-disk image (`.hda`) and the 1.44 MB HFS
 floppy (`.dsk`) for one bench. Boot a Quadra 800 (or any 68040 Mac) from
 the disk and it runs the bench straight from the HFS boot block — no
 System needed — painting progress on the built-in DAFB display and
@@ -31,7 +31,7 @@ sha256sum -c SHA256SUMS                     # verify the bundles first
 ```
 - **`.hda`** — write to a BlueSCSI / SCSI2SD / real SCSI disk, or attach
   in an emulator. APM + Apple_HFS, boots directly into the bench.
-- **`.dsk`** — 800 K HFS floppy; write with Disk Copy / Greaseweazle /
+- **`.dsk`** — 1.44 MB HFS floppy; write with Disk Copy / Greaseweazle /
   `dd`, or mount in an emulator.
 
 Run it to **"ALL TESTS DONE"**, power off, pull `/Results.jsonl`, and diff:

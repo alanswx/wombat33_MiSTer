@@ -1,5 +1,5 @@
 #!/bin/bash
-# build_cpu_dsk.sh -- assemble an 800K HFS floppy that boots the
+# build_cpu_dsk.sh -- assemble a 1.44MB HFS floppy that boots the
 # 68040 MMU bench (register-mask + PFLUSH rows; live/fault rows skipped).
 #
 # Patches two markers:
@@ -23,7 +23,7 @@ make mmu
 [[ -f "$PAYLOAD" ]] || { echo "missing $PAYLOAD"; exit 1; }
 
 rm -f "$OUT"
-"$RB" new --quiet --fs hfs --size 800K --name MMUBench "$OUT" >/dev/null
+"$RB" new --quiet --fs hfs --size 1440K --name MMUBench "$OUT" >/dev/null
 
 put_get_off() {
     local host="$1" dst="$2" dec

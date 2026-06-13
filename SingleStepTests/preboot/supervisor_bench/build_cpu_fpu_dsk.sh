@@ -1,5 +1,5 @@
 #!/bin/bash
-# build_cpu_fpu_dsk.sh -- assemble an 800K HFS floppy that boots the
+# build_cpu_fpu_dsk.sh -- assemble a 1.44MB HFS floppy that boots the
 # CPU+FPU integration bench (macos_bench/cpu_fpu_tests.h).
 #
 # Patches two markers:
@@ -23,7 +23,7 @@ make cpu_fpu
 [[ -f "$PAYLOAD" ]] || { echo "missing $PAYLOAD"; exit 1; }
 
 rm -f "$OUT"
-"$RB" new --quiet --fs hfs --size 800K --name CPUFPUBench "$OUT" >/dev/null
+"$RB" new --quiet --fs hfs --size 1440K --name CPUFPUBench "$OUT" >/dev/null
 
 put_get_off() {
     local host="$1" dst="$2" dec
