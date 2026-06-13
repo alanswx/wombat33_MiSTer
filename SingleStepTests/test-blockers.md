@@ -21,14 +21,19 @@ First real-Quadra-800 run surfaced two display/IO issues:
    — the byte stride is read from ScrnRow `$0106` at runtime; only the
    depth is fixed). `dafb1` variant keeps 1 bpp for B&W screens.
 
-2. **`/Results.jsonl` reads back all-zero.** The bench's raw-sector
-   `_Write` ($A003) path, using the boot-handoff refnum/drive, isn't
-   persisting on this machine yet. The on-screen `run=/ok=/trap=` tally +
-   final `ioResult=` line are the readout meanwhile (the bench's original
-   design — photograph the screen). To debug: check `ioResult` on the
-   final screen; if non-zero, the boot-handoff refnum/drive
-   (variant_cpu_scsi.s / payload_entry_cpu.s) needs the Quadra's SCSI
-   driver refnum. Note MAME's 68040 doesn't persist the write either.
+2. **Froze at `run=58`, `/Results.jsonl` all-zero — FIX shipped, awaiting
+   re-test.** The writer buffers 16 KB batches, so the first `_Write`
+   ($A003) fires only when the buffer fills (~line 58 at ~280 B/line) —
+   exactly where it froze. Root cause: the 16 KB buffer is filled through
+   the 68040 **copyback data cache**, but the Quadra's SCSI does **DMA
+   from physical RAM**, so the driver read stale/zero RAM and wedged.
+   (`_Write`'s param block is identical to the boot block's `_Read` that
+   succeeds, so refnum/drive are fine — it's cache coherency, a 68040-only
+   issue the 68020 Mac II never had.) **Fix:** `jsonl_writer.c` now does
+   `CPUSHA DC` ($F478) before every `_Write`. If it still fails, boot the
+   `quadra800-cpu-nowrite-diag` disk (`-DJW_NO_WRITE`, via `make cpu
+   CDEFS=-DJW_NO_WRITE`) to confirm write-vs-CPU-hang, then move the
+   results channel to the SCC serial port (polled, no DMA/cache/IRQ).
 
 3. **MAME won't boot the SCSI `.hda`** (CPU stays in ROM at `$408046C8`,
    our boot block's screen-wipe never runs) — a MAME `macqd800` boot-

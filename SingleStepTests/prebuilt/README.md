@@ -21,6 +21,7 @@ writing `/Results.jsonl` back to the same disk.
 | `quadra800-cpu-2026-06-13.tgz` | 68040 integer CPU | 722 rows (full ISA + 040 discriminators: MOVE16, CACR/CAAR mask, RTM) |
 | `quadra800-fpu-2026-06-13.tgz` | 68040 FPU | 270 rows; hardware subset executes, unimplemented ops trap (vector 11) |
 | `quadra800-mmu-2026-06-13.tgz` | 68040 MMU | 24 rows; register-mask + PFLUSH run, live/fault rows skipped (see note) |
+| `quadra800-cpu-nowrite-diag-2026-06-13.tgz` | CPU bench, **disk writes stubbed out** | diagnostic only — runs all 722 to confirm the freeze was the SCSI write, not a CPU hang |
 
 ## Use
 
@@ -57,14 +58,24 @@ at runtime.
 > Fixed 2026-06-13 by painting one byte per pixel; hence the 640×480×256
 > requirement above.
 >
-> **Results write-back:** if `/Results.jsonl` reads back empty after a
-> run, the bench still tells you everything on screen — the live
-> `run=/ok=/trap=` tally and the final `ALL TESTS DONE` + `ioResult=`
-> line. Photograph the screen; that is the bench's primary readout (the
-> JSONL is a convenience). A non-zero `ioResult` means the SCSI `_Write`
-> path needs the boot-handoff refnum checked on this machine. (MAME's
-> 68040 also doesn't persist the write, so JSONL capture is hardware-only
-> regardless.)
+> **Results write-back (2026-06-13 hardware finding + fix):** on the
+> first real run the bench froze at `run=58` with an all-zero
+> `/Results.jsonl`. Cause: the writer buffers into 16 KB batches, so the
+> first SCSI `_Write` fires only when that buffer fills (~line 58) — and
+> on the 68040 the buffer was filled through the **copyback data cache**
+> while the Quadra's SCSI does **DMA from physical RAM**, so the driver
+> read stale RAM and wedged. (The Mac II this code came from is a 68020
+> with no copyback cache, so it never hit this.) **Fix:** the writer now
+> issues `CPUSHA DC` (push the data cache to RAM) before every `_Write`.
+>
+> If a run still freezes or `/Results.jsonl` is still empty, boot the
+> **`quadra800-cpu-nowrite-diag`** disk: it stubs the SCSI write out
+> entirely, so it should run all 722 tests to `ALL TESTS DONE`. If it
+> does, the remaining issue is purely the write path (next stop: a
+> serial-port results channel, which sidesteps SCSI/DMA). If it *still*
+> freezes at the same test, the problem is that test's execution, not the
+> write. Either way the on-screen `run=/ok=/trap=` tally + final
+> `ioResult=` are a valid readout — photograph the screen.
 
 ## Notes
 

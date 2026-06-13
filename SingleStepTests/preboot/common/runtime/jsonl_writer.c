@@ -25,6 +25,13 @@ extern i16 jw_backend_write(const JwCtx *ctx, u32 sector_idx, const u8 *buf);
  * Returns ioResult (0 = noErr). Inline asm calls $A003 _Write. */
 static i16 driver_write_sector(const JwCtx *ctx, u32 sector_idx, const u8 *buf)
 {
+#ifdef JW_NO_WRITE
+    /* Diagnostic build: skip the SCSI _Write entirely so we can confirm
+     * whether the bench freeze is the disk write (runs to completion with
+     * this defined => yes) or a CPU hang in a test (still freezes => no). */
+    (void)ctx; (void)sector_idx; (void)buf;
+    return 0;
+#else
     u8 *pb = g_pb;
     u32 i;
     for (i = 0; i < PB_SIZE; i++) pb[i] = 0;
@@ -35,6 +42,15 @@ static i16 driver_write_sector(const JwCtx *ctx, u32 sector_idx, const u8 *buf)
     *(i16 *)(pb + PB_OFF_IOPOSMODE)  = 1;     /* fsFromStart */
     *(u32 *)(pb + PB_OFF_IOPOSOFFSET) = ctx->base_offset + (u32)sector_idx * JW_BATCH_BYTES;
 
+    /* 68040 cache coherency: the buffer and param block were filled
+     * through the copyback data cache, but the Quadra 800's SCSI does
+     * DMA from PHYSICAL RAM — without pushing the data cache first, the
+     * DMA reads stale/zero RAM (writes zeros) and can wedge the driver.
+     * CPUSHA DC ($F478) pushes all dirty data lines to RAM + invalidates.
+     * (The Mac II this code came from is a 68020 with no copyback cache,
+     * so it never needed this.) */
+    asm volatile (".short 0xF478" ::: "memory");   /* cpusha dc */
+
     asm volatile (
         "movel %0, %%a0   \n"
         ".short 0xA003    \n"   /* _Write */
@@ -44,6 +60,7 @@ static i16 driver_write_sector(const JwCtx *ctx, u32 sector_idx, const u8 *buf)
     );
 
     return *(i16 *)(pb + PB_OFF_IORESULT);
+#endif
 }
 #endif /* JW_BACKEND_EXTERN */
 

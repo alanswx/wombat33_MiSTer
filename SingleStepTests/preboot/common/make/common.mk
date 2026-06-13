@@ -108,7 +108,9 @@ CFLAGS   := $(CPUFLAGS) -ffreestanding -fno-builtin -fomit-frame-pointer \
             -nostdlib -Os -Wall -Wextra -fno-pic -fno-exceptions \
             -fno-asynchronous-unwind-tables \
             -I. -I$(COMMON)/runtime -I$(COMMON)/display \
-            -DROW_BYTES=$(ROW_BYTES) $(CDEFS_VIDEO)
+            -DROW_BYTES=$(ROW_BYTES) $(CDEFS_VIDEO) $(CDEFS)
+# $(CDEFS) — extra -D flags from the command line, e.g.
+#   make cpu CDEFS=-DJW_NO_WRITE   (diagnostic: skip the SCSI write)
 # gas: --defsym propagates ROW_BYTES into the .s files. Each .s wraps
 # its fallback default behind `.ifndef ROW_BYTES` so direct AS invocations
 # without the Makefile still assemble (the default is 80 = legacy).
