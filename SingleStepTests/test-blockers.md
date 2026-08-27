@@ -135,6 +135,24 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     the disk at all (finding 6); and the physical Quadra could only say
     "it didn't start".
 
+    **Independently corroborated by QEMU (2026-08-27).** QEMU 8.2.2's
+    `q800` cannot run the bench — it aborts on its own internal
+    assertion (`qemu_mutex_lock_iothread_impl`, `system/cpus.c:504`) or
+    `fatal: DOUBLE MMU FAULT` as soon as *any* SCSI disk is attached,
+    including a blank template containing none of our code, on both ROM
+    revisions and at every RAM size tried. But its fault dump prints the
+    MMU state, and it is the same one measured in MAME:
+
+    ```
+    TCR 0000c000
+    DTTR0/1: 00000000/00000000   ITTR0/1: 00000000/00000000
+    ```
+
+    Two independent emulators agreeing that the Quadra ROM runs with
+    translation on and all four transparent windows disabled is good
+    evidence the state is faithful to real silicon rather than a MAME
+    artifact — which is the one assumption the `DTT0` fix rests on.
+
 12. **CPU bench wedges at test 180, `ANDI.W #$F8FF,SR` (not a boot
     bug).** With finding 11 fixed the CPU bench boots and runs, then
     stops at test 180 with `run=179 ok=179 trap=0`. That row clears the
