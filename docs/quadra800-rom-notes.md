@@ -1,12 +1,73 @@
 # Quadra 800 ROM — disassembly and exception/Sad Mac path
 
-Full linear disassembly: `quadra800-rom-f1a6f343.asm` (12 MB, 279k
-lines). Regenerate with:
+`quadra800-rom-disassembly.asm` — **every byte of the 1 MB ROM is
+accounted for**, verified programmatically:
+
+| | bytes | share |
+|---|---|---|
+| decoded as verified code | 502,606 | 47.9% |
+| emitted as data hex dump | 545,970 | 52.1% |
+| **unaccounted** | **0** | **0%** |
+
+154,144 instructions. Data regions are printed as hex + ASCII rather
+than silently skipped, so nothing in the image is missing from the
+listing.
 
 ```sh
-m68k-apple-macos-objdump -D -b binary -m m68k:68040 \
-    --adjust-vma=0x40800000 f1a6f343.rom > quadra800-rom-f1a6f343.asm
+python3 tools/m68k_rdisasm.py f1a6f343.rom --base 0x40800000 \
+    --scan-pointers --scan-prologues \
+    --entry 0x40800000 --entry 0x408026A0 --entry 0x40802310 \
+    --entry 0x4080280E --entry 0x408099B0 --entry 0x4088D9FE \
+    --out quadra800-rom-disassembly.asm
 ```
+
+**Why 47.9% code and not more.** Much of a Mac ROM is genuinely data —
+resources, the declaration ROM, fonts, icon bitmaps, dispatch tables.
+The harder limit is that almost everything is entered through the A-trap
+dispatch tables, which are built in RAM at boot, so a static walk cannot
+follow them. Coverage by seeding strategy:
+
+| seeds | code coverage |
+|---|---|
+| exception vector handlers only | 1.3% |
+| + `LINK A6` / `MOVEM.L -(SP)` / post-`RTS` prologues | 43.6% |
+| + every longword holding an in-image address (jump tables) | **47.9%** |
+
+Confidence is not uniform. Code reached from a vector handler is
+certain; prologue- and pointer-seeded code is heuristic — a seed only
+survives if it decodes cleanly, but false starts are possible. A linear
+sweep would report "100% code" and be lying, since it decodes data as
+garbage instructions and loses sync for pages afterwards.
+
+## The SCSI driver on our disks
+
+`quadra800-scsi-driver-disassembly.asm` — the `Apple_Driver43` partition
+from a bench image (LBA 64, `pmBootSize` 9392), disassembled from its
+entry point. Also 100% accounted: 6,948 bytes code (74.0%), 2,444 bytes
+data (26.0%), 0 missing.
+
+Partition entry as built by `rb-cli mac-scsi-bless`:
+
+| Field | Value |
+|---|---|
+| `pmPartName` / `pmParType` | `Macintosh` / `Apple_Driver43` |
+| `pmPartStatus` | `$0000007F` |
+| `pmBootSize` | 9392 |
+| `pmBootAddr` / `pmBootEntry` | `$00000000` / `$00000000` |
+| `pmBootCksum` | `$0000F624` |
+| `pmProcessor` | `68000` |
+
+Offset 0 is `6000 03d2` — `BRA.W $3D4`, the driver entry.
+
+**The driver contains no F-line instructions at all.** No 68030 MMU ops
+(`PMOVE`/`PTEST`/`PFLUSH`), and no `CPUSH`/`CINV`/`MOVE16` either, in any
+decoded code. A raw word scan of the image finds `$F4D8`, `$F494`,
+`$F024` and several `$F6xx` words, but every one of them falls in a data
+region — a word scan cannot tell opcodes from data, and here it is
+misleading.
+
+That **rules out** the hypothesis that the ROM F-line traps while
+executing a 68030-era driver off our disk during mount.
 
 ROM image `f1a6f343.rom` is the 1 MB Quadra 800 ROM, extracted from
 MAME's `roms/macqd800.zip`. **Base address `$40800000`** — confirmed two
@@ -151,10 +212,17 @@ sources of an unimplemented-`$Fxxx` exception are live for this project:
    *mount*, before any boot block runs. That fits a failure where
    nothing is painted on screen.
 
-Distinguishing the two is the open question: (1) is our code, (2) is the
-`Apple_Driver43` partition that `rb-cli mac-scsi-bless` installs. A
-scan of the driver image for `$Fxxx` words is not conclusive on its own,
-because a linear scan cannot tell opcodes from data.
+**(2) is now ruled out** — see the driver section above; the
+`Apple_Driver43` image contains no F-line instructions in any decoded
+code.
+
+That leaves **(1), our own boot block**, as the remaining candidate for
+the F-line trap. The only `$Fxxx` opcode it issues once the `DTT0`
+variants are excluded is `CPUSHA BC` (`$F4F8`), which finding 7 added on
+both sides of the payload `_Read`. It is a legal supervisor 68040
+instruction and should not trap — but it is the last `$Fxxx` we execute,
+and a variant with `PFLUSHA` removed still produced the same Sad Mac.
+The obvious experiment is a boot block with the `CPUSHA` pair removed.
 
 ## Useful low-memory globals seen in this path
 
