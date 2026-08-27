@@ -142,8 +142,15 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     bench's own environment — and control is lost to `$0007FFxx`. Same
     class as the `hw_unsafe` CACR/MOVE16 rows that wedged the 040 at
     test 191. The FPU bench reaches test 266 and the MMU bench runs to
-    completion (`MMU BENCH DONE`, ran=14, skipped=10). Corpus question,
-    left alone here.
+    completion (`MMU BENCH DONE`, ran=14, skipped=10).
+
+    **FIXED 2026-08-27:** marked `hw_unsafe` so the Mac bench skips it,
+    in `gen/mame_cpu_capture.lua` (the generator, so a re-capture keeps
+    it) and in the generated `gen/cpu_tests.h`. The instruction itself is
+    fine and MAME's captured golden still adjudicates it offline
+    (`sr $2704 -> $2004`); it is the bench's environment that cannot
+    survive handing the machine back to ROM interrupt handlers. With it
+    skipped the CPU bench completes all 722 rows — see finding 13.
 
 13. **First full end-to-end CPU run, and what it says about the corpus
     (2026-08-27).** With finding 11 fixed and row 179 skipped as a local
@@ -198,9 +205,14 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     corpus-portability debt, and they will diverge identically on real
     silicon — they are not a Quadra finding waiting to happen. Fixing
     them means either re-expressing them A6-relative, or marking them
-    platform-local and excluding them from the diff. Corpora were out of
-    scope for this session, so nothing in `gen/` was changed: the row-179
-    skip was a scratch build only and was reverted.
+    platform-local and excluding them from the diff — still open, and a
+    corpus decision rather than a boot one.
+
+    The row-179 `hw_unsafe` flag was made permanent (finding 12) and the
+    shipped `2026-08-27` CPU bundles rebuilt with it. Re-verified end to
+    end on the shipped image: same 717 / 696 / **667 match** split, and
+    the only rows the bench now skips are the four long-standing
+    `hw_unsafe` / Line-A rows plus row 179.
 
 ### Offline verification harness (new)
 

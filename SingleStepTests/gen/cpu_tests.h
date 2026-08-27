@@ -748,7 +748,7 @@ static CpuTestSpec g_cpu_tests[] = {
     {"ANDI.W #$F8FF,SR  clear T1+M+I (privileged)",
       {0}, 0,
       {0x02,0x7C,0xF8,0xFF}, 4,
-      {0}, 0, 1, 0, 0, 0xFF},
+      {0}, 0, 1, 0, 1, 0xFF},
     {"ORI.W #$0700,SR  set IPL=7 (privileged)",
       {0}, 0,
       {0x00,0x7C,0x07,0x00}, 4,

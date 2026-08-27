@@ -732,12 +732,14 @@ tests[#tests + 1] = {
     test    = concat(bw(0x027C), bw(0xFFFF)),
     privileged = true,
 }
+-- HW_UNSAFE: only row that lowers IPL (7->0); the next IRQ reaches a ROM
+-- handler the bench has displaced and never returns (wedged at test 180).
 tests[#tests + 1] = {
     name = "ANDI.W #$F8FF,SR  clear T1+M+I (privileged)",
     -- $F8FF = keep all but T1, M, IPL bits 10..8 -- leaves S=1.
     preload = {},
     test    = concat(bw(0x027C), bw(0xF8FF)),
-    privileged = true,
+    privileged = true, hw_unsafe = true,
 }
 tests[#tests + 1] = {
     name = "ORI.W #$0700,SR  set IPL=7 (privileged)",

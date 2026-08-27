@@ -59,11 +59,20 @@ enabled and every transparent-translation window disabled, so writes to
 mostly does not start" bug (finding 11 in `../test-blockers.md`); the
 2026-08-26 cache fix was necessary but not sufficient.
 
-With it, **all four benches now boot end to end under MAME
-`macqd800`** — the first time that has ever worked. The MMU bench runs
-to completion; the FPU bench reaches test 266; the CPU bench reaches
-test 180 and stops on a corpus row that re-enables interrupts
-(finding 12), not on anything to do with booting.
+With it, **all four benches now boot end to end under MAME `macqd800`**
+— the first time that has ever worked.
+
+Third: `ANDI.W #$F8FF,SR` is now marked `hw_unsafe` and skipped. It was
+the only row in the 722 that lowers the SR interrupt mask, and it wedged
+the bench at test 180 (finding 12). With it skipped the **CPU bench runs
+all 722 rows to `ALL TESTS DONE` and writes `/Results.jsonl` with
+`ioResult=0000`** — verified under MAME by extracting the file back off
+the disk and diffing it: 717 written, 696 comparable, **667 exact match**
+against the MAME baseline. The 29 that differ are corpus-portability
+artifacts, not CPU divergences (finding 13).
+
+The CPU `C` values changed with this rebuild because the corpus byte
+changed; the FPU and MMU images are untouched.
 
 | Bundle | Bench |
 |---|---|
@@ -111,14 +120,14 @@ every payload rebuild changes them):
 
 | Image | expected `C` |
 |---|---|
-| `quadra800-cpu.hda` | `5A9646DF` |
-| `quadra800-cpu.dsk` | `9C56C17C` |
+| `quadra800-cpu.hda` | `E156577E` |
+| `quadra800-cpu.dsk` | `7C197EAC` |
 | `quadra800-fpu.hda` | `AC893D41` |
 | `quadra800-fpu.dsk` | `AC8933E5` |
 | `quadra800-mmu.hda` | `AEF86860` |
 | `quadra800-mmu.dsk` | `ECA662B7` |
-| `quadra800-cpu-nowrite.hda` | `A6058355` |
-| `quadra800-cpu-nowrite.dsk` | `646129EE` |
+| `quadra800-cpu-nowrite.hda` | `9F380E00` |
+| `quadra800-cpu-nowrite.dsk` | `026BD0FC` |
 
 - Matches, and the bench runs → the payload arrived intact.
 - **Differs, or differs between two boots of the same disk** → the
