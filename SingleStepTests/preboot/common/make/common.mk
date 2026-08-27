@@ -121,7 +121,9 @@ CFLAGS   := $(CPUFLAGS) -ffreestanding -fno-builtin -fomit-frame-pointer \
 # driver refnum, _Read ioResult) ended up as unreadable speckle during
 # bring-up. Translate each -DFOO in CDEFS_VIDEO into --defsym FOO=1.
 ASDEFS_VIDEO := $(patsubst -D%,--defsym %=1,$(CDEFS_VIDEO))
-ASFLAGS  := $(CPUFLAGS) --defsym ROW_BYTES=$(ROW_BYTES) $(ASDEFS_VIDEO)
+# EXTRA_ASFLAGS: append-only hook, e.g. emulator images that need the DAFB
+# mapped transparently: make cpu EXTRA_ASFLAGS="--defsym BOOT_SET_DTT0=1"
+ASFLAGS  := $(CPUFLAGS) --defsym ROW_BYTES=$(ROW_BYTES) $(ASDEFS_VIDEO) $(EXTRA_ASFLAGS)
 LDFLAGS  := -nostdlib --no-eh-frame-hdr
 
 # Linker scripts live in common/runtime.

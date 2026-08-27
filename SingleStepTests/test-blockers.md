@@ -425,6 +425,44 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     safe because `use_os_vbr()` has already installed the ROM's vector
     table so the ROM services the interrupt.
 
+19. **Emulator triage of the write path: my IPL change was a
+    regression, and the other two levers are both required
+    (2026-08-27).** With `BOOT_SET_DTT0=1` (emulator images need the DAFB
+    mapped), three variants of `driver_write_sector` under MAME:
+
+    | Variant | MAME result |
+    |---|---|
+    | drop IPL to 0 across `_Write` (finding 18's fix) | **hangs at test 58** |
+    | remove the `use_os_vbr()` bracket | **crashes, ROM takes over** |
+    | remove the cache flush | **hangs at test 58** |
+    | flush + VBR bracket, IPL untouched | **`ALL TESTS DONE`, ioResult 0** |
+
+    So the shipped configuration was already correct and all three of my
+    candidate "fixes" make it worse. The IPL change was committed in
+    258a81c and shipped as T6 before being tested in emulation; it is now
+    reverted. T7 and T8 were built and offered for hardware testing —
+    both are regressions and should not be run.
+
+    Note test 58 recurs exactly as predicted: results buffer in 16 KB
+    batches at ~281 bytes per line, so the first `_Write` lands there.
+    Two independent breakages both stall at that row, which is good
+    evidence the arithmetic is right and that the first flush is the
+    trigger.
+
+    **Neither emulator can reproduce the hardware write failure** — both
+    complete the corpus and write `/Results.jsonl` successfully. So MAME
+    and QEMU can only catch regressions here, never confirm a fix. That
+    is exactly what they did.
+
+    Open lead for the hardware bug, from the Developer Note ch. 4: "the
+    ROM software uses **only pages marked uncacheable** when setting up
+    communication areas with alternate bus masters", and
+    `LockMemory` / `LockMemoryContiguous` "can change the attributes of
+    individual pages in the absence of VM". The bench's write buffer is
+    ordinary cacheable RAM handed to a 53C96 DMA engine. A flush before
+    the transfer is not the same as marking the page uncacheable, and the
+    note is explicit that Apple does the latter.
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local
