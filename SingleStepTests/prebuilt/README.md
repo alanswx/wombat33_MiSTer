@@ -137,14 +137,10 @@ every payload rebuild changes them):
 
 | Image | expected `C` |
 |---|---|
-| `quadra800-cpu.hda` | `A7263EC9` |
-| `quadra800-cpu.dsk` | `6A43EDB5` |
-| `quadra800-fpu.hda` | `99B49A1F` |
-| `quadra800-fpu.dsk` | `B9B499D4` |
-| `quadra800-mmu.hda` | `6ADBFD2B` |
-| `quadra800-mmu.dsk` | `C0750145` |
+| `quadra800-cpu.hda` | `1D983A3F` |
+| `quadra800-fpu.hda` | `F1B384AB` |
+| `quadra800-mmu.hda` | `19300E07` |
 | `quadra800-cpu-nowrite.hda` | `1F98DFE8` |
-| `quadra800-cpu-nowrite.dsk` | `28E5D443` |
 
 - Matches, and the bench runs → the payload arrived intact.
 - **Differs, or differs between two boots of the same disk** → the

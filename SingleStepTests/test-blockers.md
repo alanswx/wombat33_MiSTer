@@ -367,6 +367,40 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     hardware — T1 and T2 are built without it and the machine got further
     than it ever had.
 
+17. **Boot block proven healthy on hardware; last raw cache op removed
+    (2026-08-27).** Test T5 (halt at the `JMP` into the payload) on the
+    real Quadra 800 painted all five lines:
+
+    ```
+    A 00000008     BootDrive 8
+    D FFFFFFDF     driver refnum -33
+    E 00000000     _Read succeeded
+    C A7263EC9     matches the host-computed checksum exactly
+    3 <block>
+    ```
+
+    So on silicon: the disk mounts, the driver works, `_Read` transfers
+    256 KB intact, the 8 bpp paint is correct, and **both `_HwPriv` cache
+    flushes execute fine** (T4 had already isolated that one). Everything
+    up to entering the payload is healthy. The disk image, the rebuilt
+    `~/testdisk.hda` template and the `Apple_Driver43` partition are all
+    exonerated.
+
+    That leaves the payload. `common/runtime/jsonl_writer.c` still issued
+    a raw `CPUSHA DC` ($F478) before `_Write` (finding 2's fix), the last
+    raw cache instruction anywhere in the shipped code. Converted to the
+    ROM call, which hardware has now verified. `cpu`, `fpu` and
+    `cpu-nowrite` payloads are now free of raw cache opcodes entirely.
+
+    The `PFLUSHA` remaining in the MMU payload is **corpus test data**,
+    not code — the MMU bench deliberately executes `PFLUSH` rows inside
+    its recovery harness, so a fault there is recorded as a trap rather
+    than crashing. Prefer the CPU image for hardware bring-up.
+
+    `cpu-nowrite`'s checksum is unchanged by this commit, which is the
+    expected cross-check: `JW_NO_WRITE` stubs out the write path, so that
+    `CPUSHA` was never compiled into it.
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local

@@ -60,7 +60,10 @@ static i16 driver_write_sector(const JwCtx *ctx, u32 sector_idx, const u8 *buf)
      * CPUSHA DC ($F478) pushes all dirty data lines to RAM + invalidates.
      * (The Mac II this code came from is a 68020 with no copyback cache,
      * so it never needed this.) */
-    asm volatile (".short 0xF478" ::: "memory");   /* cpusha dc */
+    /* Raw CPUSHA faults on real Quadra 800 silicon (finding 16); the ROM
+     * call is verified working on hardware. Clobbers D0/A0. */
+    asm volatile ("moveq #1,%%d0 \n .short 0xA198"
+                  : : : "d0", "a0", "a1", "d1", "d2", "memory");
 
     /* Restore the OS/ROM VBR so the SCSI driver's own traps/faults +
      * completion IRQ are serviced by the ROM (not our recovery stubs),
