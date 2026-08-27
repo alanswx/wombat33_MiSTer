@@ -131,9 +131,12 @@ static u8 *build_program(const FpuTestSpec *t) {
  * the new test bytes. Required between tests since we keep rewriting
  * prog_buffer. Privileged — we're in supervisor mode. */
 static void flush_icache(void) {
+    /* Raw CPUSHA BC ($F4F8) bus-errors on real Quadra 800 silicon; use the
+     * ROM call, which flushes both caches on the 68040. Clobbers D0/A0. */
     asm volatile (
-        ".short 0xF4F8           \n"   /* cpusha bc (push+invalidate both) */
-        : : : "memory"
+        "moveq #1,%%d0           \n"
+        ".short 0xA198           \n"   /* _HwPriv FlushInstructionCache */
+        : : : "d0", "a0", "a1", "d1", "d2", "memory"
     );
 }
 

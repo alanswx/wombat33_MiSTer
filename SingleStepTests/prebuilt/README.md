@@ -82,6 +82,13 @@ the DAFB registers. In other words **the disks used to be single-use** —
 they worked once and then failed. Fixed in `payload_entry_cpu.s`, which
 all three benches share (finding 15).
 
+Fifth, and this one came from the machine rather than an emulator:
+**raw `CPUSHA BC` (`$F4F8`) takes a bus error on real Quadra 800
+silicon.** Finding 7 had put it on both sides of the payload `_Read`, and
+`flush_icache()` used it once per test. Every cache flush now goes
+through the ROM instead — `_HwPriv` selector 1, which the Developer Note
+says flushes *both* caches on the 68040 in a single call. See finding 16.
+
 All `C` values changed with this rebuild, because every payload did.
 
 | Bundle | Bench |
@@ -130,14 +137,14 @@ every payload rebuild changes them):
 
 | Image | expected `C` |
 |---|---|
-| `quadra800-cpu.hda` | `28773D68` |
-| `quadra800-cpu.dsk` | `93F44AE7` |
-| `quadra800-fpu.hda` | `80A5A45C` |
-| `quadra800-fpu.dsk` | `A0A5A411` |
-| `quadra800-mmu.hda` | `F237B0ED` |
-| `quadra800-mmu.dsk` | `8559C117` |
-| `quadra800-cpu-nowrite.hda` | `91DAD327` |
-| `quadra800-cpu-nowrite.dsk` | `5FD9FD58` |
+| `quadra800-cpu.hda` | `A7263EC9` |
+| `quadra800-cpu.dsk` | `6A43EDB5` |
+| `quadra800-fpu.hda` | `99B49A1F` |
+| `quadra800-fpu.dsk` | `B9B499D4` |
+| `quadra800-mmu.hda` | `6ADBFD2B` |
+| `quadra800-mmu.dsk` | `C0750145` |
+| `quadra800-cpu-nowrite.hda` | `1F98DFE8` |
+| `quadra800-cpu-nowrite.dsk` | `28E5D443` |
 
 - Matches, and the bench runs → the payload arrived intact.
 - **Differs, or differs between two boots of the same disk** → the

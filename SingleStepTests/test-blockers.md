@@ -302,6 +302,53 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     the only rows the bench now skips are the four long-standing
     `hw_unsafe` / Line-A rows plus row 179.
 
+16. **`CPUSHA BC` ($F4F8) bus-errors on real Quadra 800 silicon.
+    FIXED 2026-08-27 — first bug in this project found on hardware
+    rather than in an emulator.**
+
+    Bisected on the machine with three boot blocks that halt at chosen
+    points, so the screen stays up to read:
+
+    | Test | Boot block | Result on hardware |
+    |---|---|---|
+    | T1 | halt *before* the first `CPUSHA` | **`A 00000008` / `D FFFFFFDF`** — runs, paints, DrvQ walk OK |
+    | T3 | execute `CPUSHA`, then halt before `_Read` | **Sad Mac `0000000F 00000001`** |
+    | T2 | both `CPUSHA` replaced with `NOP` | **boots; payload runs and paints its banner** |
+
+    T1 proves the boot block, the 8 bpp paint, the drive-queue walk, the
+    disk structure and the driver are all fine. T3 executes exactly one
+    more instruction than T1 and dies, and its Sad Mac decodes (per
+    `docs/quadra800-rom-notes.md`) to System Error ID **1 = vector 2 =
+    bus error**, raised by `CPUSHA` itself. T2 removes it and the machine
+    boots. Three tests, one instruction isolated.
+
+    Note the ID differs from the original `0000000A` (ID 10, F-line) seen
+    with the full boot block; the fault presents differently depending on
+    what runs after it. ID 1 from T3 is the clean measurement, because
+    nothing executes after the `CPUSHA` except `BRA.S *`.
+
+    **Fix:** stop issuing raw cache instructions and use the ROM's own
+    call — `_HwPriv` selector 1 (`moveq #1,d0` + `$A198`). The Developer
+    Note, ch. 4: `_FlushInstructionCache` on the 68040 "is to flush both
+    the instruction and data caches", deliberately in one call to "avoid
+    problems in situations in which interrupts might occur while the
+    caches are being flushed individually". That is exactly what finding
+    7 wants, done the supported way, and it lets the ROM do whatever this
+    silicon actually needs. It clobbers D0/A0, so the boot block saves
+    `%d4/%d6/%d7/%a0` around it.
+
+    Applied to `common/boot/boot_stub_scsi.s` and to `flush_icache()` in
+    `bench_main.c`, `fpu_bench_main.c` and `mmu_bench_main.c`. Verified:
+    full 722-row CPU corpus to `ALL TESTS DONE` with `ioResult=0000`
+    under MAME, and bbsim reproduces the new checksum.
+
+    **This invalidates the emulator-only reasoning that produced finding
+    11.** Both MAME and QEMU execute `CPUSHA BC` happily, so no amount of
+    emulator work could have found this. Finding 11's `DTT0` change was
+    justified entirely on emulator behaviour and is still unproven on
+    hardware — T1 and T2 are built without it and the machine got further
+    than it ever had.
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local

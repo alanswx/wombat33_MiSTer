@@ -71,8 +71,12 @@ static u8 *put_l(u8 *p, u32 v) {
     *p++=(u8)(v>>24); *p++=(u8)(v>>16); *p++=(u8)(v>>8); *p++=(u8)v; return p;
 }
 
-/* 68040 cache push+invalidate (we rewrite prog_buffer each test). */
-static void cpusha_bc(void) { asm volatile (".short 0xF4F8" ::: "memory"); }
+/* Cache push+invalidate (we rewrite prog_buffer each test). Raw CPUSHA BC
+ * ($F4F8) bus-errors on real Quadra 800 silicon, so use the ROM call. */
+static void cpusha_bc(void) {
+    asm volatile ("moveq #1,%%d0 \n .short 0xA198"
+                  : : : "d0", "a0", "a1", "d1", "d2", "memory");
+}
 
 /* Save / restore the live OS 68040 MMU registers via MOVEC. */
 typedef struct { u32 tc, itt0, itt1, dtt0, dtt1, urp, srp; } MmuRegs;

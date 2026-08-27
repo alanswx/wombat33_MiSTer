@@ -302,17 +302,25 @@ startup:
     | Patched at build time — see payload_offset_value below.
     move.l  payload_offset_value(%pc), PB_OFF_IOPOSOFFSET(%a0)
 
-    | 68040: flush + invalidate both caches so no dirty line can be
-    | written back over the payload the transfer is about to deliver.
-    .short  0xF4F8                         | cpusha bc
+    | Flush both caches before the transfer. Raw CPUSHA BC ($F4F8) took a
+    | bus error on real Quadra 800 silicon, so use the ROM's own call:
+    | _HwPriv selector 1 flushes BOTH caches on the 68040 (Developer Note,
+    | ch.4). It clobbers D0/A0, so save the PB pointer around it.
+    movem.l %d4/%d6/%d7/%a0, -(%sp)
+    moveq   #1, %d0
+    .word   0xA198                         | _HwPriv FlushInstructionCache
+    movem.l (%sp)+, %d4/%d6/%d7/%a0
     nop
 
     .word   0xA002                         | _Read
     move.w  PB_OFF_IORESULT(%a0), %d7
 
-    | 68040: push anything the driver wrote through the CPU and drop
-    | both caches, so the JMP below fetches the payload from RAM.
-    .short  0xF4F8                         | cpusha bc
+    | Same again after the transfer, so the JMP below fetches the payload
+    | from RAM rather than a stale I-cache line.
+    movem.l %d4/%d6/%d7/%a0, -(%sp)
+    moveq   #1, %d0
+    .word   0xA198                         | _HwPriv FlushInstructionCache
+    movem.l (%sp)+, %d4/%d6/%d7/%a0
     nop
 
     | --- Paint 'E' (rEad) + ioResult ---
