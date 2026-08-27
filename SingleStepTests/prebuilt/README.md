@@ -43,11 +43,27 @@ Run it to **"ALL TESTS DONE"**, power off, pull `/Results.jsonl`, and diff:
 
 ## 2026-08-27 bundles — FULL rebuild (boot block **and** payload)
 
-**Boot these.** Unlike the 2026-08-26 bundles, which were
-**boot-block-only** re-splices carrying the unchanged 2026-06-13
-payloads, these are **full rebuilds: the payload was recompiled too.**
-The `payload_entry_cpu.s` 8 bpp paint fix therefore ships in an image
-for the first time here — it is present in no earlier bundle.
+**Boot these.** Two things are new. First, unlike the 2026-08-26
+bundles, which were **boot-block-only** re-splices carrying the
+unchanged 2026-06-13 payloads, these are **full rebuilds: the payload
+was recompiled too**, so the `payload_entry_cpu.s` 8 bpp paint fix
+ships in an image for the first time here.
+
+Second, and more important: the boot block now **sets up transparent
+translation (`DTT0`) for the DAFB aperture before it touches the
+screen.** The ROM hands the boot block a machine with the 68040 MMU
+enabled and every transparent-translation window disabled, so writes to
+`ScrnBase` did not reach video RAM — they landed at physical
+`$00001000`, and the 128 KB screen wipe destroyed low memory
+`$1000..$21000`, drive queue included. That is the real "the bench
+mostly does not start" bug (finding 11 in `../test-blockers.md`); the
+2026-08-26 cache fix was necessary but not sufficient.
+
+With it, **all four benches now boot end to end under MAME
+`macqd800`** — the first time that has ever worked. The MMU bench runs
+to completion; the FPU bench reaches test 266; the CPU bench reaches
+test 180 and stops on a corpus row that re-enables interrupts
+(finding 12), not on anything to do with booting.
 
 | Bundle | Bench |
 |---|---|

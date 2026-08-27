@@ -201,6 +201,36 @@ startup:
     move.w  #0x2700, %sr
     move.l  #0x00010000, %sp
 
+    | --- Make the DAFB aperture transparently translated (MUST be first) ---
+    | The ROM hands the boot block a machine with the 68040 MMU ENABLED
+    | (TC = $C000: E + P, 8 KB pages, SRP = $007FCC00) and ALL FOUR
+    | transparent-translation registers DISABLED. Every access we make
+    | therefore goes through the ROM's page tables -- and those do not
+    | map the DAFB aperture the way this code assumes. A write to
+    | ScrnBase ($F9001000) does NOT reach video RAM: it lands at
+    | physical $00001000. The 128 KB wipe just below would then scribble
+    | $FFFFFFFF over low memory $1000..$21000, taking out the drive
+    | queue at $4700 (and the low-memory globals) before the DrvQ walk
+    | ever reads it. The walk then dereferences $FFFFFFFF, faults, and
+    | the ROM's handler takes the machine back -- which is exactly the
+    | "bench mostly does not start" symptom seen on the physical Quadra.
+    |
+    | Fix: map $F0000000..$FFFFFFFF 1:1 through DTT0, cache-inhibited
+    | (CM = 10) as memory-mapped IO and a framebuffer must be.
+    |   $F00FE040 = base $F0, mask $0F, E=1, S=11 (user+supervisor), CM=10
+    |
+    | ONLY DTT0 is touched, deliberately. RAM keeps the ROM's own
+    | page-table mapping, which is what the SCSI driver behind _Read
+    | needs: forcing a blanket 1:1 over the whole address space instead
+    | makes _Read fail with readErr (-19). Leaving SR at $2700 likewise
+    | matters -- re-enabling interrupts here also breaks the load.
+    | The TTR is a CPU register, so it stays in force for the payload,
+    | whose entry shim paints through ScrnBase the same way.
+    move.l  #0xF00FE040, %d0
+    movec   %d0, %dtt0
+    pflusha
+    nop
+
     | --- Wipe screen black ---
     move.l  SCRNBASE.l, %a3
     tst.l   %a3

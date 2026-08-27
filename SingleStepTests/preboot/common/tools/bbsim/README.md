@@ -6,11 +6,17 @@ under [Musashi](https://github.com/kstenerud/Musashi) with a simulated
 Quadra 800 low memory and DAFB framebuffer, then dumps the framebuffer so
 you can look at what it painted.
 
-It exists because the two normal ways to check a boot-block change are
-both unavailable: MAME's `macqd800` refuses to execute the HFS boot block
-(see `test-blockers.md`), and the physical Quadra is a slow loop. This
-catches paint-polarity, row-stride and register-clobber mistakes in
-seconds.
+It exists because the physical Quadra is a slow loop, and it catches
+paint-polarity, row-stride and register-clobber mistakes in seconds.
+
+> **Caveat, added 2026-08-27 — bbsim has no MMU.** It maps VRAM flat at
+> `$F9000000`, so a screen wipe through `ScrnBase` always "works" here.
+> On the real machine the ROM hands the boot block an MMU that is *on*
+> with no transparent-translation windows, and that wipe went to
+> physical `$00001000` instead — destroying low memory. bbsim was blind
+> to it for ten weeks (finding 11 in `test-blockers.md`). A clean bbsim
+> run is necessary, not sufficient; MAME `macqd800` **does** boot these
+> disks end to end and is the stronger check.
 
 ## What it simulates
 

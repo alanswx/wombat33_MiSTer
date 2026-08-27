@@ -75,6 +75,76 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     commit. `--defsym HANDOFF_ADDR=...` exists to rebuild a boot block
     against an already-built payload meanwhile.
 
+11. **The boot block ran with the 68040 MMU on and no transparent
+    translation — its screen wipe destroyed low memory. FIXED
+    (2026-08-27).** This is the actual "bench mostly does not start"
+    bug; finding 7's cache fix was real but was not the whole story.
+
+    Measured on `macqd800` at the instant the ROM jumps into the HFS
+    boot block (it loads it at ~`$3FD480`):
+
+    ```
+    TC   = $0000C000     MMU translation ENABLED, 8 KB pages
+    SRP  = $007FCC00     supervisor root pointer (ROM's page tables)
+    ITT0 = ITT1 = DTT0 = DTT1 = $00000000    ALL transparent windows OFF
+    ```
+
+    So every access the boot block makes goes through the ROM's page
+    tables, and those do not map the DAFB aperture flat. A write to
+    `ScrnBase` (`$F9001000`) does **not** reach video RAM — it lands at
+    physical `$00001000`. The 128 KB screen wipe at the top of
+    `startup:` therefore sprays `$FFFFFFFF` over low memory
+    `$1000..$21000`.
+
+    That range contains the **drive queue**. Proven by changing the wipe
+    fill to `$A5A5A5A5` and finding exactly 128 KB of it at
+    `$001000..$020FFC` in RAM, with VRAM untouched. The `DrvQEl` at
+    `$4700` reads `$0000A30E` before the wipe and `$FFFFFFFF` after, so
+    the `DrvQHdr` walk immediately dereferences `$FFFFFFFF`, takes a
+    fault, and the ROM's handler takes the machine back — the CPU
+    "parked in ROM" of finding 6. Which low-memory casualty lands first
+    is luck, which is why it looked intermittent on the physical Quadra.
+
+    **Fix:** map the IO/framebuffer aperture 1:1 through `DTT0` as the
+    very first thing `startup:` does, before `ScrnBase` is touched:
+
+    ```
+    move.l  #0xF00FE040, %d0    | base $F0, mask $0F, E=1, S=11, CM=10
+    movec   %d0, %dtt0          | $F0000000..$FFFFFFFF, cache-inhibited
+    pflusha
+    nop
+    ```
+
+    Two constraints found the hard way, both by experiment:
+
+    - **Only `DTT0`.** Forcing a blanket 1:1 over the whole address
+      space (`$00FFE040` in `ITT0`+`DTT0`) makes the load fail with
+      `readErr (-19)`: RAM must keep the ROM's own page-table mapping
+      or the SCSI driver behind `_Read` stops working.
+    - **Keep `SR = $2700`.** Re-enabling interrupts at boot-block entry
+      also breaks the load.
+
+    A TTR is a CPU register, so the mapping stays in force for the
+    payload, whose entry shim paints through `ScrnBase` the same way.
+    Applied to all three boot stubs (`boot_stub_scsi.s`,
+    `boot_stub_floppy.s`, `boot_stub_scsi_fixed_offset.s`), same as
+    finding 7, so it cannot return through another make target.
+
+    **Why nothing caught this:** `bbsim` has no MMU and maps VRAM flat,
+    so the wipe always "worked" there; MAME was believed unable to boot
+    the disk at all (finding 6); and the physical Quadra could only say
+    "it didn't start".
+
+12. **CPU bench wedges at test 180, `ANDI.W #$F8FF,SR` (not a boot
+    bug).** With finding 11 fixed the CPU bench boots and runs, then
+    stops at test 180 with `run=179 ok=179 trap=0`. That row clears the
+    SR interrupt mask to IPL 0 — re-enabling interrupts inside the
+    bench's own environment — and control is lost to `$0007FFxx`. Same
+    class as the `hw_unsafe` CACR/MOVE16 rows that wedged the 040 at
+    test 191. The FPU bench reaches test 266 and the MMU bench runs to
+    completion (`MMU BENCH DONE`, ran=14, skipped=10). Corpus question,
+    left alone here.
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local
@@ -171,12 +241,14 @@ First real-Quadra-800 run surfaced two display/IO issues:
    around the bracket is the next lever. (`use_os_vbr`/`use_recovery_vbr`
    declared weak so iotest/keytest, which don't link recovery.o, skip it.)
 
-6. **MAME won't boot the SCSI `.hda`** (CPU stays in ROM at `$408046C8`,
-   our boot block's screen-wipe never runs) — a MAME `macqd800` boot-
-   device quirk; the disk attaches and is read, but the ROM doesn't
-   execute the HFS boot block. Real hardware DOES boot it (the bench
-   painted characters on Dani's Quadra). So end-to-end boot+results can't
-   be MAME-validated; the paint kernel was verified by host render instead.
+6. ~~**MAME won't boot the SCSI `.hda`**~~ — **WRONG, retracted
+   2026-08-27.** This was recorded as a MAME `macqd800` boot-device
+   quirk. It is not. MAME boots SCSI disks fine (an unrelated System
+   7.5.5 disk boots on `macqd800`), and the ROM *does* execute our HFS
+   boot block. The CPU parking in ROM at `$408046C6` was **our own bug**
+   — see finding 11. With that fixed, all four benches boot end to end
+   under MAME. The diagnosis stood for ten weeks and sent verification
+   down the offline-harness path instead of at the real defect.
 
 ## What is DONE and VERIFIED (against MAME `macqd800`, 2026-06-12)
 

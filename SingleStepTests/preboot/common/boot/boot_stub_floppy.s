@@ -95,6 +95,20 @@ startup:
     | bbEntry time on some ROMs/Snow combos.
     move.l  #0x00010000, %sp
 
+    | --- Make the DAFB aperture transparently translated (MUST be first) ---
+    | The ROM hands the boot block a machine with the 68040 MMU ENABLED
+    | (TC = $C000) and all four transparent-translation registers OFF, so
+    | ScrnBase ($F9001000) does not reach video RAM -- it translates to
+    | physical $00001000 and the 128 KB wipe below destroys low memory
+    | $1000..$21000, including the drive queue. Map $F0000000..$FFFFFFFF
+    | 1:1 through DTT0, cache-inhibited. Only DTT0: RAM must keep the
+    | ROM's page-table mapping or the driver's _Read fails with readErr.
+    | See the long comment in boot_stub_scsi.s.
+    move.l  #0xF00FE040, %d0
+    movec   %d0, %dtt0
+    pflusha
+    nop
+
     | --- Wipe screen black so error indicators are visible. ---
     move.l  0x0824.l, %a3              | %a3 = ScrnBase, kept for paint helpers
     tst.l   %a3
