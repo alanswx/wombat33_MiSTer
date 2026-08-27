@@ -135,23 +135,48 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     the disk at all (finding 6); and the physical Quadra could only say
     "it didn't start".
 
-    **Independently corroborated by QEMU (2026-08-27).** QEMU 8.2.2's
-    `q800` cannot run the bench — it aborts on its own internal
-    assertion (`qemu_mutex_lock_iothread_impl`, `system/cpus.c:504`) or
-    `fatal: DOUBLE MMU FAULT` as soon as *any* SCSI disk is attached,
-    including a blank template containing none of our code, on both ROM
-    revisions and at every RAM size tried. But its fault dump prints the
-    MMU state, and it is the same one measured in MAME:
+    **Independently confirmed on QEMU (2026-08-27).** Use the git-master
+    build at `~/nextstep-test/qemu-src/build/qemu-system-m68k`
+    (**11.1.50**), not the packaged `/usr/bin/qemu-system-m68k`
+    (**8.2.2**). 8.2.2 is useless here: it aborts on its own assertion
+    (`qemu_mutex_lock_iothread_impl`, `system/cpus.c:504`) or
+    `DOUBLE MMU FAULT` as soon as *any* SCSI disk is attached, including
+    a blank template with none of our code, on both ROM revisions and at
+    every RAM size. That lock was reworked upstream (it is `bql_lock_impl`
+    now), and 11.1.50 boots our disks fine.
+
+    Run: `-M q800 -m 128 -bios <Quadra800 ROM> -display none
+    -drive file=X.hda,format=raw,media=disk,if=none,id=hd0
+    -device scsi-hd,drive=hd0,scsi-id=0`, ROM extracted from MAME's
+    `macqd800.zip`. Screens come out via QMP `screendump`.
+
+    On 11.1.50 the **MMU bench runs to completion — `MMU BENCH DONE`,
+    ran=14, skipped=10, byte-identical to the MAME result**, painting
+    legible 8 bpp at 640x480. The FPU bench runs clean too. So the DTT0
+    fix is confirmed on a second, independent emulator, and QEMU's fault
+    dump reports the same handoff state MAME does:
 
     ```
     TCR 0000c000
     DTTR0/1: 00000000/00000000   ITTR0/1: 00000000/00000000
     ```
 
-    Two independent emulators agreeing that the Quadra ROM runs with
-    translation on and all four transparent windows disabled is good
-    evidence the state is faithful to real silicon rather than a MAME
-    artifact — which is the one assumption the `DTT0` fix rests on.
+    Two emulators sharing no MMU implementation agreeing on that is good
+    evidence the state is faithful to silicon rather than a MAME artifact
+    — the one assumption the `DTT0` fix rests on. In the CPU run QEMU
+    also reports `D5 = e156577e`, exactly the host-computed payload
+    checksum, and `DTTR0 = f00fe040`, i.e. it honoured our `MOVEC`.
+
+14. **CPU bench dies on QEMU 11.1.50 with a null stack pointer (open).**
+    Only the CPU image does; MMU and FPU are fine. `DOUBLE MMU FAULT`
+    with `A7 = 00000000`, `PC = 0000000a`, faulting at `$FFFFFFFC` —
+    an exception frame pushed onto a null stack. `VBR = $00062EF0` shows
+    `install_vbr` had run, so it is inside `bench_main`, and it happens
+    early (~3 s, before anything paints). MAME runs the same image to
+    `ALL TESTS DONE`, so this is a MAME/QEMU divergence, not a known
+    bench bug — but a genuinely null A7 would bite on hardware too, so
+    it is worth finding which row does it before trusting a long
+    hardware run. `target/m68k/op_helper.c:346` is where QEMU gives up.
 
 12. **CPU bench wedges at test 180, `ANDI.W #$F8FF,SR` (not a boot
     bug).** With finding 11 fixed the CPU bench boots and runs, then
