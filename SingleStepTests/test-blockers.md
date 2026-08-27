@@ -76,9 +76,27 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     against an already-built payload meanwhile.
 
 11. **The boot block ran with the 68040 MMU on and no transparent
-    translation — its screen wipe destroyed low memory. FIXED
-    (2026-08-27).** This is the actual "bench mostly does not start"
-    bug; finding 7's cache fix was real but was not the whole story.
+    translation — its screen wipe destroyed low memory. RETRACTED as a
+    hardware finding; the fix is now OFF by default (2026-08-27).**
+
+    > **This finding is emulator-only.** The `DTT0` fix below was
+    > justified entirely on MAME/QEMU behaviour and never reproduced on
+    > silicon. Worse, the `PFLUSHA` ($F518) it uses **F-line traps on the
+    > real Quadra 800** — Sad Mac `0000000F 0000000A`, System Error ID 10
+    > — which is the same class as finding 16's `CPUSHA` bus error, and
+    > was itself the failure that blocked every hardware run until it was
+    > removed. The block is now behind `.ifdef BOOT_SET_DTT0`, off by
+    > default; build emulator images with `--defsym BOOT_SET_DTT0=1`.
+    >
+    > What the two emulators actually showed is that *their* page-table
+    > walk does not map the DAFB aperture, so a `ScrnBase` write lands at
+    > physical `$00001000`. The Developer Note (ch. 4) says the ROM
+    > "manages the address space for the video frame buffers separately
+    > from main memory", and hardware test T1 (finding 16) painted
+    > correctly through `ScrnBase` with no `DTT0` at all — so the ROM's
+    > mapping is fine and there was nothing to fix.
+
+    Original text follows, kept for the record.
 
     Measured on `macqd800` at the instant the ROM jumps into the HFS
     boot block (it loads it at ~`$3FD480`):
