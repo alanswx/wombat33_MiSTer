@@ -37,6 +37,18 @@ _payload_start:
     move.w  #0x2700, %sr
     move.l  #0x00100000, %sp              | 1 MB high — plenty of stack room
 
+    | --- Zero .bss (MUST precede the handoff load, which lives in .bss) ---
+    | .bss is NOLOAD, so C statics start as whatever the boot block's 256 KB
+    | over-read left at those addresses — zeros only while /Results.jsonl is
+    | still blank, i.e. only on a disk that has never been run.
+    lea     _payload_bss_start, %a0
+    lea     _payload_bss_end, %a1
+1:  cmp.l   %a1, %a0
+    bcc.s   2f
+    clr.l   (%a0)+
+    bra.s   1b
+2:
+
     | --- Load handoff slot (refnum word, drive word) ---
     move.w  HANDOFF_ADDR.l, %d0
     move.w  %d0, g_handoff_refnum

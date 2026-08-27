@@ -17,9 +17,11 @@ SECTIONS
   }
   _payload_end_data = .;
   .bss (NOLOAD) : ALIGN(4) {
+    _payload_bss_start = .;
     *(.bss)
     *(.bss.*)
     *(COMMON)
+    . = ALIGN(4);
   }
   _payload_bss_end = .;
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }

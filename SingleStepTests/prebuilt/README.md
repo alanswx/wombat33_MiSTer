@@ -71,8 +71,18 @@ the disk and diffing it: 717 written, 696 comparable, **667 exact match**
 against the MAME baseline. The 29 that differ are corpus-portability
 artifacts, not CPU divergences (finding 13).
 
-The CPU `C` values changed with this rebuild because the corpus byte
-changed; the FPU and MMU images are untouched.
+Fourth, and the one that matters if you reuse a disk: the payload now
+**zeroes its own `.bss`**. It never did. `.bss` is `NOLOAD`, so every C
+static started as whatever the boot block's 256 KB over-read happened to
+leave at those addresses — zeros *only while `/Results.jsonl` is still
+blank*. After one completed run that region holds JSON text, so the
+statics came up as garbage on the next boot: the cached display stride
+became nonsense and the screen wipe ran ~4 MB past the framebuffer into
+the DAFB registers. In other words **the disks used to be single-use** —
+they worked once and then failed. Fixed in `payload_entry_cpu.s`, which
+all three benches share (finding 15).
+
+All `C` values changed with this rebuild, because every payload did.
 
 | Bundle | Bench |
 |---|---|
@@ -120,14 +130,14 @@ every payload rebuild changes them):
 
 | Image | expected `C` |
 |---|---|
-| `quadra800-cpu.hda` | `E156577E` |
-| `quadra800-cpu.dsk` | `7C197EAC` |
-| `quadra800-fpu.hda` | `AC893D41` |
-| `quadra800-fpu.dsk` | `AC8933E5` |
-| `quadra800-mmu.hda` | `AEF86860` |
-| `quadra800-mmu.dsk` | `ECA662B7` |
-| `quadra800-cpu-nowrite.hda` | `9F380E00` |
-| `quadra800-cpu-nowrite.dsk` | `026BD0FC` |
+| `quadra800-cpu.hda` | `28773D68` |
+| `quadra800-cpu.dsk` | `93F44AE7` |
+| `quadra800-fpu.hda` | `80A5A45C` |
+| `quadra800-fpu.dsk` | `A0A5A411` |
+| `quadra800-mmu.hda` | `F237B0ED` |
+| `quadra800-mmu.dsk` | `8559C117` |
+| `quadra800-cpu-nowrite.hda` | `91DAD327` |
+| `quadra800-cpu-nowrite.dsk` | `5FD9FD58` |
 
 - Matches, and the bench runs → the payload arrived intact.
 - **Differs, or differs between two boots of the same disk** → the

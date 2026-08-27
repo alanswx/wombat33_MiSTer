@@ -167,7 +167,52 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     also reports `D5 = e156577e`, exactly the host-computed payload
     checksum, and `DTTR0 = f00fe040`, i.e. it honoured our `MOVEC`.
 
-14. **CPU bench dies on QEMU 11.1.50 with a null stack pointer (open).**
+15. **The payload never zeroed its `.bss` — the bench disks were
+    single-use. FIXED 2026-08-27.** Root cause behind finding 14, the
+    MAME `DAFB: Aux scanline interrupt` aborts, and any second run of a
+    disk that had already been run.
+
+    `payload.ld` declares `.bss (NOLOAD)` and nothing cleared it, so
+    every C static came up as whatever the boot block's 256 KB over-read
+    left at that address. The payload is ~125 KB of a 256 KB read, so
+    `.bss` (`$5E938..$63384`) is filled from the disk *past* `/Payload`
+    — which is `/Results.jsonl`. That is zeros exactly once: on a disk
+    that has never been run. After one completed run it holds JSON text,
+    so on the next boot the statics are garbage.
+
+    The visible casualty is `display_row_bytes()`'s cached stride. It is
+    non-zero garbage, so the cache hit returns it instead of reading
+    `ScrnRow`, and `display_wipe(480)` computes `stride * 480` from it.
+    Measured on QEMU: the wipe ran from `$F9001000` to `$F9400000` —
+    ~4 MB — off the end of video RAM, taking a bus error. On MAME it
+    instead reaches the DAFB registers at `$F9800000` and trips
+    `Aux scanline interrupt enable not supported`, which is why that
+    abort was blamed on ROM code earlier; it was our own runaway wipe.
+
+    Proven causally: the pristine shipped image has 137054 zero bytes
+    (4 non-zero) between payload end and the end of the load window and
+    completes; fill just that region with `0x41` and the same image dies
+    at 10 s. With the fix that doctored image completes again.
+
+    **Fix:** `payload_entry_cpu.s` now zeroes `_payload_bss_start ..
+    _payload_bss_end` before anything else — it must precede the handoff
+    load, which lands in `.bss`. `payload.ld` gained the start symbol and
+    a `. = ALIGN(4)` so the clear can be a long loop. All three benches
+    share this shim, so all four bundles get it.
+
+    Both emulators now run every bench end to end: MAME and QEMU each
+    take the CPU corpus to `ALL TESTS DONE` with `ioResult=0000`.
+
+14. **CPU bench dies on QEMU 11.1.50 with a null stack pointer
+    (RESOLVED by finding 15).** Kept for the trail: the null `A7` was
+    not a stack bug. A bus error (vector 2) from the runaway wipe hit
+    `recovery_core`, which restores SP and resume-PC from slots that are
+    still zero before the first test is armed — so it "recovered" into
+    `SP = 0, PC = 0`. Worth noting as a latent sharp edge in
+    `recovery.s`: any fault before the first armed test lands in a null
+    context rather than being reported.
+
+    Original symptom, for reference:
     Only the CPU image does; MMU and FPU are fine. `DOUBLE MMU FAULT`
     with `A7 = 00000000`, `PC = 0000000a`, faulting at `$FFFFFFFC` —
     an exception frame pushed onto a null stack. `VBR = $00062EF0` shows
