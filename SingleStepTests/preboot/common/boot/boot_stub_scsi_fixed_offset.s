@@ -170,7 +170,22 @@ startup:
     move.l  #PAYLOAD_READ_BYTES, PB_OFF_IOREQCOUNT(%a0)
     move.w  #1, PB_OFF_IOPOSMODE(%a0)     | fsFromStart
     move.l  #PAYLOAD_PART_OFFSET, PB_OFF_IOPOSOFFSET(%a0)
+
+| 68040 cache coherency around the payload load — see the long note in
+| boot_stub_scsi.s. The 68040's 4 KB copyback data cache can write dirty
+| lines back OVER the transferred payload, and its 4 KB instruction
+| cache can serve stale bytes to the JMP below. CPUSHA BC on both sides
+| (push+invalidate, so a CPU-copying driver's data is not discarded),
+| NOP after each for pipeline sync. Harmless on the 68020/68030 this
+| code came from only in the sense that they never needed it — these
+| are 68040 instructions, and this tree builds -m68040.
+    .short  0xF4F8                         | cpusha bc
+    nop
+
     .word   0xA002                         | _Read
+
+    .short  0xF4F8                         | cpusha bc (post-transfer)
+    nop
     move.w  PB_OFF_IORESULT(%a0), %d7
 
     | --- Paint result at (row 16 col 4) ---

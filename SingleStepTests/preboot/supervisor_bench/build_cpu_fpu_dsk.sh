@@ -55,7 +55,16 @@ with open(image, "r+b") as f:
     r = data.find(b"RJSNLTAG")
     if r < 0: sys.exit("RJSNLTAG marker not found in payload")
     f.seek(r + 8); f.write(struct.pack(">I", results_off))
-print(f"patched: payload@0x{payload_off:X}, results@0x{results_off:X}")
+    # PAYLCKSZ: how many bytes of the loaded image the boot block
+    # checksums and shows on screen. Exactly the region HFS gave
+    # /Payload, so the value never covers /Results.jsonl (which the
+    # bench rewrites) and stays stable across runs.
+    c = data.find(b"PAYLCKSZ")
+    if c < 0: sys.exit("PAYLCKSZ marker not found in boot stub")
+    ck_len = min(results_off - payload_off, 0x40000) & ~3
+    if ck_len <= 0: sys.exit(f"bad checksum window {ck_len}")
+    f.seek(c + 8); f.write(struct.pack(">I", ck_len))
+print(f"patched: payload@0x{payload_off:X}, results@0x{results_off:X}, cksum window 0x{ck_len:X}")
 PY
 
 echo ""

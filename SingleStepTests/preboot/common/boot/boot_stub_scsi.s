@@ -11,7 +11,7 @@
 |
 | Same boot block header as the floppy version (bbVersion=$D000 to
 | make ROM execute bbEntry directly). At bbEntry time on a SCSI
-| boot, the Mac II ROM has:
+| boot, the Mac ROM has:
 |   - Read the Driver Descriptor Record (block 0)
 |   - Loaded Apple_Driver43 from the driver partition
 |   - Registered the driver in the Unit Table with a refnum
@@ -30,9 +30,69 @@
 | The driver presents the partition as a drive with offset 0 = start
 | of HFS partition (i.e. byte 0xC000 of physical disk). So /Payload
 | at byte offset 0x51600 within the partition is what we ask for.
+|
+| ---------------------------------------------------------------------
+| 68040 NOTE (Quadra 800, 2026-08-26) — cache coherency around _Read.
+|
+| This stub loads 256 KB of payload with one _Read and then JMPs into
+| it. On the 68020 (Mac II) and 68030 (IIvi) that was safe: their
+| caches are 256 bytes and WRITE-THROUGH, so a DMA'd buffer could
+| never be shadowed by dirty cache lines. The 68040 has a 4 KB
+| instruction cache and a 4 KB data cache in COPYBACK mode, and the
+| Quadra's SCSI transfers into PHYSICAL RAM — so without explicit
+| cache management:
+|
+|   - dirty data-cache lines covering $40000..$80000 (left over from
+|     the ROM's own boot-time use of low RAM) get written back ON TOP
+|     of the freshly transferred payload, and
+|   - stale instruction-cache lines for that range get executed
+|     instead of the bytes that just arrived.
+|
+| Both are non-deterministic: whether a given boot lands the damage on
+| code that matters or on padding depends on what the ROM happened to
+| touch. Observed symptom on the physical Quadra 800 was exactly that
+| — "mostly doesn't reach the bench, very occasionally does".
+|
+| Fix: CPUSHA BC ($F4F8) on BOTH sides of the _Read.
+|   - Before: pushes every dirty line to RAM and invalidates both
+|     caches, so nothing can be written back over the payload later.
+|   - After:  pushes anything the driver wrote through the CPU (a
+|     driver that copies rather than DMAs leaves the payload dirty in
+|     the D-cache) and invalidates both caches, so the JMP fetches the
+|     bytes that are actually in RAM.
+| CPUSHA (push+invalidate) is used rather than CINVA (invalidate only)
+| precisely because the post-read case must not discard a CPU-copying
+| driver's data. NOP after each — the 68040 UM requires pipeline sync
+| around cache-control instructions.
+|
+| This is the same class of bug as the jsonl_writer.c CPUSHA DC fix
+| for _Write; the read side was simply never covered.
+|
+| ---------------------------------------------------------------------
+| DISPLAY NOTE (Quadra 800) — 8 bpp diagnostics.
+|
+| The Quadra 800 ROM boots the built-in DAFB at 640x480 @ 8 bpp, one
+| BYTE per pixel. The old painter wrote one byte per EIGHT pixels
+| (1 bpp), so every readout below rendered as unreadable speckle —
+| which is why the _Read result code, the refnum and the drive number
+| have been invisible during Quadra bring-up. Assemble with
+| --defsym DISPLAY_BPP8=1 for the byte-per-pixel path (background
+| $FF = black, stroke $00 = white, matching display_1bpp.c), and with
+| --defsym ROW_BYTES_AUTO=1 to take the row stride from the ROM's
+| ScrnRow low-mem global ($0106) at runtime instead of the
+| compile-time ROW_BYTES. common/make/common.mk passes both for
+| VIDEO_VARIANT=dafb.
 
 .ifndef ROW_BYTES
     ROW_BYTES = 80
+.endif
+
+| Bytes per character cell: 8 bpp paints an 8x8 pixel glyph as 8x8
+| bytes; 1 bpp packs each glyph row into a single byte.
+.ifdef DISPLAY_BPP8
+    CELL_BYTES = 8
+.else
+    CELL_BYTES = 1
 .endif
 
     .text
@@ -71,6 +131,10 @@ PB_SIZE             = 80
 
 PAYLOAD_LOAD_ADDR     = 0x00040000
 PAYLOAD_READ_BYTES    = 262144          | 256 KB — comfortable headroom for the bench payload
+| Fallback checksum window, used only if the PAYLCKSZ marker below was
+| never patched. The real value comes from the image build script — see
+| payload_cksum_len.
+PAYLOAD_CKSUM_BYTES   = 0x1E000         | 122880 bytes
 
 | /Payload's byte offset within the partition is no longer a compile-
 | time constant. Build scripts probe it at image-build time with
@@ -80,24 +144,32 @@ PAYLOAD_READ_BYTES    = 262144          | 256 KB — comfortable headroom for th
 | 0xDEADBEEF; if the bench faults early with that as the read offset,
 | the build pipeline didn't patch correctly.
 
-| Slot at $00050000 where the boot block stashes (refnum << 16) | drive
-| for the payload to find.
+| Slot where the boot block stashes (refnum << 16) | drive for the
+| payload to find. Written AFTER the payload has been read into
+| $40000, so it MUST NOT overlap the loaded image.
 |
-| Was at $00041000 prior to 2026-05-25, but that address turned out to
-| collide with payload .rodata strings — once the iotest payload's
-| rodata grew past offset $0FF4, the string ",\"readback_us\":" landed
-| at $40FF4..$41003 (15 bytes + NUL). The boot stub's handoff write
-| then clobbered the string's last 4 bytes ('s', '"', ':', '\0') with
-| (refnum_hi, refnum_lo, drive_hi, drive_lo), which made jw_puts emit
-| ",\"readback_u<refnum>" before stopping at the now-NUL drive high
-| byte. Symptom: every WRITE record in /Results.jsonl was missing
-| `s":` and showed `\xFF\xD9` (the bytes of MAME's SCSI refnum -39)
-| in its place. Moving the slot to $50000 puts it well past any
-| reasonable payload's text + data + bss (iotest's BSS ends ~$45200,
-| supervisor_bench's payloads stay under $48000) but still inside the
-| 256 KB region the boot stub already _Reads from disk into RAM,
-| which means the boot stub's write doesn't go anywhere fault-prone.
+| Was $00041000 before 2026-05-25 (collided with iotest payload
+| .rodata). $00050000 is fine for the small 68020/68030 payloads, but
+| it sits 64 KB INTO the Quadra 800's 125 KB CPU-bench payload
+| ($40000..$5E8C0), so the boot block scribbles 4 bytes over it. Today
+| those 4 bytes land in a zero gap in the captured corpus, so it is
+| harmless — but it is a landmine: any change to payload layout turns
+| it into silent payload corruption.
+|
+| The real fix is $00080000 (the first byte past the 256 KB read
+| window, far below the payload's $00100000 stack). It is NOT the
+| default because the address is duplicated in seven places — every
+| bench's payload_entry*.s reads it as a hard-coded literal — and a
+| boot block and payload that disagree hand the bench a garbage
+| refnum. To move it, change ALL of these in one commit:
+|   common/boot/boot_stub_scsi{,_fixed_offset}.s
+|   supervisor_bench/payload_entry{,_cpu,_scsi}.s
+|   iotest/payload_entry.s  diskcopy/payload_entry.s  keytest/payload_entry.s
+| Until then --defsym HANDOFF_ADDR=... lets a boot block be rebuilt to
+| match whatever an already-built payload expects.
+.ifndef HANDOFF_ADDR
 HANDOFF_ADDR          = 0x00050000
+.endif
 
 | DrvQHdr / DrvQEl
 DRVQHDR_QHEAD         = 0x0000030A
@@ -106,12 +178,31 @@ DRVQEL_OFF_QLINK      = 0
 DRVQEL_OFF_DQDRIVE    = 6
 DRVQEL_OFF_DQREFNUM   = 8
 
+| Mac low memory
+SCRNBASE              = 0x00000824
+SCRNROW               = 0x00000106
+
+| AT row,col — point %a0 at pixel row `row`, character column `col`.
+| Rows are pixels, columns are 8-pixel character cells, matching
+| display_1bpp.c's paint_string(row, col_char, ...).
+    .macro AT row, col
+    move.w  #\row, %d0
+    moveq   #\col, %d1
+    bsr.w   at_rc
+    .endm
+
+| GAP — skip one character cell, so a label glyph and the hex field
+| after it don't run together on screen.
+    .macro GAP
+    lea     CELL_BYTES(%a0), %a0
+    .endm
+
 startup:
     move.w  #0x2700, %sr
     move.l  #0x00010000, %sp
 
     | --- Wipe screen black ---
-    move.l  0x0824.l, %a3
+    move.l  SCRNBASE.l, %a3
     tst.l   %a3
     beq     halt
     cmp.l   #0x00100000, %a3
@@ -121,29 +212,24 @@ startup:
 1:  move.l  #0xFFFFFFFF, (%a0)+
     dbra    %d0, 1b
 
-    | Layout: glyphs are 8 pixels tall, space rows 12 scanlines apart.
+    bsr.w   init_stride
 
-    | --- Marker 'A' (row 4 col 4) — survived screen wipe ---
-    move.l  %a3, %a0
-    add.l   #(4 * ROW_BYTES + 4), %a0
-    moveq   #10, %d0
-    bsr     draw_glyph_d0
+    | Layout (label glyph at col 4, 8 hex digits at cols 5..12):
+    |   row  4  'A' + BootDrive      — boot block entered
+    |   row 16  'D' + driver refnum  — DrvQ walk succeeded
+    |   row 28  'E' + _Read ioResult — payload load result
+    |   row 40  'C' + payload cksum  — is the loaded image intact?
+    |   row 52  '3' + solid block    — about to JMP into the payload
 
-    | --- Read BootDrive (signed word) ---
+    | --- Marker 'A' + BootDrive (signed word) ---
     move.w  BOOTDRIVE.l, %d4              | %d4 = drive number for our partition
-    | --- Paint drive number (4 hex digits) at (row 4 col 6) ---
-    move.l  %a3, %a0
-    add.l   #(4 * ROW_BYTES + 6), %a0
+    AT      4, 4
+    moveq   #10, %d0                      | 'A'
+    bsr.w   draw_glyph_d0
+    GAP
     move.w  %d4, %d5
-    moveq   #3, %d3
-.drv_hex:
-    move.l  %d5, %d0
-    rol.w   #4, %d0
-    move.w  %d0, %d5
-    andi.l  #0xF, %d0
-    bsr     draw_glyph_d0
-    addq.l  #1, %a0
-    dbra    %d3, .drv_hex
+    ext.l   %d5
+    bsr.w   hex8
 
     | --- Walk DrvQHdr to find matching dQDrive, extract dQRefNum ---
     moveal  DRVQHDR_QHEAD.l, %a1          | %a1 = qHead
@@ -161,22 +247,14 @@ startup:
 .found:
     move.w  DRVQEL_OFF_DQREFNUM(%a1), %d6 | %d6 = driver refnum (negative)
 
-    | --- Paint 'R' (glyph 'r' = use 'D' for now) + refnum hex at (row 12 col 4) ---
-    move.l  %a3, %a0
-    add.l   #(16 * ROW_BYTES + 4), %a0
-    moveq   #13, %d0                      | 'D' = "Driver"
-    bsr     draw_glyph_d0
-    addq.l  #1, %a0
+    | --- Paint 'D' (Driver) + refnum ---
+    AT      16, 4
+    moveq   #13, %d0                      | 'D'
+    bsr.w   draw_glyph_d0
+    GAP
     move.w  %d6, %d5
-    moveq   #3, %d3
-.ref_hex:
-    move.l  %d5, %d0
-    rol.w   #4, %d0
-    move.w  %d0, %d5
-    andi.l  #0xF, %d0
-    bsr     draw_glyph_d0
-    addq.l  #1, %a0
-    dbra    %d3, .ref_hex
+    ext.l   %d5
+    bsr.w   hex8
 
     | --- Zero PB ---
     lea     pb(%pc), %a0
@@ -193,59 +271,80 @@ startup:
     move.w  #1, PB_OFF_IOPOSMODE(%a0)     | fsFromStart
     | Patched at build time — see payload_offset_value below.
     move.l  payload_offset_value(%pc), PB_OFF_IOPOSOFFSET(%a0)
+
+    | 68040: flush + invalidate both caches so no dirty line can be
+    | written back over the payload the transfer is about to deliver.
+    .short  0xF4F8                         | cpusha bc
+    nop
+
     .word   0xA002                         | _Read
     move.w  PB_OFF_IORESULT(%a0), %d7
 
-    | --- Paint result at (row 16 col 4) ---
-    move.l  %a3, %a0
-    add.l   #(28 * ROW_BYTES + 4), %a0
-    moveq   #14, %d0                      | 'E' = "rEad"
-    bsr     draw_glyph_d0
-    addq.l  #1, %a0
-    move.w  %d7, %d5
-    moveq   #3, %d3
-.res_hex:
-    move.l  %d5, %d0
-    rol.w   #4, %d0
-    move.w  %d0, %d5
-    andi.l  #0xF, %d0
-    bsr     draw_glyph_d0
-    addq.l  #1, %a0
-    dbra    %d3, .res_hex
+    | 68040: push anything the driver wrote through the CPU and drop
+    | both caches, so the JMP below fetches the payload from RAM.
+    .short  0xF4F8                         | cpusha bc
+    nop
 
-    | If read failed, just hang here so user sees the error code.
+    | --- Paint 'E' (rEad) + ioResult ---
+    AT      28, 4
+    moveq   #14, %d0                      | 'E'
+    bsr.w   draw_glyph_d0
+    GAP
+    move.w  %d7, %d5
+    ext.l   %d5
+    bsr.w   hex8
+
+    | --- Checksum the loaded payload -------------------------------
+    | Rotating 32-bit sum over the first 128 KB at $40000, computed
+    | BEFORE the handoff write below so it reflects exactly what came
+    | off the disk. The host knows the expected value for a given
+    | image, so a mismatch (or a value that changes between boots) is
+    | direct proof that the payload did not survive the transfer.
+    movea.l #PAYLOAD_LOAD_ADDR, %a1
+    moveq   #0, %d5
+    move.l  payload_cksum_len(%pc), %d3
+    cmpi.l  #0x1000, %d3                  | unpatched / absurd length ->
+    blo.s   1f                            |   use the built-in fallback
+    cmpi.l  #PAYLOAD_READ_BYTES, %d3
+    bls.s   2f
+1:  move.l  #PAYLOAD_CKSUM_BYTES, %d3
+2:  lsr.l   #2, %d3                       | byte count -> longword count
+    subq.l  #1, %d3                       | dbra counts n-1 (16 bits, so
+                                          | the cap above matters)
+3:  add.l   (%a1)+, %d5
+    rol.l   #1, %d5
+    dbra    %d3, 3b
+
+    AT      40, 4
+    moveq   #12, %d0                      | 'C'
+    bsr.w   draw_glyph_d0
+    GAP
+    bsr.w   hex8
+
+    | If read failed, hang here so the operator can read the codes.
     tst.w   %d7
     bne     halt
 
-    | --- Hand off refnum+drive in low-mem to the payload ---
-    move.w  %d6, HANDOFF_ADDR.l           | refnum at $50000
-    move.w  %d4, (HANDOFF_ADDR+2).l       | drive   at $50002
+    | --- Hand off refnum+drive to the payload ---
+    move.w  %d6, HANDOFF_ADDR.l           | refnum
+    move.w  %d4, (HANDOFF_ADDR+2).l       | drive
 
-    | --- Paint '3' at (row 20 col 4) = about to jump ---
-    move.l  %a3, %a0
-    add.l   #(40 * ROW_BYTES + 4), %a0
+    | --- '3' + solid block = about to jump ---
+    AT      52, 4
     moveq   #3, %d0
-    bsr     draw_glyph_d0
+    bsr.w   draw_glyph_d0
+    moveq   #16, %d0                      | solid block
+    bsr.w   draw_glyph_d0
 
     jmp     PAYLOAD_LOAD_ADDR.l
 
 fail_noref:
     | "FFFF" at row 16 = no matching DrvQEl found for BootDrive.
-    | Lives on the same row as the (would-be) refnum readout, but if
-    | we landed here the refnum was never read.
-    move.l  %a3, %a0
-    add.l   #(16 * ROW_BYTES + 4), %a0
-    moveq   #15, %d0
-    bsr     draw_glyph_d0
-    addq.l  #1, %a0
-    moveq   #15, %d0
-    bsr     draw_glyph_d0
-    addq.l  #1, %a0
-    moveq   #15, %d0
-    bsr     draw_glyph_d0
-    addq.l  #1, %a0
-    moveq   #15, %d0
-    bsr     draw_glyph_d0
+    AT      16, 4
+    moveq   #3, %d3
+1:  moveq   #15, %d0
+    bsr.w   draw_glyph_d0
+    dbra    %d3, 1b
 
 halt:
 1:  bra.s   1b
@@ -264,18 +363,101 @@ payload_offset_marker:
 payload_offset_value:
     .long   0xDEADBEEF
 
-| draw_glyph_d0: paint hex_font glyph at %a0. Clobbers d1, d2, a1, a2.
+| --- Patchable payload-checksum window ------------------------------
+| Length in BYTES of the region at $40000 that the boot block sums and
+| paints on the 'C' row. It has to stay inside /Payload: the 256 KB
+| _Read runs off the end of the file into whatever follows it on disk,
+| and on these images that is /Results.jsonl — which the bench itself
+| rewrites, so covering it would make the checksum change from run to
+| run and destroy its value as a corruption detector. The image build
+| script patches this with (results_offset - payload_offset): exactly
+| the region HFS allocated to /Payload. Must be a multiple of 4 and no
+| larger than PAYLOAD_READ_BYTES, since dbra counts only 16 bits.
+    .align 2
+payload_cksum_marker:
+    .ascii  "PAYLCKSZ"
+payload_cksum_len:
+    .long   PAYLOAD_CKSUM_BYTES
+
+| Row stride in bytes, resolved at runtime (see init_stride). The boot
+| block executes from RAM, so this .text word is writable; it is read
+| PC-relative so the block stays position-independent.
+stride_w:
+    .word   ROW_BYTES
+
+| init_stride: take the framebuffer row stride from the ROM's ScrnRow
+| ($0106) when built with ROW_BYTES_AUTO, so one boot block is correct
+| at whatever resolution the ROM programmed. Falls back to the
+| compile-time ROW_BYTES if the value is implausible — same
+| plausibility test display_1bpp.c uses.
+init_stride:
+.ifdef ROW_BYTES_AUTO
+    moveq   #0, %d0
+    move.w  SCRNROW.l, %d0
+    cmpi.w  #16, %d0
+    blo.s   1f
+    cmpi.w  #4096, %d0
+    bhi.s   1f
+    btst    #0, %d0                       | must be a multiple of 4
+    bne.s   1f
+    btst    #1, %d0
+    bne.s   1f
+    lea     stride_w(%pc), %a0
+    move.w  %d0, (%a0)
+1:
+.endif
+    rts
+
+| at_rc: %d0 = pixel row, %d1 = character column -> %a0 = framebuffer
+| pointer. Clobbers d0/d1.
+at_rc:
+    mulu.w  stride_w(%pc), %d0            | row * stride (both < 65536)
+    mulu.w  #CELL_BYTES, %d1
+    add.l   %d1, %d0
+    movea.l %a3, %a0
+    adda.l  %d0, %a0
+    rts
+
+| hex8: paint %d5 as 8 hex digits at (%a0), advancing %a0.
+| Clobbers d0-d3, d5, a1, a2.
+hex8:
+    moveq   #7, %d3
+1:  rol.l   #4, %d5
+    move.l  %d5, %d0
+    andi.l  #0xF, %d0
+    bsr.w   draw_glyph_d0
+    dbra    %d3, 1b
+    rts
+
+| draw_glyph_d0: paint hex_font glyph %d0 at (%a0) and advance %a0 by
+| one character cell. Clobbers d0, d1, d2, a1, a2.
 draw_glyph_d0:
     lea     hex_font(%pc), %a1
     lsl.l   #3, %d0
     adda.l  %d0, %a1
     move.l  %a0, %a2
-    moveq   #7, %d1
-1:  move.b  (%a1)+, %d2
-    not.b   %d2
+    moveq   #7, %d1                       | 8 glyph rows
+.dg_row:
+    move.b  (%a1)+, %d2                   | glyph row bitmap, bit 7 = leftmost
+.ifdef DISPLAY_BPP8
+    moveq   #7, %d0                       | 8 pixels, one byte each
+.dg_col:
+    add.b   %d2, %d2                      | shift bit 7 into carry
+    bcs.s   .dg_on
+    move.b  #0xFF, (%a2)+                 | background: black
+    bra.s   .dg_next
+.dg_on:
+    clr.b   (%a2)+                        | stroke: white
+.dg_next:
+    dbra    %d0, .dg_col
+    subq.l  #8, %a2                       | back to the start of this row
+.else
+    not.b   %d2                           | 1 bpp: strokes are 0 bits
     move.b  %d2, (%a2)
-    lea     ROW_BYTES(%a2), %a2
-    dbra    %d1, 1b
+.endif
+    adda.w  stride_w(%pc), %a2            | next scanline
+    dbra    %d1, .dg_row
+    lea     CELL_BYTES(%a0), %a0          | advance the caller's cursor
     rts
 
 hex_font:
@@ -295,6 +477,7 @@ hex_font:
     .byte 0x78,0x44,0x42,0x42,0x42,0x44,0x78,0x00   | D
     .byte 0x7E,0x40,0x40,0x7C,0x40,0x40,0x7E,0x00   | E
     .byte 0x7E,0x40,0x40,0x7C,0x40,0x40,0x40,0x00   | F
+    .byte 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF   | 16: solid block
 
     .align 2
 pb:

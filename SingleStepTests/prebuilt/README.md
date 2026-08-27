@@ -41,6 +41,94 @@ Run it to **"ALL TESTS DONE"**, power off, pull `/Results.jsonl`, and diff:
 # fpu: per row, vec 11 = an unimplemented op correctly trapped; vec 0 = executed
 ```
 
+## 2026-08-26 bundles — 68040 cache fix + readable boot diagnostics
+
+**Boot these, not the 06-13 ones.** Same bench payloads, byte for byte;
+the only change is the 1024-byte HFS boot block.
+
+| Bundle | Bench |
+|---|---|
+| `quadra800-cpu-2026-08-26.tgz` | 68040 integer CPU, 722 rows |
+| `quadra800-fpu-2026-08-26.tgz` | 68040 FPU, 270 rows |
+| `quadra800-mmu-2026-08-26.tgz` | 68040 MMU, 24 rows |
+| `quadra800-cpu-nowrite-diag-2026-08-26.tgz` | CPU bench with SCSI writes stubbed out |
+
+### What changed and why
+
+Symptom on the physical Quadra 800: the bench **mostly did not start at
+all**, and only very occasionally got as far as painting. The boot block
+loads 256 KB of payload to `$40000` with one `_Read` and then `JMP`s
+into it — with no cache management. That was safe on the 68020/68030
+(256-byte write-through caches); on the 68040 it is not:
+
+- dirty lines in the 4 KB **copyback** data cache, left over from the
+  ROM's own use of low RAM, get written back **on top of** the payload
+  that the SCSI transfer just delivered, and
+- stale lines in the 4 KB instruction cache get executed instead of the
+  bytes that actually arrived.
+
+Whether a given boot lands the damage on code that matters or on padding
+is luck, which is exactly why it looked intermittent. The boot block now
+issues `CPUSHA BC` on **both** sides of the `_Read` (push *and*
+invalidate — `CINVA` would throw away the payload if the driver copies
+through the CPU rather than DMAing), with a `NOP` after each for
+pipeline sync. Same class of bug as the `CPUSHA DC` fix for `_Write`;
+the read side had simply never been covered.
+
+The boot block's own readouts were also still painting **1 bpp** into
+the Quadra's 8 bpp framebuffer — one byte per eight pixels — so the
+drive number, driver refnum and `_Read` result code have been
+unreadable speckle for the whole bring-up. They now paint one byte per
+pixel and take the row stride from `ScrnRow` at runtime.
+
+### Reading the boot screen
+
+Five lines appear before the bench itself starts:
+
+```
+A 00000003     boot block running; BootDrive = 3
+D FFFFFFDF     driver refnum from the drive queue (negative = normal)
+E 00000000     _Read ioResult -- 00000000 is noErr; anything else = load failed
+C 756B19E7     checksum of the payload as loaded into RAM
+3 <block>      about to JMP into the payload
+```
+
+`C` is the diagnostic that settles whether the cache fix took. It is a
+rotating 32-bit sum over the region HFS allocated to `/Payload`, taken
+straight after the transfer and **before** anything else touches RAM.
+Expected values, per image:
+
+| Image | expected `C` |
+|---|---|
+| `quadra800-cpu.hda` | `756B19E7` |
+| `quadra800-cpu.dsk` | `06394C48` |
+| `quadra800-fpu.hda` | `4976743B` |
+| `quadra800-fpu.dsk` | `FE96743A` |
+| `quadra800-mmu.hda` | `4BB51D37` |
+| `quadra800-mmu.dsk` | `5C4B92D6` |
+| `quadra800-cpu-nowrite.hda` | `6B83BF96` |
+| `quadra800-cpu-nowrite.dsk` | `0DC8C6E6` |
+
+- Matches, and the bench runs → the payload arrived intact.
+- **Differs, or differs between two boots of the same disk** → the
+  payload is still being corrupted in transit; the cache fix is not the
+  whole story. Photograph the value and the `E` line.
+- `E` non-zero → the load itself failed; the block halts there and the
+  code on screen is the driver's `ioResult`.
+
+### Provenance
+
+The boot block was rebuilt from
+`../preboot/common/boot/boot_stub_scsi.s` and spliced into the 06-13
+images; every byte outside the 1024-byte boot block is unchanged
+(verified by byte-diff). It was validated before shipping by executing
+the assembled block under Musashi against a simulated Quadra 800 low
+memory + DAFB framebuffer: the painted screen renders legibly, the
+handoff slot receives `FFDF 0003`, and the 68k checksum routine
+reproduces the host-computed expectation for every image above. The
+1 bpp path was re-checked the same way at stride 80 so the Mac II /
+IIvi lineage is not regressed.
+
 ## Provenance / validation (2026-06-13)
 
 Built by `preboot/supervisor_bench/build_<bench>_<hda|dsk>.sh` from the

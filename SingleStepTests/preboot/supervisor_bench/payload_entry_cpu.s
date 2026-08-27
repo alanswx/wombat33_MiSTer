@@ -1,10 +1,35 @@
 | payload_entry_cpu.s — entry for the CPU-bench payload (SCSI or
-| floppy). Sets up SP, hands global handoff slot ($00041000) to C,
+| floppy). Sets up SP, hands the boot block's handoff slot to C,
 | clears the screen, paints "CPU BENCH", calls bench_main().
+|
+| The banner is the only evidence the payload started that appears
+| BEFORE bench_main()'s C paint kernel takes over (its first act is a
+| full-screen wipe), so it has to be readable on the target display.
+| Like common/boot/boot_stub_scsi.s this shim therefore paints one
+| BYTE per pixel when built with --defsym DISPLAY_BPP8=1 (the Quadra
+| 800's 640x480 @ 8 bpp boot mode) and takes the row stride from the
+| ROM's ScrnRow low-mem global with --defsym ROW_BYTES_AUTO=1.
+| common/make/common.mk passes both for VIDEO_VARIANT=dafb.
 
 .ifndef ROW_BYTES
     ROW_BYTES = 80
 .endif
+
+| Bytes per character cell: 8 bpp paints an 8x8 pixel glyph as 8x8
+| bytes; 1 bpp packs each glyph row into a single byte.
+.ifdef DISPLAY_BPP8
+    CELL_BYTES = 8
+.else
+    CELL_BYTES = 1
+.endif
+
+SCRNBASE = 0x00000824
+SCRNROW  = 0x00000106
+
+| Handoff slot written by the boot block: refnum word, drive word.
+| Must match HANDOFF_ADDR in common/boot/boot_stub_scsi.s — see the
+| long comment there before changing it.
+HANDOFF_ADDR = 0x00050000
 
     .text
     .global _payload_start
@@ -12,14 +37,14 @@ _payload_start:
     move.w  #0x2700, %sr
     move.l  #0x00100000, %sp              | 1 MB high — plenty of stack room
 
-    | --- Load handoff slot ($00041000: refnum word, drive word) ---
-    move.w  0x00050000.l, %d0
+    | --- Load handoff slot (refnum word, drive word) ---
+    move.w  HANDOFF_ADDR.l, %d0
     move.w  %d0, g_handoff_refnum
-    move.w  0x00050002.l, %d0
+    move.w  (HANDOFF_ADDR+2).l, %d0
     move.w  %d0, g_handoff_drive
 
     | --- Wipe screen ---
-    move.l  0x0824.l, %a4
+    move.l  SCRNBASE.l, %a4
     move.l  %a4, %d0
     beq     .hang
     cmp.l   #0x00100000, %d0
@@ -29,22 +54,25 @@ _payload_start:
 1:  move.l  #0xFFFFFFFF, (%a0)+
     dbra    %d0, 1b
 
-    | --- Paint "CPU BENCH" at row 4 ---
-    move.l  %a4, %a0
-    add.l   #(4 * ROW_BYTES + 4), %a0
-    lea     banner(%pc), %a1
+    bsr.w   init_stride
+
+    | --- Paint "CPU BENCH" at row 4, char column 4 ---
+    move.w  #4, %d0
+    moveq   #4, %d1
+    bsr.w   at_rc
+    lea     banner, %a1
     moveq   #8, %d0
-    bsr     draw_string_n_d0
+    bsr.w   draw_string_n_d0
 
     jsr     bench_main
 
-    | --- Paint "DONE" at row 56 col 4 ---
-    move.l  0x0824.l, %a4
-    move.l  %a4, %a0
-    add.l   #(56 * ROW_BYTES + 4), %a0
-    lea     done_str(%pc), %a1
+    | --- Paint "DONE" at row 56, char column 4 ---
+    move.w  #56, %d0
+    moveq   #4, %d1
+    bsr.w   at_rc
+    lea     done_str, %a1
     moveq   #3, %d0
-    bsr     draw_string_n_d0
+    bsr.w   draw_string_n_d0
 
 .hang:
 1:  bra.s   1b
@@ -59,56 +87,109 @@ _payload_start:
 g_handoff_refnum:   .word 0
 g_handoff_drive:    .word 0
 
-| Populated from low-mem handoff slot $00041000 at .Lhandoff_load.
-| Doing this at runtime keeps the same C signature for both floppy
-| and SCSI builds; the floppy build's boot block can simply preload
-| HANDOFF_ADDR with -5 and 1 before jumping here.
+| Framebuffer row stride in bytes, resolved at runtime by init_stride.
+stride_w:           .word ROW_BYTES
 
     .text
+
+| init_stride: take the row stride from the ROM's ScrnRow ($0106) when
+| built with ROW_BYTES_AUTO, so one binary is correct at whatever
+| resolution the ROM programmed. Falls back to the compile-time
+| ROW_BYTES if the value is implausible — the same plausibility test
+| display_1bpp.c applies.
+init_stride:
+.ifdef ROW_BYTES_AUTO
+    moveq   #0, %d0
+    move.w  SCRNROW.l, %d0
+    cmpi.w  #16, %d0
+    blo.s   1f
+    cmpi.w  #4096, %d0
+    bhi.s   1f
+    btst    #0, %d0                        | must be a multiple of 4
+    bne.s   1f
+    btst    #1, %d0
+    bne.s   1f
+    move.w  %d0, stride_w
+1:
+.endif
+    rts
+
+| at_rc: %d0 = pixel row, %d1 = character column -> %a0 = framebuffer
+| pointer. Reads ScrnBase itself so it is safe to call from C-entered
+| code (which has no %a4 convention). Clobbers d0/d1.
+at_rc:
+    mulu.w  stride_w, %d0                  | row * stride (both < 65536)
+    mulu.w  #CELL_BYTES, %d1
+    add.l   %d1, %d0
+    movea.l SCRNBASE.l, %a0
+    adda.l  %d0, %a0
+    rts
+
     .global paint_progress
+| paint_progress(u32 idx, u32 total) — 4 hex digits at row 56, char
+| column 32. Currently unused by bench_main (it paints its own tally
+| through the C kernel), but it is declared extern there, so keep it
+| callable AND ABI-correct: d2-d7/a2-a6 are callee-saved on m68k.
 paint_progress:
-    | C signature: paint_progress(u32 idx, u32 total)
-    | Args on stack: 4(sp) = idx (long), 8(sp) = total (long).
-    move.l  0x0824.l, %a0
-    add.l   #(56 * ROW_BYTES + 32), %a0
-    move.l  4(%sp), %d3                    | idx
+    movem.l %d2-%d4/%a2-%a3, -(%sp)        | 20 bytes of saves
+    move.w  #56, %d0
+    moveq   #32, %d1
+    bsr.w   at_rc
+    move.l  20+4(%sp), %d3                 | idx (past saved regs + return addr)
     moveq   #3, %d4                        | 4 hex digits
 .pp_loop:
     move.l  %d3, %d0
     rol.w   #4, %d0
     move.w  %d0, %d3
     andi.l  #0xF, %d0
-    bsr     draw_glyph_d0
-    addq.l  #1, %a0
+    bsr.w   draw_glyph_d0
     dbra    %d4, .pp_loop
+    movem.l (%sp)+, %d2-%d4/%a2-%a3
     rts
 
+| draw_string_n_d0: paint (%d0)+1 consecutive 8-byte glyphs starting at
+| (%a1) to (%a0), advancing both. Clobbers d0,d1,d2,a1,a2.
 draw_string_n_d0:
-    move.l  %a0, %a3
-.dsn_char:
-    move.l  %a3, %a2
-    moveq   #7, %d1
-.dsn_row:
-    move.b  (%a1)+, %d2
-    not.b   %d2
-    move.b  %d2, (%a2)
-    lea     ROW_BYTES(%a2), %a2
-    dbra    %d1, .dsn_row
-    addq.l  #1, %a3
-    dbra    %d0, .dsn_char
+    move.l  %d0, -(%sp)
+1:  bsr.w   draw_glyph_a1
+    subq.l  #1, (%sp)
+    bpl.s   1b
+    addq.l  #4, %sp
     rts
 
+| draw_glyph_d0: paint hex_font glyph %d0. Clobbers d0,d1,d2,a1,a2.
 draw_glyph_d0:
-    lea     hex_font(%pc), %a1
+    lea     hex_font, %a1
     lsl.l   #3, %d0
     adda.l  %d0, %a1
-    move.l  %a0, %a2
-    moveq   #7, %d1
-1:  move.b  (%a1)+, %d2
-    not.b   %d2
+    bra.w   draw_glyph_a1
+
+| draw_glyph_a1: paint the 8-byte glyph at (%a1) to (%a0); advances
+| %a1 by 8 and %a0 by one character cell. Clobbers d0,d1,d2,a2.
+draw_glyph_a1:
+    move.l  %a0, %a2                       | running scanline pointer
+    moveq   #7, %d1                        | 8 glyph rows
+.dg_row:
+    move.b  (%a1)+, %d2                    | glyph row bitmap, bit 7 = leftmost
+.ifdef DISPLAY_BPP8
+    moveq   #7, %d0                        | 8 pixels, one byte each
+.dg_col:
+    add.b   %d2, %d2                       | shift bit 7 into carry
+    bcs.s   .dg_on
+    move.b  #0xFF, (%a2)+                  | background: black
+    bra.s   .dg_next
+.dg_on:
+    clr.b   (%a2)+                         | stroke: white
+.dg_next:
+    dbra    %d0, .dg_col
+    subq.l  #8, %a2                        | back to the start of this row
+.else
+    not.b   %d2                            | 1 bpp: strokes are 0 bits
     move.b  %d2, (%a2)
-    lea     ROW_BYTES(%a2), %a2
-    dbra    %d1, 1b
+.endif
+    adda.w  stride_w, %a2                  | next scanline
+    dbra    %d1, .dg_row
+    lea     CELL_BYTES(%a0), %a0           | advance the caller's cursor
     rts
 
     .section .rodata

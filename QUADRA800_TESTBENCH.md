@@ -207,6 +207,24 @@ is the final adjudicator.
 
 ## 8. Hardware campaign (the imminent physical test)
 
+> **2026-08-26 — the preboot environment itself was the blocker.** The
+> physical Quadra 800 "mostly didn't reach the bench, only very
+> infrequently got there". Cause: the boot block loads 256 KB of payload
+> to `$40000` by `_Read` and then `JMP`s into it with **no 68040 cache
+> management** — the copyback D-cache writes stale dirty lines back over
+> the transferred payload and the I-cache serves stale bytes to the JMP.
+> Non-deterministic by nature, hence the "one boot in twenty" behaviour.
+> Fixed with `CPUSHA BC` on both sides of the `_Read` in all three boot
+> stubs (the read-side twin of the `CPUSHA DC` `_Write` fix). At the
+> same time the boot block's own readouts — which had been painting
+> 1 bpp into the 8 bpp DAFB and were therefore unreadable speckle
+> throughout bring-up — were converted to byte-per-pixel with a runtime
+> `ScrnRow` stride, and a **payload checksum** was added so a corrupted
+> load is visible on screen rather than inferred from a crash. Ready-to-
+> boot images: `SingleStepTests/prebuilt/*-2026-08-26.tgz`; expected
+> checksums and how to read the boot screen are in that directory's
+> README. Details in `SingleStepTests/test-blockers.md` findings 7-10.
+
 1. **User-mode / supervisor CPU run:** boot `make cpu` HDA on the Quadra
    800, pull `/Results.jsonl`, diff with `gen/cpu_diff_corpus.py` against
    `results/cpu/`. Adjudicate the CACR-mask, CAAR, and RTM divergence rows.
@@ -237,9 +255,24 @@ is the final adjudicator.
   `gen_fpu.c`/`gen_fpu_header.py`: move the opmodes into `HW_OPMODES`).
 - **MAME 68040 fidelity:** PTEST unimplemented, MMUSR impoverished, TC/
   CACR masks over-wide, RTM no-op — all documented; silicon outranks MAME.
-- **Musashi not checked out** at `~/repos/Musashi` (needed only for the
-  alternate CPU generator). `verilator` not installed (verilator FPU
-  harness under `fpu/`, `cpu_fpu/` awaits it + a 68040/68881-fpga DUT).
+- **Retro68 is not installed on the dev machine** (2026-08-26: a
+  whole-filesystem search finds no `m68k-apple-macos-gcc`), so the C
+  payloads cannot be rebuilt locally — payload changes have to be built
+  elsewhere. Boot-block-only changes *can* be built locally: the
+  boot block is pure assembly and the homebrew `m68k-elf-binutils`
+  reproduce the Retro68 output byte-for-byte, which is how the
+  `2026-08-26` images were produced (new boot block spliced into the
+  existing images, every byte outside the 1024-byte block unchanged).
+- **The local MAME binary has no Apple drivers** (`macqd800` is not a
+  known system in it — it was rebuilt for an SGI target), so the corpus
+  capture path is currently broken too; rebuilding MAME with
+  `SOURCES=src/mame/apple/macquadra800.cpp` restores it. Offline
+  boot-block verification meanwhile uses
+  `preboot/common/tools/bbsim/` (Musashi + simulated DAFB).
+- **Musashi is checked out** at `~/repos/Musashi` (needed for the
+  alternate CPU generator, and used by `bbsim`). `verilator` not
+  installed (verilator FPU harness under `fpu/`, `cpu_fpu/` awaits it +
+  a 68040/68881-fpga DUT).
 - **No 68040 verilator DUT yet:** the Quadra 800 core doesn't exist; the
   primary path is hardware + the MAME oracle + the self-contained
   generators, not a verilator CPU bench (TG68K is not a 68040).

@@ -114,7 +114,14 @@ CFLAGS   := $(CPUFLAGS) -ffreestanding -fno-builtin -fomit-frame-pointer \
 # gas: --defsym propagates ROW_BYTES into the .s files. Each .s wraps
 # its fallback default behind `.ifndef ROW_BYTES` so direct AS invocations
 # without the Makefile still assemble (the default is 80 = legacy).
-ASFLAGS  := $(CPUFLAGS) --defsym ROW_BYTES=$(ROW_BYTES)
+# The boot block and the entry shims paint too, so the display variant
+# has to reach gas as well as the C compiler — otherwise the assembly
+# diagnostics stay 1 bpp while the C kernel paints 8 bpp, which is
+# exactly how the Quadra 800's boot-block readouts (drive number,
+# driver refnum, _Read ioResult) ended up as unreadable speckle during
+# bring-up. Translate each -DFOO in CDEFS_VIDEO into --defsym FOO=1.
+ASDEFS_VIDEO := $(patsubst -D%,--defsym %=1,$(CDEFS_VIDEO))
+ASFLAGS  := $(CPUFLAGS) --defsym ROW_BYTES=$(ROW_BYTES) $(ASDEFS_VIDEO)
 LDFLAGS  := -nostdlib --no-eh-frame-hdr
 
 # Linker scripts live in common/runtime.

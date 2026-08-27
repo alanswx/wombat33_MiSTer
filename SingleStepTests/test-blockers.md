@@ -5,6 +5,90 @@ re-imported from `lbmactwo_MiSTer` (68020) — the Quadra 800's MC68040 has
 an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
 [`QUADRA800_TESTBENCH.md`](../QUADRA800_TESTBENCH.md).
 
+## Hardware bring-up findings (2026-08-26)
+
+7. **Boot block loaded the payload through the 68040 caches with no
+   coherency — the "mostly doesn't reach the bench" bug. FIXED.**
+   Reported symptom on the physical Quadra 800: the bench almost never
+   started, and only very occasionally got as far as painting.
+
+   `common/boot/boot_stub_scsi.s` reads 256 KB of payload to `$40000`
+   with a single `_Read` and then `JMP`s into it, with no cache
+   management at all. On the 68020 (Mac II) and 68030 (IIvi) that was
+   safe — 256-byte, write-through caches. On the 68040 it is not:
+
+   - dirty lines in the 4 KB **copyback** data cache, left over from the
+     ROM's own boot-time use of low RAM, are written back **on top of**
+     the payload the SCSI transfer just delivered; and
+   - stale lines in the 4 KB instruction cache are executed instead of
+     the bytes that actually arrived.
+
+   Both are non-deterministic — whether the damage lands on code that
+   matters or on padding depends on what the ROM happened to touch —
+   which is exactly why it presented as "works one boot in twenty".
+
+   **Fix:** `CPUSHA BC` ($F4F8) + `NOP` on **both** sides of the
+   `_Read`. `CPUSHA` (push *and* invalidate) rather than `CINVA`
+   (invalidate only) deliberately: post-transfer, a driver that copies
+   through the CPU instead of DMAing leaves the payload dirty in the
+   D-cache, and `CINVA` would discard it. Applied to all three boot
+   stubs (`boot_stub_scsi.s`, `boot_stub_floppy.s`,
+   `boot_stub_scsi_fixed_offset.s`) so the hazard can't return through
+   another make target. This is the read-side twin of finding 2's
+   `CPUSHA DC` fix for `_Write`.
+
+8. **Boot-block diagnostics were painting 1 bpp on an 8 bpp screen —
+   FIXED.** Finding 1 fixed the *C* paint kernel for the Quadra's
+   640x480x8bpp DAFB, but the **assembly** painters were missed: the
+   boot block's readouts (drive number, driver refnum, `_Read`
+   ioResult) and `payload_entry_cpu.s`'s "CPU BENCH" banner still wrote
+   one byte per *eight* pixels, so they rendered as unreadable speckle.
+   That is why the whole bring-up has been blind at exactly the stage
+   that was failing. Both now paint one byte per pixel and read the row
+   stride from `ScrnRow` ($0106) at runtime. `common/make/common.mk`
+   translates each `-DFOO` in `CDEFS_VIDEO` into `--defsym FOO=1` so the
+   display variant reaches gas as well as the C compiler — the root
+   cause of the two halves drifting apart.
+
+9. **Boot block now paints a payload checksum ('C' row).** A rotating
+   32-bit sum over the region HFS allocated to `/Payload`, computed
+   straight after the transfer and before anything else touches RAM, so
+   a corrupted load is visible on screen instead of being inferred from
+   a crash. The window length is patched per image via a `PAYLCKSZ`
+   marker (same mechanism as `PAYLDOFF`) set to
+   `results_offset - payload_offset` — a fixed window would have covered
+   `/Results.jsonl` on the FPU and MMU disks, whose payloads are only
+   32 KB / 27 KB, and the checksum would then change every run.
+   Expected values per image are tabulated in `prebuilt/README.md`.
+
+10. **Latent: `HANDOFF_ADDR` ($50000) sits inside the Quadra payload.**
+    The boot block writes `(refnum, drive)` there *after* loading the
+    payload, and the Quadra 800 CPU-bench payload spans
+    `$40000..$5E8C0` — so those 4 bytes land 64 KB into the image. They
+    currently fall in a zero gap in the captured corpus, so it is
+    harmless **today**, but any change to payload layout turns it into
+    silent corruption. Not moved yet because the address is duplicated
+    across seven files (every bench's `payload_entry*.s` reads it as a
+    hard-coded literal) and a boot block and payload that disagree hand
+    the bench a garbage refnum. `$00080000` — the first byte past the
+    256 KB read window — is the right value; change all seven in one
+    commit. `--defsym HANDOFF_ADDR=...` exists to rebuild a boot block
+    against an already-built payload meanwhile.
+
+### Offline verification harness (new)
+
+Findings 7-9 were validated without hardware and without MAME (the local
+MAME binary has no Apple drivers built in): the assembled boot block is
+executed under **Musashi** against a simulated Quadra 800 low memory +
+DAFB framebuffer, and the resulting framebuffer is rendered to a PNG.
+That confirmed the painted screen is legible at both 8 bpp/stride 1024
+and 1 bpp/stride 80, that the handoff slot receives `FFDF 0003`, and
+that the 68k checksum routine reproduces the host-computed value for all
+eight shipped images. The homebrew `m68k-elf-binutils` reproduce the
+Retro68 boot block byte-for-byte, so boot-block-only changes can be
+built and shipped **without the Retro68 toolchain** — which is how the
+`2026-08-26` bundles were produced.
+
 ## Hardware bring-up findings (2026-06-13)
 
 First real-Quadra-800 run surfaced two display/IO issues:
