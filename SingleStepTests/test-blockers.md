@@ -145,6 +145,63 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     completion (`MMU BENCH DONE`, ran=14, skipped=10). Corpus question,
     left alone here.
 
+13. **First full end-to-end CPU run, and what it says about the corpus
+    (2026-08-27).** With finding 11 fixed and row 179 skipped as a local
+    experiment, the CPU bench ran all 722 rows to `ALL TESTS DONE`,
+    wrote `/Results.jsonl` over SCSI with `ioResult=0000`, and the file
+    was extracted from the disk and diffed against
+    `results/cpu/mame_baseline_2026-06-12.json`. That is the first time
+    the loop has ever closed. **717 rows written; 696 comparable;
+    667 exact match; 29 divergent; 0 of the 29 are CPU differences.**
+
+    Every divergence is a harness or corpus-portability artifact:
+
+    | n | cause |
+    |---|---|
+    | 9 | memory-indirect (`([bd,A6],...)`) via an **absolute** pointer stored in scratch |
+    | 8 | A6 (the scratch base) copied into a **data** register (`EXG`, `PEA`, `MOVE.L A6,D0`) |
+    | 5 | absolute address baked into the test bytes (`(xxx).W`/`(xxx).L` = `$1804`/`$1820`) |
+    | 4 | control-register harness state (`MOVEC` `SFC`/`DFC`/`VBR`/`CACR`) |
+    | 2 | address register stored to scratch (`MOVEM`) |
+    | 1 | absolute preload compared against an A6-relative value (`CMPA.L`) |
+
+    The mechanism, measured: the MAME capture harness puts scratch at
+    **A6 = `$1800`**; the Mac bench puts it at **A6 = `$00062D3A`**. On
+    the Quadra, absolute `$1800`, `$1804`, `$1810` and `$1820` all read
+    `$40809AE6` (ROM-pointer filler in low memory) — and `$40809AE6` is
+    exactly the value every affected row reported. So those rows are not
+    comparing an instruction, they are comparing where scratch happens
+    to live.
+
+    This violates the corpus's own stated invariant, from the header of
+    `gen/mame_cpu_capture.lua`: *"Test instruction bytes must be
+    IDENTICAL between MAME and the Mac OS bench, so any test that
+    touches memory uses (A6) / d16(A6) addressing with A6 pre-loaded by
+    the harness to a platform-specific scratch base."* The `(xxx).W` /
+    `(xxx).L` rows and the A6-into-Dn rows break it by construction, and
+    no amount of silicon will make them agree.
+
+    The four `MOVEC` rows are a different flavour: the capture script
+    zeroes `SFC`/`DFC`/`CACR` before each row, the Mac bench does not, so
+    those rows compare harness state. Worth noting that
+    `MOVEC.L CACR,D0` reads **`$80008000`** on the bench — DE+IE, the
+    *correct* real-68040 mask, against a baseline of `0`. That is MAME
+    quirk 4 showing up from the other side.
+
+    Exception rows are healthy: 21 rows record a trap vector instead of
+    a register snapshot, 18 of them name their expected vector, and all
+    18 match (`DIVS`->5, `CHK`->6, `ILLEGAL`->4, odd `JMP`->3,
+    `CALLM`->4 on the 040, ...).
+
+    **So: the emulator is not failing the CPU suite.** MAME's 68040
+    matches on every row that is actually comparable. The ~29 rows are a
+    corpus-portability debt, and they will diverge identically on real
+    silicon — they are not a Quadra finding waiting to happen. Fixing
+    them means either re-expressing them A6-relative, or marking them
+    platform-local and excluding them from the diff. Corpora were out of
+    scope for this session, so nothing in `gen/` was changed: the row-179
+    skip was a scratch build only and was reverted.
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local
