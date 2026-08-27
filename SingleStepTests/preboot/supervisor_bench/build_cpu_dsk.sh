@@ -23,7 +23,7 @@ make cpu
 [[ -f "$PAYLOAD" ]] || { echo "missing $PAYLOAD"; exit 1; }
 
 rm -f "$OUT"
-"$RB" new --quiet --fs hfs --size 1440K --name CPUBench "$OUT" >/dev/null
+"$RB" new floppy --quiet hfs --size 1440K --name CPUBench "$OUT" >/dev/null
 
 put_get_off() {
     local host="$1" dst="$2" dec

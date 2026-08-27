@@ -26,7 +26,7 @@ writing `/Results.jsonl` back to the same disk.
 ## Use
 
 ```sh
-tar xzf quadra800-cpu-2026-06-13.tgz       # -> quadra800-cpu.hda + .dsk
+tar xzf quadra800-cpu-2026-08-27.tgz       # -> quadra800-cpu.hda + .dsk
 sha256sum -c SHA256SUMS                     # verify the bundles first
 ```
 - **`.hda`** — write to a BlueSCSI / SCSI2SD / real SCSI disk, or attach
@@ -41,10 +41,82 @@ Run it to **"ALL TESTS DONE"**, power off, pull `/Results.jsonl`, and diff:
 # fpu: per row, vec 11 = an unimplemented op correctly trapped; vec 0 = executed
 ```
 
+## 2026-08-27 bundles — FULL rebuild (boot block **and** payload)
+
+**Boot these.** Unlike the 2026-08-26 bundles, which were
+**boot-block-only** re-splices carrying the unchanged 2026-06-13
+payloads, these are **full rebuilds: the payload was recompiled too.**
+The `payload_entry_cpu.s` 8 bpp paint fix therefore ships in an image
+for the first time here — it is present in no earlier bundle.
+
+| Bundle | Bench |
+|---|---|
+| `quadra800-cpu-2026-08-27.tgz` | 68040 integer CPU, 722 rows |
+| `quadra800-fpu-2026-08-27.tgz` | 68040 FPU, 270 rows |
+| `quadra800-mmu-2026-08-27.tgz` | 68040 MMU, 24 rows |
+| `quadra800-cpu-nowrite-diag-2026-08-27.tgz` | CPU bench with SCSI writes stubbed out |
+
+Both fixes are now in both halves of the image:
+
+- **boot block** — `CPUSHA BC` either side of the payload `_Read`, and
+  8 bpp diagnostics (shipped 2026-08-26, unchanged here).
+- **payload entry** — `payload_entry_cpu.s` now paints 8 bpp with a
+  runtime `ScrnRow` stride instead of 1 bpp. On the Quadra's DAFB the
+  old code was unreadable speckle. **New in these bundles.**
+- **boot block checksum** — the `C` line is sized per image from the
+  `PAYLCKSZ` marker the build scripts patch.
+
+Payload sizes (they moved, because the payload actually changed):
+
+| Image | payload | `C` window |
+|---|---|---|
+| cpu | 125218 B | `0x1EA00` |
+| fpu | 32442 B | `0x8000` |
+| mmu | 27040 B | `0x6A00` |
+| cpu-nowrite | 124938 B | `0x1EA00` |
+
+### Reading the boot screen
+
+Five lines appear before the bench itself starts:
+
+```
+A 00000003     boot block running; BootDrive = 3
+D FFFFFFDF     driver refnum from the drive queue (negative = normal)
+E 00000000     _Read ioResult -- 00000000 is noErr; anything else = load failed
+C 5A9646DF     checksum of the payload as loaded into RAM
+3 <block>      about to JMP into the payload
+```
+
+`C` is the diagnostic that settles whether the cache fix took. It is a
+rotating 32-bit sum over the region HFS allocated to `/Payload`, taken
+straight after the transfer and **before** anything else touches RAM.
+Expected values, per image (**these are the 2026-08-27 rebuilds** —
+every payload rebuild changes them):
+
+| Image | expected `C` |
+|---|---|
+| `quadra800-cpu.hda` | `5A9646DF` |
+| `quadra800-cpu.dsk` | `9C56C17C` |
+| `quadra800-fpu.hda` | `AC893D41` |
+| `quadra800-fpu.dsk` | `AC8933E5` |
+| `quadra800-mmu.hda` | `AEF86860` |
+| `quadra800-mmu.dsk` | `ECA662B7` |
+| `quadra800-cpu-nowrite.hda` | `A6058355` |
+| `quadra800-cpu-nowrite.dsk` | `646129EE` |
+
+- Matches, and the bench runs → the payload arrived intact.
+- **Differs, or differs between two boots of the same disk** → the
+  payload is still being corrupted in transit; the cache fix is not the
+  whole story. Photograph the value and the `E` line.
+- `E` non-zero → the load itself failed; the block halts there and the
+  code on screen is the driver's `ioResult`.
+
 ## 2026-08-26 bundles — 68040 cache fix + readable boot diagnostics
 
-**Boot these, not the 06-13 ones.** Same bench payloads, byte for byte;
-the only change is the 1024-byte HFS boot block.
+**Superseded by the 2026-08-27 bundles above.** Same bench payloads as
+06-13, byte for byte; the only change is the 1024-byte HFS boot block.
+The `C` values these images paint differ from the table above, because
+their payloads are the older 06-13 builds.
 
 | Bundle | Bench |
 |---|---|
@@ -80,41 +152,6 @@ the Quadra's 8 bpp framebuffer — one byte per eight pixels — so the
 drive number, driver refnum and `_Read` result code have been
 unreadable speckle for the whole bring-up. They now paint one byte per
 pixel and take the row stride from `ScrnRow` at runtime.
-
-### Reading the boot screen
-
-Five lines appear before the bench itself starts:
-
-```
-A 00000003     boot block running; BootDrive = 3
-D FFFFFFDF     driver refnum from the drive queue (negative = normal)
-E 00000000     _Read ioResult -- 00000000 is noErr; anything else = load failed
-C 756B19E7     checksum of the payload as loaded into RAM
-3 <block>      about to JMP into the payload
-```
-
-`C` is the diagnostic that settles whether the cache fix took. It is a
-rotating 32-bit sum over the region HFS allocated to `/Payload`, taken
-straight after the transfer and **before** anything else touches RAM.
-Expected values, per image:
-
-| Image | expected `C` |
-|---|---|
-| `quadra800-cpu.hda` | `756B19E7` |
-| `quadra800-cpu.dsk` | `06394C48` |
-| `quadra800-fpu.hda` | `4976743B` |
-| `quadra800-fpu.dsk` | `FE96743A` |
-| `quadra800-mmu.hda` | `4BB51D37` |
-| `quadra800-mmu.dsk` | `5C4B92D6` |
-| `quadra800-cpu-nowrite.hda` | `6B83BF96` |
-| `quadra800-cpu-nowrite.dsk` | `0DC8C6E6` |
-
-- Matches, and the bench runs → the payload arrived intact.
-- **Differs, or differs between two boots of the same disk** → the
-  payload is still being corrupted in transit; the cache fix is not the
-  whole story. Photograph the value and the `E` line.
-- `E` non-zero → the load itself failed; the block halts there and the
-  code on screen is the driver's `ioResult`.
 
 ### Provenance
 

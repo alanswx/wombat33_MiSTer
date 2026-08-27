@@ -89,6 +89,27 @@ Retro68 boot block byte-for-byte, so boot-block-only changes can be
 built and shipped **without the Retro68 toolchain** — which is how the
 `2026-08-26` bundles were produced.
 
+### Findings 7-9 now ship in the payloads too (2026-08-27)
+
+The `2026-08-26` bundles were **boot-block-only** re-splices: pure
+assembly, built without Retro68 and dropped into the 2026-06-13 images,
+whose payloads were left untouched. So finding 8's *other* half — the
+`payload_entry_cpu.s` 8 bpp paint fix — was fixed in the source but
+present in **no shipped image**.
+
+The `2026-08-27` bundles are **full rebuilds on a machine with Retro68**:
+boot block *and* payload recompiled from source, so findings 7, 8 and 9
+are now in both halves of every image. Payloads moved accordingly
+(cpu 125142 -> 125218 B, fpu 32442 B, mmu 27040 B, cpu-nowrite
+124938 B), which is why every expected `C` value in
+`prebuilt/README.md` changed.
+
+Re-verified for the new payloads: all four are contiguous on disk
+(`rb-cli locate` reports `fragmented: false`, so the boot block's single
+`_Read` still gets the whole image), and finding 10's `HANDOFF_ADDR`
+($50000, payload offset `0x10000`) still lands in a **zero gap** in all
+four — the latent hazard has not detonated, but it remains latent.
+
 ## Hardware bring-up findings (2026-06-13)
 
 First real-Quadra-800 run surfaced two display/IO issues:
