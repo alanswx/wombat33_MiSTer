@@ -71,12 +71,18 @@ static i16 driver_write_sector(const JwCtx *ctx, u32 sector_idx, const u8 *buf)
      * boot block's _Read runs masked and works, so the driver polls or
      * lowers IPL itself). */
     if (&use_os_vbr) use_os_vbr();
+    /* Drop IPL to 0 across the trap: the Quadra's 53C96 signals transfer
+     * completion by interrupt, which can never land at IPL 7. Safe here
+     * because the OS VBR is installed, so the ROM services it. */
     asm volatile (
+        "movew %%sr, %%d3 \n"
+        "movew #0x2000, %%sr \n"
         "movel %0, %%a0   \n"
         ".short 0xA003    \n"   /* _Write */
+        "movew %%d3, %%sr \n"
         :
         : "g" (pb)
-        : "a0", "a1", "d0", "d1", "d2", "cc", "memory"
+        : "a0", "a1", "d0", "d1", "d2", "d3", "cc", "memory"
     );
     if (&use_recovery_vbr) use_recovery_vbr();
 

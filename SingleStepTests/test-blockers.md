@@ -401,6 +401,30 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     expected cross-check: `JW_NO_WRITE` stubs out the write path, so that
     `CPUSHA` was never compiled into it.
 
+18. **FIRST FULL HARDWARE RUN of the CPU corpus (2026-08-27), and the
+    SCSI write is the last bug.** `quadra800-cpu-nowrite.hda` ran all
+    722 rows to completion on the physical Quadra 800, with ~10 traps
+    (expected: the corpus has 21 `EXC:` rows that deliberately trap to
+    verify vectors). Writes are compiled out in that build.
+
+    So on real silicon the boot block, payload, 8 bpp display, recovery
+    harness, corpus and the 68040 itself all work. The one remaining
+    failure is the SCSI `_Write` path: the write-enabled image runs, then
+    Sad Macs with **no results written at all**.
+
+    The timing corroborates it. Results are buffered in 16 KB batches and
+    result lines average 281 bytes, so the **first `_Write` fires around
+    test 58** — not at the end. A crash during that first flush leaves
+    `/Results.jsonl` untouched, which is exactly what the machine shows.
+
+    Suspect, and the reason finding 5 already flagged it: the write runs
+    at **IPL 7**. The Quadra's **53C96** signals transfer completion by
+    interrupt, which can never be taken while masked. `_Read` in the boot
+    block survives masked because the driver polls on that path. Fix
+    under test: drop to IPL 0 across the `_Write` trap only, which is
+    safe because `use_os_vbr()` has already installed the ROM's vector
+    table so the ROM services the interrupt.
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local
