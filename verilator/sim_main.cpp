@@ -149,6 +149,7 @@ int verilate() {
 					printf("[STOP] pc=%08X at cycle %llu\n", hpc,
 					       (unsigned long long)main_time);
 					fflush(stdout);
+					if (cpu_trace_file) fflush(cpu_trace_file);
 					run_enable = 0;              // park the RUN checkbox
 					Verilated::gotFinish(true);  // halt exactly here
 				}
