@@ -88,6 +88,16 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     > removed. The block is now behind `.ifdef BOOT_SET_DTT0`, off by
     > default; build emulator images with `--defsym BOOT_SET_DTT0=1`.
     >
+    > **2026-08-28 correction (docs sweep):** the PFLUSHA attribution in
+    > the paragraph above is **disproven** — the ROM itself executes
+    > `PFLUSHA` during its own boot phase on every successful hardware
+    > run (finding 20's phase correlation), and the MMU-full suite ran
+    > its PFLUSH/PFLUSHA corpus rows on silicon 24/24 (finding 26).
+    > Findings 20/22 (the ROM hands off with TTRs programmed) explain
+    > why only the emulators needed the DTT0 block. What actually killed
+    > the DTT0-era boot block on hardware remains formally unresolved;
+    > the block stays emulator-only regardless.
+    >
     > What the two emulators actually showed is that *their* page-table
     > walk does not map the DAFB aperture, so a `ScrnBase` write lands at
     > physical `$00001000`. The Developer Note (ch. 4) says the ROM
@@ -924,6 +934,63 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     vector-11 traps + 16 FPIAR low-16 rows. The silicon-only unknown
     is closed: the chain `_Read` under the ROM vector table at bench
     time works on hardware (all four hops, no F-line).
+
+28. **The golden-baseline scoring layer — the captures become a
+    turnkey RTL oracle (2026-08-28).** The hardware captures were
+    complete but the scoring contract was not: two golden classes
+    deliberately diverge from silicon in the corpus (176 FINT/FINTRZ
+    vec-11 rows, 16 FPIAR low-16 rows), the CPU/FPU captures embed
+    payload-layout addresses, `mmu_diff_corpus.py` scored 0/14
+    everywhere (finding 22), FPSR AEXC is sticky across rows, and
+    undefined-CCR-bit policy lived only in prose. Now:
+
+    - **`gen/score_vs_oracle.py`** is THE pass/fail golden contract:
+      score any candidate run (RTL, emulator, device) of a suite
+      against its hardware capture. Every known divergence class is
+      recognized and classified instead of failed: `layout` (the
+      single constant payload shift, derived per run pair and applied
+      only to values inside `$40000..$80000` — the chained-vs-single
+      captures proved the model: one delta explains every diff),
+      `golden` (host-side expected/pass changed, machine behavior
+      equal — the FDBcc fix), `fp-policy` (vec 11 vs execution on
+      040-unimplemented FP ops: a full-FPU core legitimately
+      differs), `fpiar` (low-16 agreement), `ccr` (undefined bits:
+      ABCD/SBCD/NBCD + CHK2/CMP2 N,V; CHK Z,V,C; DIVx-overflow N,Z —
+      default `--ccr-policy arch` masks them, `silicon` compares
+      exact), `aexc` (opt-in `--mask-aexc`, ONLY for candidates that
+      did not run the full corpus in order), `env`/`frame` (mmu
+      platform registers / fault-frame windows). Exit 1 on REAL
+      diffs only. Validated both directions: chained-vs-single
+      captures = 0 REAL across all five suites with exactly the
+      expected classifications; injected faults (wrong d-reg, wrong
+      vec, defined-CCR-bit flips) all detected, undefined-bit flips
+      classified.
+    - **`gen/mmu_live_check.py`** now also scores the 14 safe rows
+      (vs the MAME baseline) with the finding-13 environment split:
+      vec is the REAL signal; the row's target register, harness
+      d/a regs and non-target MMU registers are labeled
+      `mask`/`dreg`/`areg`/`env` (MAME harness state + its over-wide
+      writable masks — silicon adjudicates). It is an adjudication
+      REPORT vs MAME; pass/fail belongs to score_vs_oracle.
+    - **`mmu_diff_corpus.py` is marked superseded** (docstring
+      pointer); kept for the trail.
+    - **AEXC decision:** the fpu bench is UNCHANGED — the captures'
+      row-order AEXC accumulation is deterministic (chained == single
+      proved it), so a full in-order candidate run needs no masking
+      and the existing captures stay the golden contract. A per-row
+      FPSR-clear bench variant would require ONE new hardware
+      capture and is only worth it if isolated-row replay ever
+      matters; until then `--mask-aexc` covers partial runs.
+    - **Undefined-CCR policy:** both stances are implemented; `arch`
+      (mask undefined bits, classify) is the default for RTL
+      bring-up, `silicon` (exact Quadra values) for cloning this
+      chip's undefined-bit behavior.
+
+    **Hardware status: the campaign needs NO further silicon runs.**
+    The optional-only future captures: a FPIAR probe suite (word vs
+    long write paths, FMOVEM variant — finding 26's low-16 result is
+    already recorded ground truth) and a per-row-FPSR-clear FPU
+    re-capture; neither blocks RTL bring-up.
 
 ### Offline verification harness (new)
 

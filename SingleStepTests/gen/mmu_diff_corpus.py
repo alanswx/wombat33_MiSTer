@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""mmu_diff_corpus.py -- compare a 68040 MMU bench run (real Quadra 800
+"""mmu_diff_corpus.py -- SUPERSEDED (finding 22/28): it compares harness
+environment state, so it scores 0/14 for every environment. Use
+gen/mmu_live_check.py (adjudication report vs the MAME baseline, safe +
+live rows) or gen/score_vs_oracle.py (pass/fail vs the hardware
+captures — the RTL golden contract). Kept for the trail only.
+
+Original purpose: compare a 68040 MMU bench run (real Quadra 800
 via preboot/supervisor_bench/mmu_bench_main.c, or the MAME harness build)
 against the MAME oracle corpus (results/mmu/mame_baseline_*.json).
 

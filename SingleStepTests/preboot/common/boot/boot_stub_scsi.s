@@ -228,10 +228,11 @@ startup:
     | matters -- re-enabling interrupts here also breaks the load.
     | The TTR is a CPU register, so it stays in force for the payload,
     | whose entry shim paints through ScrnBase the same way.
-    | OFF by default: PFLUSHA ($F518) F-line traps on real Quadra 800
-    | silicon (Sad Mac ID 10), same class as finding 16's CPUSHA. Only
-    | MAME/QEMU need this, and only because their page-table walk does
-    | not map the DAFB. Build emulator images with --defsym BOOT_SET_DTT0=1.
+    | OFF by default: this block crashed the real-hardware boot (root
+    | cause formally unresolved; the old PFLUSHA attribution is disproven
+    | — silicon executes PFLUSH fine, findings 20/26). Only MAME/QEMU
+    | need it, and only because their page-table walk does not map the
+    | DAFB (findings 20/22). Emulator images: --defsym BOOT_SET_DTT0=1.
 .ifdef BOOT_SET_DTT0
     move.l  #0xF00FE040, %d0
     movec   %d0, %dtt0

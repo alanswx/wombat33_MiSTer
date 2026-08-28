@@ -1,4 +1,4 @@
-# Resume prompt — all-in-one disk HARDWARE-VALIDATED; next: analysis + RTL bring-up
+# Resume prompt — oracle campaign COMPLETE (captures + scoring layer); next: RTL bring-up
 
 Paste this whole file as the opening message of a new session.
 
@@ -31,25 +31,37 @@ shifts (+340/+300 on recorded addresses); integration 1328/1328 with
 the corrected FDBcc goldens 51/51 and the adjudicated 176 vec-11 + 16
 FPIAR fails. Chain `_Read` under the ROM table proven on silicon.
 
-## NEXT TASKS (in order)
+**SCORING LAYER COMPLETE (finding 28, 2026-08-28):** the captures are
+now a turnkey golden baseline. `gen/score_vs_oracle.py` = THE pass/fail
+contract for any candidate run (RTL/emulator/device) vs the hardware
+captures, all five suites, with every adjudicated divergence class
+recognized (`layout` payload-shift normalization, `golden`, `fp-policy`
+vec-11-vs-execute, `fpiar` low-16, `ccr` undefined bits under
+`--ccr-policy arch|silicon`, `aexc` via `--mask-aexc` for partial runs,
+mmu `env`/`frame`); self-tested chained-vs-single = 0 REAL on all
+suites, injected faults all caught. `gen/mmu_live_check.py` now scores
+the safe rows too (env split; adjudication report vs MAME);
+`mmu_diff_corpus.py` superseded. Finding-13 layout debt closed for
+this campaign by scorer normalization (cross-platform corpus
+re-expression only matters if the corpus is ever re-hosted). FPU bench
+UNCHANGED — captures stay the contract; docs sweep done (finding 11
+PFLUSHA attribution corrected in test-blockers + boot_stub_scsi.s).
 
-1. **MMU diff-tool contract rework** (finding 22): `mmu_diff_corpus.py`
-   scores 0/14 everywhere (harness-state expectations). Fold the safe
-   rows into `gen/mmu_live_check.py` (the working model) or fix
-   mmu_diff to match (finding-13 treatment: split environment fields
-   from CPU behavior).
-2. **CPU corpus portability debt** (finding 13): 29 rows (absolute
-   `$1800/$1820`, A6-into-Dn, MOVEC harness state) — re-express
-   A6-relative or mark platform-local and exclude.
-3. **FPU polish**: per-row FPSR clear so AEXC doesn't stick; optional
-   FPIAR probe suite (word vs long paths, FMOVEM variant) to pin the
-   low-16 behavior (finding 26).
-4. **Docs sweep**: finding 11's "PFLUSHA F-lines on silicon"
-   attribution is disproven (f20/f22); what killed the DTT0-era boot
-   block stays formally unresolved — low priority.
-5. Then the point of it all: **wombat33 RTL bring-up against the
-   captured oracle set** (`results/*2026-08-28*` + corrected corpora;
-   `cpu_fpu/cpu_fpu_tests.v` + `sim_main.cpp` are the Verilator start).
+**NO further hardware runs are needed.** Optional-only future silicon:
+a FPIAR probe suite (word-vs-long write paths) and a per-row-FPSR-clear
+FPU re-capture — neither blocks RTL bring-up.
+
+## NEXT TASK
+
+**wombat33 RTL bring-up against the captured oracle set.**
+`results/*2026-08-28*` (+ `results/allinone/`) are ground truth;
+`cpu_fpu/cpu_fpu_tests.v` + `sim_main.cpp` are the Verilator start.
+Score every RTL run with:
+```sh
+python3 gen/score_vs_oracle.py <suite> results/<suite capture>.jsonl <rtl run>.jsonl
+```
+(suite ∈ cpu|fpu|integration|saverestore|mmu; exit 0 = golden match
+modulo classified, documented divergences).
 
 ## Know-how (do not relearn)
 
