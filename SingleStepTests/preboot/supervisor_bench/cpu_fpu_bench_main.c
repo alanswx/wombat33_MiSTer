@@ -129,11 +129,12 @@ static u8 *build_program(const CpuFpuTestSpec *t) {
 }
 
 static void flush_icache(void) {
-    asm volatile (
-        "moveq #9, %%d0          \n"   /* CI | EI = 0x09 */
-        ".long 0x4E7B0002        \n"   /* movec d0, cacr */
-        : : : "d0"
-    );
+    /* 68020-era MOVEC #$09,CACR survived the Mac II import here; on the
+     * 040 that value DISABLES both caches without pushing dirty data --
+     * every cached global reads back as raw-RAM zeros from then on
+     * (finding 25; same lesson as finding 16). Use the ROM call. */
+    asm volatile ("moveq #1,%%d0 \n .short 0xA198"
+                  : : : "d0", "a0", "a1", "d1", "d2", "memory");
 }
 
 static void write_name(JsonlWriter *w, const char *name) {

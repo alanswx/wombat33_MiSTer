@@ -765,6 +765,42 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     benches' on-hardware write failures are under live diagnosis with
     a build that paints the writer's refnum/drive/base + ioResult).
 
+25. **The integration bench's hardware write failures: a 68020 CACR
+    write that DISABLES the 68040's caches (2026-08-28). FIXED.** The
+    new CPU+FPU integration and FSAVE/FRESTORE disks ran on the real
+    Quadra (7/8 shown on-screen) but wrote nothing, with the diag row
+    painting `rn=0000 dr=0000 base=00000000` and `ioResult=0000` —
+    while the same images were flawless under QEMU. Bisection disks
+    reverting the two suspected deltas (sliced writer, `HANDOFF_ADDR`)
+    changed nothing — correctly, because the culprit predated both:
+    `cpu_fpu_bench_main.c` came over from the Mac II campaign with
+
+    ```c
+    moveq #9,d0 ; movec d0,cacr   /* 68020: clear+enable I-cache */
+    ```
+
+    still in its `flush_icache()`. On the 68040, CACR is a different
+    register (bit 31 = DE, bit 15 = IE, no clear bits), so `$09`
+    **disables both caches without pushing the dirty data cache**. From
+    the first test on, every global the bench had written through the
+    copyback cache — the handoff refnum/drive, the writer context —
+    became invisible: reads bypassed the cache and returned the raw
+    RAM underneath (zeros). `_Write` went to refnum 0 and the ROM
+    politely returned `noErr` while touching nothing. The emulators
+    model no caches, which is exactly why they never reproduced it —
+    the same epistemic shape as findings 16/20/21. Finding 16's fix
+    ("all cache ops go through `_HwPriv` selector 1") had been applied
+    to the three original mains but the integration main was not in
+    the build then. It is now the ROM call; tree-wide sweep shows no
+    other `MOVEC ...,CACR` relics outside `old/`.
+
+    The bisection artifacts stay useful: every boot stub and payload
+    entry honors `--defsym HANDOFF_ADDR=`, and the DONE screen paints
+    `rn=/dr=/base=` + `ioResult` on the integration benches — one
+    photo now identifies any future writer-context corruption. The
+    sliced writer and `HANDOFF_ADDR=$80000` defaults are exonerated
+    and stay.
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local

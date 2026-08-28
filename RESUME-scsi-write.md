@@ -1,4 +1,23 @@
-# Resume prompt — hardware write-path bisection in flight (2026-08-28 evening)
+# Resume prompt — bisection RESOLVED: the 68020 CACR relic (finding 25)
+
+**2026-08-28, later:** the srtest-27c-writepath disk (verbatim 017acee
+write code) ALSO failed on hardware — correctly exonerating the sliced
+writer and HANDOFF_ADDR=$80000, both of which stay as defaults. The
+real culprit was `cpu_fpu_bench_main.c`'s Mac II-era `flush_icache()`:
+`MOVEC #$09,CACR`, which on the 68040 DISABLES both caches without
+pushing dirty data — every cached global (handoff refnum/drive, writer
+ctx) then reads back as raw-RAM zeros on real silicon, and `_Write`
+goes to refnum 0 with a polite `noErr`. Emulators model no caches, so
+they never showed it. Fixed to the `_HwPriv` ROM call (finding 16's
+rule); fresh disks with diag rows are with the user
+(saverestore C=691ED990, cpu-fpu C=FD355319). If those write on
+hardware, the integration campaign is unblocked end to end; next up is
+hardware runs of `make mmu_full` (finding 24) and the -28b bundle
+refresh of everything on the current defaults.
+
+---
+
+# Superseded: hardware write-path bisection in flight (2026-08-28 evening)
 
 **LIVE ISSUE:** the new integration/MMU-full builds' SCSI writes fail on
 the real Quadra with `ioResult=0000` and rn=0000/dr=0000/base=00000000
