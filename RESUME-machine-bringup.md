@@ -41,37 +41,29 @@ is audible in the GUI Audio window), NCR 53C96 + disk target
 ADB keyboard/mouse (lbmactwo lineage — untested). 32 MB RAM config
 (target configs 32/48 MB; 8 MB double-faults — see rules below).
 
-**The boot now runs ~2G cycles and paints a SAD MAC through our DAFB**
-— the first real image from the machine (`verilator/screenshot_f2800.png`
-at hand-off). Codes: `0000000F / 00000033`. Per
-`docs/quadra800-rom-notes.md` ("The Sad Mac path"): $0F = died before
-the System loaded; the second line is DSErrCode = **vector − 1**, so
-$33 = vector 52 = **FPU OPERR**. An FP operand-error exception ends the
-boot after the NuBus slot scan. Suspects, in order: (a) the AP68040
-FPU's arithmetic-exception delivery firing despite FPCR enables being
-clear (the fpu corpus passed 270/270, but through the FSAVE/pending
-paths of the bench, not necessarily this shape); (b) an earlier stubbed
-device feeding garbage into an FP calculation that then legitimately...
-no — OPERR with exceptions disabled must NOT trap, so (a)-shaped
-delivery is the prime suspect regardless of operands.
+**RESOLVED on the laptop (2026-08-28, finding 33).** The Sad Mac
+`0000000F / 00000033` was NOT FPU OPERR — the `vector − 1` reading was
+wrong. The trace showed an explicit `_SysError($33)` = **dsBadSlotInt**:
+the DAFB VBL arrived on pseudo-VIA slot bit 5 (empty NuBus slot $E)
+instead of bit 6 (internal video) because `nubus_irqs` in `rtl/iosb.sv`
+was a 7-bit concat zero-extended. One-bit fix, committed. The boot now
+runs past 2.22G cycles into the SCSI boot-device scan ($408D19xx
+polling the 53C96). See finding 33 in `SingleStepTests/test-blockers.md`
+and the new "not every Sad Mac code is vector−1" section in
+`docs/quadra800-rom-notes.md`.
 
-### Immediate next step (was about to run)
+Side discovery recorded in finding 33 for upstream AP68040 work (real
+bugs, not this Sad Mac): the core's FSAVE $30/$60 frame payloads sit
+one longword low vs the real 040 layout the ROM FPSP addresses, and
+both frames write/pop 4 bytes more than their architected sizes.
 
-One interactive run:
-```sh
-cd verilator && PATH=$HOME/.local/bin:$PATH make
-./obj_dir/Vemu --stop-at-pc 4080280e,4080281f
-```
-Watch the boot (chime ~1 min in sim-minutes, long RAM test, slot-scan
-berrs at $FnFFFFFC are NORMAL). The sim pauses itself at the Sad Mac
-entry with D6/D7 live in the Machine panel; the `[STOP] pc=.. at cycle
-C` line names the cycle. Then a second interactive run
-`./obj_dir/Vemu --trace-after <C-2000000> --stop-at-pc 4080280e,4080281f`
-gives a cpu_trace.log window ending at the failure — the vector-52
-dispatch and the FP instruction before it will be in the tail. Fix in
-`rtl/ap68040/rtl/ap040_fpu.v` / `ap040_core.v` FPU-pending plumbing (a
-submodule change — coordinate before touching; an iosb/machine-side fix
-is preferable if the trace shows garbage operands instead).
+### Immediate next step
+
+Diskless boot now heads for the flashing-? floppy. The acceptance gate
+below is the live target: mount a COPY of the all-in-one bench disk via
+`--disk` and walk the 53C96 model through the real boot (its flagged
+shaky spots — non-DMA transfers, PDMA byte order — are now actually
+exercised by the ROM's scan).
 
 ### Also in flight at hand-off
 
