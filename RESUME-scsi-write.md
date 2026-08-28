@@ -1,4 +1,27 @@
-# Resume prompt — SCSI `_Write`: root cause found and fixed, awaiting the confirming hardware run
+# Resume prompt — hardware write-path bisection in flight (2026-08-28 evening)
+
+**LIVE ISSUE:** the new integration/MMU-full builds' SCSI writes fail on
+the real Quadra with `ioResult=0000` and rn=0000/dr=0000/base=00000000
+painted (writer saw all-zero context) while the SAME images run and
+write perfectly under QEMU. Two write-relevant deltas exist vs the
+hardware-proven 017acee (-27c) state: HANDOFF_ADDR $50000->$80000 and
+the sliced-chunk jsonl writer. Bisection disks are with the user:
+`dist/quadra800-srtest-27c-writepath.hda` (BOTH reverted, C=BC01A78F,
+should write; then run `cpufpu-27c-writepath`, C=8ECF22F9) plus
+single-variable controls `srtest-handoff50000` (C=A40063CB) and
+`srtest-oldwriter` (C=05F86D28). All paint rn=/dr=/base= + ioResult on
+the DONE screen. Every payload entry + boot stub now honors
+`--defsym HANDOFF_ADDR=` (guarded defaults). Whichever variable the
+bisection convicts: make its -27c value the default again and record
+why $80000 (or the slicer) breaks real hardware — note the all-zeros
+anomaly includes `base` (payload .data loaded from disk!), which no
+handoff theory alone explains; suspect the diag values themselves or a
+partial/incoherent payload load, and compare the painted C against the
+expected value per disk.
+
+---
+
+# Previous state — SCSI `_Write`: root cause found and fixed, awaiting the confirming hardware run
 
 Paste this whole file as the opening message of a new session.
 
