@@ -234,14 +234,17 @@ dafb dafb (
 //----------------------------------------------------------------------------
 reg        overlay;
 
-// decode of a beat address; the walker sees the same physical map
-function [2:0] decode;               // 0 ram,1 rom,2 vram,3 iosb,4 berr,5 dafb
+// decode of a beat address; the walker sees the same physical map.
+// djMEMC acknowledges its whole DRAM window: probes beyond installed RAM
+// read open-bus zeros, never a bus error — the ROM's RAM sizing treats a
+// berr there as a fatal hardware fault (found the hard way; QEMU agrees).
+function [2:0] decode;       // 0 ram,1 rom,2 vram,3 iosb,4 berr,5 dafb,6 open
 	input [31:2] a;
 	begin
 		if (a[31:28] == 4'h4)              decode = 3'd1;
 		else if (overlay && a[31:22] == 10'd0) decode = 3'd1;
 		else if (a[31:30] == 2'b00)
-			decode = (a[29:2] < (28'd1 << (RAM_ADDR_BITS-2))) ? 3'd0 : 3'd4;
+			decode = (a[29:2] < (28'd1 << (RAM_ADDR_BITS-2))) ? 3'd0 : 3'd6;
 		else if (a[31:21] == 11'b1111_1001_000) decode = 3'd2;  // $F900xxxx-$F91Fxxxx
 		else if (a[31:10] == 22'b1111_1001_1000_0000_0000_00) decode = 3'd5;
 		else if (a[31:28] == 4'h5)         decode = 3'd3;
@@ -250,7 +253,7 @@ function [2:0] decode;               // 0 ram,1 rom,2 vram,3 iosb,4 berr,5 dafb
 endfunction
 
 localparam S_IDLE = 3'd0, S_MEM = 3'd1, S_IOSB = 3'd2, S_BERR = 3'd3,
-           S_DAFB = 3'd4;
+           S_DAFB = 3'd4, S_OPEN = 3'd5;
 reg  [2:0] svc;
 reg        svc_walker;                        // owner of the beat in service
 reg [31:2] svc_addr;
@@ -339,6 +342,7 @@ always @(posedge clk) begin
 					dafb_wdata <= walker_pend ? walker_wdat : b_wdata;
 					svc        <= S_DAFB;
 				end
+				3'd6: svc <= S_OPEN;
 				default: svc <= S_BERR;
 				endcase
 			end
@@ -382,6 +386,17 @@ always @(posedge clk) begin
 		S_BERR: begin
 			if (svc_walker) walker_berr <= 1;
 			else            cpu_berr    <= 1;
+			svc <= S_IDLE;
+		end
+		S_OPEN: begin
+			if (svc_walker) begin
+				walker_ack  <= 1;
+				walker_data <= 32'd0;
+			end
+			else begin
+				b_ack   <= 1;
+				b_rdata <= 32'd0;
+			end
 			svc <= S_IDLE;
 		end
 		endcase

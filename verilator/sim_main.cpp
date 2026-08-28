@@ -60,13 +60,14 @@ std::vector<int> screenshot_frames;
 int  stop_at_frame = -1;
 vluint64_t max_cycles = 0;      // --max-cycles N: stop after N clk edges (0 = off)
 vluint64_t trace_after = 0;     // --trace-after N: suppress the cpu trace before cycle N
+uint32_t stop_pc_lo = 1, stop_pc_hi = 0;   // --stop-at-pc lo,hi: exit when pc_i enters range
 
 // CPU instruction trace (MacLC cpu_trace pattern, adapted to AP68040's
 // pc_i register: one entry per instruction dispatch, extension words read
 // straight from the sim memory arrays)
 bool cpu_trace_disabled = false;      // --no-cpu-trace
 bool gui_instr_log = false;           // stream instructions into the Debug log
-bool gui_trace_file = true;           // keep writing cpu_trace.log
+bool gui_trace_file = true;           // trace file toggle (GUI defaults off)
 bool showDebugLog = true;
 FILE* cpu_trace_file = nullptr;
 const char* cpu_trace_filename = "cpu_trace.log";
@@ -129,6 +130,11 @@ int verilate() {
 				if (!cpu_trace_disabled && main_time >= trace_after) cpu_trace_step();
 				uint32_t hpc = SIMEMU->__PVT__machine__DOT__cpu__DOT__core__DOT__pc_i;
 				pc_hist[hpc >> 8]++;
+				if (hpc >= stop_pc_lo && hpc <= stop_pc_hi) {
+					printf("[STOP] pc=%08X at cycle %llu\n", hpc,
+					       (unsigned long long)main_time);
+					Verilated::gotFinish(true);
+				}
 				if (main_time >= next_heartbeat) {
 					next_heartbeat += heartbeat_every;
 					printf("[HB] cycle=%llu pc=%08X instr=%ld a3=%08X d7=%08X\n",
@@ -230,6 +236,10 @@ static void machine_events() {
 
 	int fault = VERTOPINTERN->debug_cpu_fault;
 	int halted = VERTOPINTERN->debug_cpu_halted;
+	if (halted && !last_halted)
+		printf("[LOWMEM] $108=%08X $10C=%08X $2A6=%08X $CFC=%08X\n",
+		       SIMEMU->ram[0x108>>2], SIMEMU->ram[0x10C>>2],
+		       SIMEMU->ram[0x2A4>>2], SIMEMU->ram[0xCFC>>2]);
 	if ((fault && !last_fault) || (halted && !last_halted))
 	{
 		printf("[MACHINE] %s at cycle %llu pc=%08X\n",
@@ -252,6 +262,8 @@ int main(int argc, char** argv, char** env) {
 			max_cycles = strtoull(argv[++i], nullptr, 0);
 		} else if (!strcmp(argv[i], "--trace-after") && i + 1 < argc) {
 			trace_after = strtoull(argv[++i], nullptr, 0);
+		} else if (!strcmp(argv[i], "--stop-at-pc") && i + 1 < argc) {
+			sscanf(argv[++i], "%x,%x", &stop_pc_lo, &stop_pc_hi);
 		} else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) {
 			screenshot_mode = true;
 			std::stringstream ss(argv[++i]);
@@ -266,6 +278,9 @@ int main(int argc, char** argv, char** env) {
 		}
 	}
 
+	// The interactive GUI must not fill the disk behind the user's back:
+	// the trace file starts enabled only for headless runs.
+	gui_trace_file = headless;
 	if (!cpu_trace_disabled) {
 		cpu_trace_file = fopen(cpu_trace_filename, "w");
 		if (!cpu_trace_file) { cpu_trace_disabled = true; }

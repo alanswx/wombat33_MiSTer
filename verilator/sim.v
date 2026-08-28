@@ -67,7 +67,7 @@ assign AUDIO_R = 16'd0;
 //----------------------------------------------------------------------------
 // The machine
 //----------------------------------------------------------------------------
-localparam RAM_ADDR_BITS = 23;                 // 8 MB
+localparam RAM_ADDR_BITS = 25;                 // 32 MB (a target config; 48 MB later)
 localparam RAM_WORDS  = 1 << (RAM_ADDR_BITS-2);
 localparam ROM_WORDS  = 262144;                // 1 MB
 localparam VRAM_WORDS = 262144;                // 1 MB
