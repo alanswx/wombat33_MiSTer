@@ -149,7 +149,8 @@ int verilate() {
 					printf("[STOP] pc=%08X at cycle %llu\n", hpc,
 					       (unsigned long long)main_time);
 					fflush(stdout);
-					Verilated::gotFinish(true);
+					run_enable = 0;              // park the RUN checkbox
+					Verilated::gotFinish(true);  // halt exactly here
 				}
 				pc_was_in_stop = pc_in_stop;
 				if (main_time >= next_heartbeat) {
@@ -490,11 +491,10 @@ int main(int argc, char** argv, char** env) {
 			break;
 		}
 
-		// a [STOP] latches gotFinish and pauses; re-checking RUN clears it
-		if (Verilated::gotFinish()) {
-			if (run_enable) Verilated::gotFinish(false);
-			else run_enable = 0;
-		}
+		// run_enable true with finish latched can only mean the user
+		// re-checked RUN after a [STOP]: clear the latch and resume
+		if (Verilated::gotFinish() && run_enable) Verilated::gotFinish(false);
+		if (Verilated::gotFinish()) run_enable = 0;
 		if (run_enable)
 			for (int step = 0; step < batchSize; step++) verilate();
 		else {
