@@ -605,6 +605,79 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     code-looking return addresses scanned off the exception frame — so
     the next unknown fault identifies itself completely in one boot.
 
+22. **FIRST FULL HARDWARE CAPTURE — CPU, FPU and MMU results off the
+    real Quadra 800, and what silicon adjudicated (2026-08-28).** The
+    finding-21 stack fix held: all three benches ran to DONE and wrote
+    `/Results.jsonl` over SCSI (CPU 717 rows, FPU 270, MMU 24). Raw
+    captures: `results/{cpu,fpu,mmu}/hardware_quadra800_2026-08-28.jsonl`.
+
+    **CPU (661/695 vs MAME baseline).** Exactly the 29 known
+    corpus-portability rows plus **five real silicon-vs-MAME
+    divergences, all `ccr_only`, all in undefined-flag territory**:
+    ABCD/SBCD/NBCD (N, V and sticky-Z details) and in-bounds CHK.L
+    (undefined Z) — real 68040 silicon computes undefined CCR bits
+    differently than MAME's model. Plus two trap adjudications: **RTM
+    correctly takes vector 4 on silicon** (the corpus predicted MAME's
+    golden was bad — confirmed; MAME executes it), and the
+    `BSR.W / RTD #4` row crashes differently (hw vec 2 vs MAME vec 4) —
+    a harness-stack artifact, not a CPU difference.
+
+    **FPU: the 040-lite classification had two op families backwards;
+    silicon corrected it, and the fixed model scores 270/270.**
+    FSGLDIV/FSGLMUL (24 rows) were tagged trap but EXECUTE in hardware;
+    FINT/FINTRZ (22 rows) were tagged execute but TRAP vector 11 —
+    both exactly per the M68040UM implemented/FPSP tables.
+    `gen_fpu_header.py`'s `HW_OPMODES` is corrected and
+    `fpu_tests.h` regenerated (both copies; content change is the
+    `traps` flags + name tags only). Numeric results agree with MAME on
+    every co-executed row except three modeling gaps, silicon
+    canonical: **MAME never accrues FPSR AEXC (INEX `$8` sticks on
+    silicon from the first inexact op), MAME does not model FPIAR**
+    (silicon records the faulting FP instruction address), and MAME
+    boots with garbage FP registers where silicon resets them to
+    canonical NaNs (`7FFF0000FFFF…`).
+
+    **MMU (14 register-mask rows).** Two adjudications and one broken
+    contract. (1) **The real ROM hands off with the TTRs PROGRAMMED**
+    — hardware snapshots show `DTT0/ITT0 = $F900C060` (a transparent
+    DAFB window!) and `DTT1/ITT1 = $807FC040` — while MAME and QEMU
+    both model all four as zero. The two emulators "agreeing" (finding
+    11's foundation) was mutual mis-modeling: on silicon, `ScrnBase`
+    writes always went through the ROM's own DAFB window, which is why
+    hardware never needed `BOOT_SET_DTT0` and why the emulators
+    without it spray low memory. Finding 11's mystery is fully closed.
+    (2) **`PFLUSH (A0)` / `PFLUSHN (A0)` execute on silicon; MAME's
+    68040 F-lines them** (vec 11 in the MAME-bench run). (3) The
+    bench↔baseline contract is broken for *everyone*: MAME-bench,
+    QEMU-bench and hardware all score 0/14 against
+    `results/mmu/mame_baseline_2026-06-12.json` with the same
+    systematic signature (harness state: `urp/srp=$3000` tables,
+    `itt0=$FFC000`, `d7=0` expectations the on-device bench never sets
+    up). The diff needs the same environment-vs-CPU separation the CPU
+    corpus got in finding 13. SRP differing (`$77FFA00` hw vs
+    `$7FCC00` emulators) is RAM-size-dependent ROM state, not CPU.
+
+    **Coverage answers (asked 2026-08-28).** (a) The CPU+FPU
+    integration bench was never missing — `cpu_fpu_bench_main.c` +
+    the 1328-row corpus (`macos_bench/cpu_fpu_tests.h`) + the 8-row
+    FSAVE/FRESTORE sub-corpus existed from the Mac II lineage, but the
+    Quadra Makefile had no link target for them; now wired
+    (`make cpu_fpu` / `make cpu_fpu_sr`), shim installed, shipped.
+    Rows containing 040-unimplemented FP ops will trap on silicon
+    (self-scored `vec` column records it) — that is data, same as the
+    FPU bench. (b) The 10 skipped MMU rows (5 LIVE translation, 3
+    FAULT, 2 PTEST) need the private-page-table harness: port
+    `mmu_bench_main.c.68030-reference`'s relocation scheme to the
+    68040 — build the corpus's 3-level tables in payload buffers,
+    patch descriptor address fields, add identity early-termination
+    descriptors for the harness regions, switch `URP/SRP/TC` around
+    each test, and (new requirement from adjudication (1)) **save,
+    clear and restore the four TTRs** around live rows since the ROM
+    leaves them enabled. Fault rows land on vector 2 with format-$7
+    frames; `recovery.s` already forces TC off on entry
+    (`MMU_RECOVERY`). The corpus data and the MAME baseline for those
+    rows already exist — only the runner is missing.
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local

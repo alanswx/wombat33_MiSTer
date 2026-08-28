@@ -123,20 +123,21 @@ TRANS_VALUES = ["pos_zero", "pos_half", "pos_one", "pi_quarter", "pi"]
 # Test builders.
 # ---------------------------------------------------------------------------
 # 68040 on-chip FPU: opmodes implemented in HARDWARE (these execute).
-# Everything else (transcendentals, FMOD/FREM/FSCALE, FSGLMUL/FSGLDIV,
-# FGETEXP/FGETMAN) takes the unimplemented-FP exception (vector 11) so
-# FPSP040 can emulate it. On a Quadra 800 FPGA core in MC68040-lite mode
-# without FPSP loaded, the observable is the trap, not a result.
+# Everything else (transcendentals, FMOD/FREM/FSCALE, FGETEXP/FGETMAN,
+# FINT/FINTRZ) takes the unimplemented-FP exception (vector 11) so
+# FPSP040 can emulate it. Adjudicated on the real Quadra 800 2026-08-28:
+# FSGLDIV/FSGLMUL execute in silicon, FINT/FINTRZ trap (M68040UM agrees;
+# the first classification had both backwards - test-blockers finding 22).
 HW_OPMODES = {
     0x00,  # FMOVE
-    0x01,  # FINT
-    0x03,  # FINTRZ
     0x04,  # FSQRT
     0x18,  # FABS
     0x1A,  # FNEG
     0x20,  # FDIV
     0x22,  # FADD
     0x23,  # FMUL
+    0x24,  # FSGLDIV
+    0x27,  # FSGLMUL
     0x28,  # FSUB
     0x38,  # FCMP
     0x3A,  # FTST
