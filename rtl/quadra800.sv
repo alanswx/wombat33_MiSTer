@@ -31,9 +31,6 @@ module quadra800
 	input         nreset,
 	input         ce,
 
-	input   [2:0] ipl,                        // active low (IOSB later)
-	input         ipl_autovector,
-
 	// platform memory beat port
 	output reg        mem_req,
 	output reg        mem_write,
@@ -75,14 +72,15 @@ reg  [31:0] walker_data;
 reg         walker_berr;
 
 reg         cpu_berr;
+wire  [2:0] ipl_n;
 
 wombat_cpu cpu (
 	.clk(clk),
 	.nreset(nreset),
 	.ce(ce),
 
-	.ipl(ipl),
-	.ipl_autovector(ipl_autovector),
+	.ipl(ipl_n),
+	.ipl_autovector(1'b1),
 	.berr(cpu_berr),
 
 	.bus_req(bus_req),
@@ -148,12 +146,45 @@ wombat_bus32 bus32 (
 );
 
 //----------------------------------------------------------------------------
+// IOSB — VIA1/VIA2, config regs, ID; the 3-level interrupt encoder
+//----------------------------------------------------------------------------
+reg         iosb_sel;
+reg         iosb_write;
+reg  [27:2] iosb_addr;
+reg   [3:0] iosb_be;
+reg  [31:0] iosb_wdata;
+wire [31:0] iosb_rdata;
+wire        iosb_ack;
+
+iosb iosb (
+	.clk(clk),
+	.nreset(nreset),
+	.ce(ce),
+
+	.sel(iosb_sel),
+	.write(iosb_write),
+	.addr(iosb_addr),
+	.be(iosb_be),
+	.wdata(iosb_wdata),
+	.rdata(iosb_rdata),
+	.ack(iosb_ack),
+
+	.vbl_irq(1'b0),
+	.scsi_irq(1'b0),
+	.scsi_drq(1'b0),
+	.asc_irq(1'b0),
+	.scc_irq(1'b0),
+
+	.ipl_n(ipl_n)
+);
+
+//----------------------------------------------------------------------------
 // Beat service: arbitrate CPU vs table walker, decode, dispatch
 //----------------------------------------------------------------------------
 reg        overlay;
 
 // decode of a beat address; the walker sees the same physical map
-function [2:0] decode;                        // 0 ram,1 rom,2 vram,3 id,4 berr
+function [2:0] decode;                        // 0 ram,1 rom,2 vram,3 iosb,4 berr
 	input [31:2] a;
 	begin
 		if (a[31:28] == 4'h4)              decode = 3'd1;
@@ -161,16 +192,15 @@ function [2:0] decode;                        // 0 ram,1 rom,2 vram,3 id,4 berr
 		else if (a[31:30] == 2'b00)
 			decode = (a[29:2] < (28'd1 << (RAM_ADDR_BITS-2))) ? 3'd0 : 3'd4;
 		else if (a[31:21] == 11'b1111_1001_000) decode = 3'd2;  // $F900xxxx-$F91Fxxxx
-		else if (a[31:16] == 16'h5FFF)     decode = 3'd3;
+		else if (a[31:28] == 4'h5)         decode = 3'd3;
 		else                               decode = 3'd4;
 	end
 endfunction
 
-localparam S_IDLE = 2'd0, S_MEM = 2'd1, S_ACK = 2'd2, S_BERR = 2'd3;
+localparam S_IDLE = 2'd0, S_MEM = 2'd1, S_IOSB = 2'd2, S_BERR = 2'd3;
 reg  [1:0] svc;
 reg        svc_walker;                        // owner of the beat in service
 reg [31:2] svc_addr;
-reg [31:0] id_rdata;
 
 wire        walker_pend = walker_req && walker_armed;
 reg         walker_armed;
@@ -198,7 +228,11 @@ always @(posedge clk) begin
 		mem_be       <= 0;
 		mem_wdata    <= 0;
 		mem_memsel   <= MSEL_RAM;
-		id_rdata     <= 0;
+		iosb_sel     <= 0;
+		iosb_write   <= 0;
+		iosb_addr    <= 0;
+		iosb_be      <= 0;
+		iosb_wdata   <= 0;
 	end
 	else if (ce) begin
 		walker_ack  <= 0;
@@ -234,8 +268,12 @@ always @(posedge clk) begin
 					svc        <= S_MEM;
 				end
 				3'd3: begin
-					id_rdata <= 32'hA55A2BAD;
-					svc      <= S_ACK;
+					iosb_sel   <= 1;
+					iosb_write <= wr;
+					iosb_addr  <= a[27:2];
+					iosb_be    <= walker_pend ? 4'b1111 : b_be;
+					iosb_wdata <= walker_pend ? walker_wdat : b_wdata;
+					svc        <= S_IOSB;
 				end
 				default: svc <= S_BERR;
 				endcase
@@ -253,14 +291,15 @@ always @(posedge clk) begin
 			end
 			svc <= S_IDLE;
 		end
-		S_ACK: begin
+		S_IOSB: if (iosb_ack) begin
+			iosb_sel <= 0;
 			if (svc_walker) begin
 				walker_ack  <= 1;
-				walker_data <= id_rdata;
+				walker_data <= iosb_rdata;
 			end
 			else begin
 				b_ack   <= 1;
-				b_rdata <= id_rdata;
+				b_rdata <= iosb_rdata;
 			end
 			svc <= S_IDLE;
 		end

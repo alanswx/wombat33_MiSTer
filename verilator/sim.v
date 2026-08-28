@@ -130,9 +130,6 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.nreset(~reset),
 	.ce(1'b1),
 
-	.ipl(3'b111),
-	.ipl_autovector(1'b1),
-
 	.mem_req(mem_req),
 	.mem_write(mem_write),
 	.mem_addr(mem_addr),

@@ -41,6 +41,8 @@ V_SRC = \
 	$(RTL)/quadra800.sv \
 	$(RTL)/wombat_cpu.sv \
 	$(RTL)/wombat_bus32.sv \
+	$(RTL)/iosb.sv \
+	$(RTL)/via6522.sv \
 	$(AP)/ap040_core.v \
 	$(AP)/ap040_bus_timeout.v \
 	$(AP)/ap040_regfile.v \

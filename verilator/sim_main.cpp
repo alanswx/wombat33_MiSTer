@@ -65,6 +65,13 @@ const char* cpu_trace_filename = "cpu_trace.log";
 long cpu_trace_count = 0;
 uint32_t cpu_trace_last_pc = 0xFFFFFFFF;
 
+// Cheap long-run observability: heartbeat line + a pc histogram (one
+// bucket per 256 bytes over the whole 4 GB, sampled every clock).
+vluint64_t heartbeat_every = 10000000;
+vluint64_t next_heartbeat = 10000000;
+static uint32_t pc_hist[1 << 24];
+static uint32_t pc_hist_pc(int i) { return (uint32_t)i << 8; }
+
 static uint16_t sim_read_word(uint32_t addr);
 static void cpu_trace_step();
 static void machine_events();
@@ -112,6 +119,14 @@ int verilate() {
 			if (clk_sys.clk && !VERTOPINTERN->reset) {
 				machine_events();
 				if (!cpu_trace_disabled) cpu_trace_step();
+				uint32_t hpc = SIMEMU->__PVT__machine__DOT__cpu__DOT__core__DOT__pc_i;
+				pc_hist[hpc >> 8]++;
+				if (main_time >= next_heartbeat) {
+					next_heartbeat += heartbeat_every;
+					printf("[HB] cycle=%llu pc=%08X instr=%ld\n",
+					       (unsigned long long)main_time, hpc, cpu_trace_count);
+					fflush(stdout);
+				}
 			}
 		}
 
@@ -353,6 +368,15 @@ int main(int argc, char** argv, char** env) {
 		printf("CPU trace: %ld instructions, last pc=%08X (%s)\n",
 		       cpu_trace_count, cpu_trace_last_pc, cpu_trace_filename);
 		fclose(cpu_trace_file);
+	}
+	{
+		std::vector<int> idx;
+		for (int i = 0; i < (1 << 24); i++) if (pc_hist[i]) idx.push_back(i);
+		std::sort(idx.begin(), idx.end(),
+		          [](int a, int b) { return pc_hist[a] > pc_hist[b]; });
+		printf("PC histogram (top 15 of %zu 256-byte buckets):\n", idx.size());
+		for (size_t i = 0; i < idx.size() && i < 15; i++)
+			printf("  %08X: %u cycles\n", pc_hist_pc(idx[i]), pc_hist[idx[i]]);
 	}
 	if (!headless) { video.CleanUp(); input.CleanUp(); }
 	top->final();

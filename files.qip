@@ -7,3 +7,5 @@ set_global_assignment -name QIP_FILE rtl/ap68040/rtl/ap040.qip
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/wombat_cpu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/wombat_bus32.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/quadra800.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/iosb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/via6522.sv
