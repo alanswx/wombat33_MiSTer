@@ -801,6 +801,63 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     sliced writer and `HANDOFF_ADDR=$80000` defaults are exonerated
     and stay.
 
+26. **Full hardware sweep of the new suites — integration, FSAVE/
+    FRESTORE and the live MMU harness — with three fresh silicon
+    adjudications (2026-08-28).** Raw captures in
+    `results/cpu_fpu/hardware_quadra800_2026-08-28.jsonl`,
+    `results/cpu_fpu/hardware_saverestore_2026-08-28.jsonl`,
+    `results/mmu/hardware_full_quadra800_2026-08-28.jsonl`.
+
+    **FSAVE/FRESTORE: 8/8.** State frames, IDLE-frame no-reload and
+    NULL-frame reinit all textbook on silicon (the earlier 7/8 was the
+    finding-25 cache bug).
+
+    **CPU+FPU integration: 1328/1328 ran** — the first machine ever to
+    execute the corpus tail both emulators die on (finding 23).
+    Self-score 1085 pass + 243 fails that decompose exactly:
+    - 176 = FINT/FINTRZ-bearing rows trapping vector 11 — the
+      already-adjudicated 040 behavior (finding 22), not failures.
+    - 51 = **a golden-model bug the silicon exposed**: the FDBcc block
+      in `gen_fpu.c` loads a->FPsrc, b->FPdst (the FBcc blocks do the
+      reverse) so its emitted FCMP computes b−a, but the model
+      evaluated predicates on a−b — every asymmetric predicate's
+      golden inverted. Fixed (eval args swapped); regenerated goldens
+      are deterministic (same seed, program bytes identical, 51
+      expected-values changed) and score **80/80 against the hardware
+      run** — silicon validated the fix directly. Corpus files
+      regenerated deliberately per the corpus policy:
+      `fpu_corpus_baseline.json` (51 values spliced, formatting
+      preserved), `cpu_fpu_full_corpus.json`, `cpu_fpu_tests.h`.
+    - 16 = **FPIAR adjudication**: `FMOVE.L Dn,FPIAR` of `$12345678`
+      reads back `$00005678` on silicon — the 040 keeps only the low
+      16 bits of a data-register FPIAR write in this sequence, against
+      the 68881-model golden (and MAME models no FPIAR at all,
+      finding 22). Recorded as silicon truth; goldens left, rows are
+      the ground-truth record.
+
+    **MMU-full: 24/24 ran on hardware, 0 real diffs — byte-for-byte
+    the same observables as QEMU** (49 comparable flag/data bytes
+    match; the same 7 known-artifact bytes as QEMU's run). That closes
+    all three questions the harness was built to ask:
+    - **ATC (adjudicated against MAME):** the stale-ATC row's second
+      store landed at the OLD physical page (`22222222` at `$1F014`,
+      nothing at `$1E000`) and the edited descriptor stayed unwalked —
+      real silicon holds stale ATC entries exactly like QEMU; MAME's
+      walk-every-access model is wrong.
+    - **MMUSR ground truth:** PTESTR -> `$00058001` (pa|R), PTESTW on
+      a write-protected page -> `$00058005` (pa|W|R) — identical to
+      QEMU, settling MAME's known-incomplete MMUSR.
+    - **S-page semantics:** MOVES with user FC from supervisor mode
+      does NOT fault on a supervisor-only page — silicon, QEMU and the
+      MAME capture all agree (vec 0): the 040's S-bit check keys on
+      the privilege mode, not the function code of the access.
+    Deliberate WP/invalid faults recovered as vec 2 through live
+    translation — the format-$7 fault path works on silicon.
+
+    With this, **every bench in the campaign has now completed on real
+    hardware with results captured**: CPU, FPU, MMU-safe, MMU-full,
+    CPU+FPU integration, FSAVE/FRESTORE.
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local

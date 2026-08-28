@@ -1245,7 +1245,12 @@ static int gen_fcmp_fdbcc(FILE* f, int is_first, int count) {
         const int ci = (int)(r32() % NC);
         const uint8_t cond = conds[ci].code;
         const char*   cname = conds[ci].name;
-        const int cond_true = eval_cond_int(cond, a, b);
+        /* This block loads a->FPsrc, b->FPdst (the FBcc blocks do the
+         * reverse), so the emitted FCMP computes b - a: evaluate the
+         * predicate with the operands swapped. The original a,b order
+         * inverted every asymmetric predicate's golden; adjudicated by
+         * the 2026-08-28 hardware run (80/80 with this fix, finding 26). */
+        const int cond_true = eval_cond_int(cond, b, a);
         const int expected = cond_true ? 99 : 42;
 
         char nm[120];
