@@ -81,6 +81,7 @@ uint32_t cpu_trace_last_pc = 0xFFFFFFFF;
 // bucket per 256 bytes over the whole 4 GB, sampled every clock).
 vluint64_t heartbeat_every = 10000000;
 vluint64_t next_heartbeat = 10000000;
+bool pc_hist_enable = false;    // --hist: per-cycle pc histogram (slows the sim)
 static uint32_t pc_hist[1 << 24];
 static uint32_t pc_hist_pc(int i) { return (uint32_t)i << 8; }
 
@@ -96,10 +97,10 @@ double sc_time_stamp() { return main_time; }
 
 SimClock clk_sys(1);
 SimAudio audio(33000000, false);
-SimBlockDevice blockdevice(console);
 std::string scsi_disk_file;      // --disk <path> mounts on SCSI ID 0
 
 DebugConsole console;
+SimBlockDevice blockdevice(console);
 const char* windowTitle = "wombat33 sim";
 const char* windowTitle_Control = "Simulation control";
 const char* windowTitle_Video = "VGA output";
@@ -139,7 +140,7 @@ int verilate() {
 				machine_events();
 				if (!cpu_trace_disabled && main_time >= trace_after) cpu_trace_step();
 				uint32_t hpc = SIMEMU->__PVT__machine__DOT__cpu__DOT__core__DOT__pc_i;
-				pc_hist[hpc >> 8]++;
+				if (pc_hist_enable) pc_hist[hpc >> 8]++;
 				if (hpc >= stop_pc_lo && hpc <= stop_pc_hi) {
 					printf("[STOP] pc=%08X at cycle %llu\n", hpc,
 					       (unsigned long long)main_time);
@@ -279,6 +280,8 @@ int main(int argc, char** argv, char** env) {
 			sscanf(argv[++i], "%x,%x", &stop_pc_lo, &stop_pc_hi);
 		} else if (!strcmp(argv[i], "--disk") && i + 1 < argc) {
 			scsi_disk_file = argv[++i];
+		} else if (!strcmp(argv[i], "--hist")) {
+			pc_hist_enable = true;
 		} else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) {
 			screenshot_mode = true;
 			std::stringstream ss(argv[++i]);
@@ -397,7 +400,7 @@ int main(int argc, char** argv, char** env) {
 				uint16_t sr  = VERTOPINTERN->debug_sr;
 				auto &ds = SIMEMU->__PVT__machine__DOT__cpu__DOT__core__DOT__regfile__DOT__dreg;
 				auto &as = SIMEMU->__PVT__machine__DOT__cpu__DOT__core__DOT__regfile__DOT__areg;
-				ImGui::Text("Quadra 800 — 68040 @ 33 MHz, 8 MB RAM, 1 MB ROM, 1 MB VRAM");
+				ImGui::Text("Quadra 800 — 68040 @ 33 MHz, 32 MB RAM, 1 MB ROM, 1 MB VRAM");
 				ImGui::Text("640x480, 256 colors max (DAFB II)");
 				ImGui::Text("overlay=%d  cycle=%llu  instr=%ld",
 				            (int)VERTOPINTERN->debug_overlay,

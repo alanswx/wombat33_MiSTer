@@ -167,6 +167,9 @@ initial begin
 	if (!$value$plusargs("rom=%s", rom_file))
 		rom_file = "quadra800.rom.hex";
 	$readmemh(rom_file, rom);
+	// +warmstart: preload the warm-start signature so the ROM skips the
+	// destructive RAM test (iteration aid; cold boot leaves this off)
+	if ($test$plusargs("warmstart")) ram['h33F] = "WLSC";
 end
 
 wire [RAM_ADDR_BITS-3:0] ram_idx  = mem_addr[RAM_ADDR_BITS-1:2];
