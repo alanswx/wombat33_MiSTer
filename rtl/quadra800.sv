@@ -1,0 +1,276 @@
+//============================================================================
+//  quadra800 — the Wombat machine: AP68040 on djMEMC's flat 32-bit bus.
+//
+//  Stage 1 (ROM executes): CPU + boot overlay + address decode.  RAM, ROM
+//  and VRAM live on the platform beat port (BRAM/SDRAM on MiSTer, plain
+//  arrays in the Verilator sim); everything unmapped takes a bus error,
+//  which is what the ROM's probe code expects of empty space.
+//
+//  Physical map (MAME djmemc/iosb/macquadra800 as reference):
+//    $00000000-$3FFFFFFF  RAM (installed size; beyond it: berr).  While the
+//                         reset overlay holds, the low 4 MB reads ROM.
+//    $40000000-$4FFFFFFF  ROM, 1 MB image mirrored; writes ignored; the
+//                         first read here clears the overlay.
+//    $50000000-$5FFFFFFF  IOSB I/O (stage 2+; only the ID reg lives here
+//                         today: $5FFF0000-$5FFFFFFF = $A55A2BAD).
+//    $F9000000-$F91FFFFF  DAFB VRAM (1 MB mirrored across the window).
+//    $F9800000-$F98003FF  DAFB registers (stage 2).
+//
+//  Platform beat port: aligned longwords, be[3] = byte at addr+0 =
+//  wdata[31:24]; req level-held per beat, accept on req && !your-own-ack,
+//  answer with a single-cycle ack (rdata valid with it).  Writes with
+//  memsel=ROM must be discarded but still acked.
+//============================================================================
+
+module quadra800
+#(
+	parameter RAM_ADDR_BITS = 23              // installed RAM: 2^23 = 8 MB
+)
+(
+	input         clk,
+	input         nreset,
+	input         ce,
+
+	input   [2:0] ipl,                        // active low (IOSB later)
+	input         ipl_autovector,
+
+	// platform memory beat port
+	output reg        mem_req,
+	output reg        mem_write,
+	output reg [31:2] mem_addr,
+	output reg  [3:0] mem_be,
+	output reg [31:0] mem_wdata,
+	output reg  [1:0] mem_memsel,             // 0 RAM, 1 ROM, 2 VRAM
+	input      [31:0] mem_rdata,
+	input             mem_ack,
+
+	// debug
+	output            dbg_berr,
+	output     [31:0] dbg_berr_addr,
+	output            dbg_overlay,
+	output [255:0] debug_status,
+	output [127:0] debug_status2,
+	output        debug_fault,
+	output        debug_halted
+);
+
+localparam [1:0] MSEL_RAM  = 2'd0,
+                 MSEL_ROM  = 2'd1,
+                 MSEL_VRAM = 2'd2;
+
+//----------------------------------------------------------------------------
+// CPU bundle and the transaction-to-beat adapter
+//----------------------------------------------------------------------------
+wire        bus_req, bus_write, bus_instr;
+wire  [1:0] bus_size;
+wire [31:0] bus_addr, bus_wdata;
+wire  [2:0] bus_fc;
+wire        bus_ack;
+wire [31:0] bus_rdata;
+
+wire        walker_req, walker_we;
+wire [31:0] walker_addr, walker_wdat;
+reg         walker_ack;
+reg  [31:0] walker_data;
+reg         walker_berr;
+
+reg         cpu_berr;
+
+wombat_cpu cpu (
+	.clk(clk),
+	.nreset(nreset),
+	.ce(ce),
+
+	.ipl(ipl),
+	.ipl_autovector(ipl_autovector),
+	.berr(cpu_berr),
+
+	.bus_req(bus_req),
+	.bus_write(bus_write),
+	.bus_instr(bus_instr),
+	.bus_size(bus_size),
+	.bus_addr(bus_addr),
+	.bus_wdata(bus_wdata),
+	.bus_fc(bus_fc),
+	.bus_ack(bus_ack),
+	.bus_rdata(bus_rdata),
+
+	.walker_req(walker_req),
+	.walker_we(walker_we),
+	.walker_addr(walker_addr),
+	.walker_wdat(walker_wdat),
+	.walker_ack(walker_ack),
+	.walker_data(walker_data),
+	.walker_berr(walker_berr),
+
+	.snoop_stb(1'b0),
+	.snoop_addr(32'd0),
+
+	.nresetout(),
+	.nmi_ack_toggle(),
+	.cacr_out(),
+	.vbr_out(),
+	.debug_busy(),
+	.debug_fault(debug_fault),
+	.debug_halted(debug_halted),
+	.debug_status(debug_status),
+	.debug_status2(debug_status2)
+);
+
+wire        b_req, b_write;
+wire [31:2] b_addr;
+wire  [3:0] b_be;
+wire [31:0] b_wdata;
+reg         b_ack;
+reg  [31:0] b_rdata;
+
+wombat_bus32 bus32 (
+	.clk(clk),
+	.nreset(nreset),
+	.ce(ce),
+
+	.t_req(bus_req),
+	.t_write(bus_write),
+	.t_size(bus_size),
+	.t_addr(bus_addr),
+	.t_wdata(bus_wdata),
+	.t_berr(cpu_berr),
+	.t_ack(bus_ack),
+	.t_rdata(bus_rdata),
+
+	.b_req(b_req),
+	.b_write(b_write),
+	.b_addr(b_addr),
+	.b_be(b_be),
+	.b_wdata(b_wdata),
+	.b_ack(b_ack),
+	.b_rdata(b_rdata)
+);
+
+//----------------------------------------------------------------------------
+// Beat service: arbitrate CPU vs table walker, decode, dispatch
+//----------------------------------------------------------------------------
+reg        overlay;
+
+// decode of a beat address; the walker sees the same physical map
+function [2:0] decode;                        // 0 ram,1 rom,2 vram,3 id,4 berr
+	input [31:2] a;
+	begin
+		if (a[31:28] == 4'h4)              decode = 3'd1;
+		else if (overlay && a[31:22] == 10'd0) decode = 3'd1;
+		else if (a[31:30] == 2'b00)
+			decode = (a[29:2] < (28'd1 << (RAM_ADDR_BITS-2))) ? 3'd0 : 3'd4;
+		else if (a[31:21] == 11'b1111_1001_000) decode = 3'd2;  // $F900xxxx-$F91Fxxxx
+		else if (a[31:16] == 16'h5FFF)     decode = 3'd3;
+		else                               decode = 3'd4;
+	end
+endfunction
+
+localparam S_IDLE = 2'd0, S_MEM = 2'd1, S_ACK = 2'd2, S_BERR = 2'd3;
+reg  [1:0] svc;
+reg        svc_walker;                        // owner of the beat in service
+reg [31:2] svc_addr;
+reg [31:0] id_rdata;
+
+wire        walker_pend = walker_req && walker_armed;
+reg         walker_armed;
+
+assign dbg_berr      = (svc == S_BERR);
+assign dbg_berr_addr = {svc_addr, 2'b00};
+assign dbg_overlay   = overlay;
+
+always @(posedge clk) begin
+	if (!nreset) begin
+		overlay      <= 1;
+		svc          <= S_IDLE;
+		svc_walker   <= 0;
+		svc_addr     <= 0;
+		walker_armed <= 1;
+		walker_ack   <= 0;
+		walker_data  <= 0;
+		walker_berr  <= 0;
+		b_ack        <= 0;
+		b_rdata      <= 0;
+		cpu_berr     <= 0;
+		mem_req      <= 0;
+		mem_write    <= 0;
+		mem_addr     <= 0;
+		mem_be       <= 0;
+		mem_wdata    <= 0;
+		mem_memsel   <= MSEL_RAM;
+		id_rdata     <= 0;
+	end
+	else if (ce) begin
+		walker_ack  <= 0;
+		walker_berr <= 0;
+		b_ack       <= 0;
+		cpu_berr    <= 0;
+		if (!walker_req) walker_armed <= 1;
+
+		case (svc)
+		S_IDLE: begin
+			// walker first: it only runs mid-translation, never starves the
+			// CPU.  !b_ack/!cpu_berr: the adapter needs a cycle to retire a
+			// just-completed or just-faulted beat before b_req means "next".
+			if (walker_pend || (b_req && !b_ack && !cpu_berr)) begin
+				reg [31:2] a;
+				reg        wr;
+				a  = walker_pend ? walker_addr[31:2] : b_addr;
+				wr = walker_pend ? walker_we : b_write;
+				svc_walker <= walker_pend;
+				if (walker_pend) walker_armed <= 0;
+				svc_addr   <= a;
+				// the ROM's own window read ends the boot overlay
+				if (a[31:28] == 4'h4 && !wr) overlay <= 0;
+				case (decode(a))
+				3'd0, 3'd1, 3'd2: begin
+					mem_req    <= 1;
+					mem_write  <= wr;
+					mem_addr   <= a;
+					mem_be     <= walker_pend ? 4'b1111 : b_be;
+					mem_wdata  <= walker_pend ? walker_wdat : b_wdata;
+					mem_memsel <= decode(a) == 3'd0 ? MSEL_RAM :
+					              decode(a) == 3'd1 ? MSEL_ROM : MSEL_VRAM;
+					svc        <= S_MEM;
+				end
+				3'd3: begin
+					id_rdata <= 32'hA55A2BAD;
+					svc      <= S_ACK;
+				end
+				default: svc <= S_BERR;
+				endcase
+			end
+		end
+		S_MEM: if (mem_ack) begin
+			mem_req <= 0;
+			if (svc_walker) begin
+				walker_ack  <= 1;
+				walker_data <= mem_rdata;
+			end
+			else begin
+				b_ack   <= 1;
+				b_rdata <= mem_rdata;
+			end
+			svc <= S_IDLE;
+		end
+		S_ACK: begin
+			if (svc_walker) begin
+				walker_ack  <= 1;
+				walker_data <= id_rdata;
+			end
+			else begin
+				b_ack   <= 1;
+				b_rdata <= id_rdata;
+			end
+			svc <= S_IDLE;
+		end
+		S_BERR: begin
+			if (svc_walker) walker_berr <= 1;
+			else            cpu_berr    <= 1;
+			svc <= S_IDLE;
+		end
+		endcase
+	end
+end
+
+endmodule

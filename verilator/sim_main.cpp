@@ -26,6 +26,7 @@
 #include "sim_video.h"
 #include "sim_input.h"
 #include "sim_clock.h"
+#include "m68k_dasm.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "sim/stb_image_write.h"
@@ -53,6 +54,20 @@ bool headless = false;
 bool screenshot_mode = false;
 std::vector<int> screenshot_frames;
 int  stop_at_frame = -1;
+vluint64_t max_cycles = 0;      // --max-cycles N: stop after N clk edges (0 = off)
+
+// CPU instruction trace (MacLC cpu_trace pattern, adapted to AP68040's
+// pc_i register: one entry per instruction dispatch, extension words read
+// straight from the sim memory arrays)
+bool cpu_trace_disabled = false;      // --no-cpu-trace
+FILE* cpu_trace_file = nullptr;
+const char* cpu_trace_filename = "cpu_trace.log";
+long cpu_trace_count = 0;
+uint32_t cpu_trace_last_pc = 0xFFFFFFFF;
+
+static uint16_t sim_read_word(uint32_t addr);
+static void cpu_trace_step();
+static void machine_events();
 
 // Verilog module
 // --------------
@@ -94,6 +109,10 @@ int verilate() {
 		if (clk_sys.clk != clk_sys.old) {
 			if (clk_sys.clk) input.BeforeEval();
 			top->eval();
+			if (clk_sys.clk && !VERTOPINTERN->reset) {
+				machine_events();
+				if (!cpu_trace_disabled) cpu_trace_step();
+			}
 		}
 
 		if (clk_sys.IsRising() && VERTOPINTERN->CE_PIXEL) {
@@ -111,10 +130,90 @@ int verilate() {
 	return 0;
 }
 
+// sim.v keeps its own module class (the public arrays force it), so its
+// internals live under rootp->emu rather than flattened into root.
+#define SIMEMU (top->rootp->emu)
+
+// Physical-address word read mirroring the quadra800 decode.  Valid while
+// the CPU runs untranslated (all of ROM startup); once the MMU is on,
+// pc_i is logical and entries for non-identity mappings would misread.
+static uint16_t sim_read_word(uint32_t addr) {
+	uint32_t word;
+	bool overlay = VERTOPINTERN->debug_overlay;
+	if ((addr >> 28) == 4 || (overlay && addr < 0x400000))
+		word = SIMEMU->rom[(addr & 0xFFFFF) >> 2];
+	else if (addr < 0x800000)
+		word = SIMEMU->ram[addr >> 2];
+	else if (addr >= 0xF9000000 && addr < 0xF9200000)
+		word = SIMEMU->vram[(addr & 0xFFFFF) >> 2];
+	else
+		return 0;
+	return (addr & 2) ? (uint16_t)word : (uint16_t)(word >> 16);
+}
+
+// One trace line per instruction dispatch: pc_i changed inside the core.
+static void cpu_trace_step() {
+	uint32_t pc = SIMEMU->__PVT__machine__DOT__cpu__DOT__core__DOT__pc_i;
+	if (pc == cpu_trace_last_pc) return;
+	cpu_trace_last_pc = pc;
+
+	unsigned short opwords[5];
+	for (int k = 0; k < 5; k++) opwords[k] = sim_read_word(pc + 2*k);
+	unsigned int len = 2;
+	const char* disasm = disassemble_68k_ext_len(pc, opwords, 5, &len);
+	cpu_trace_count++;
+	if (cpu_trace_file)
+		fprintf(cpu_trace_file, "%08X: %04X  %s\n", pc, opwords[0], disasm);
+}
+
+// Bus errors (coalesced per address), overlay switch, core fault/halt.
+static void machine_events() {
+	static int last_overlay = -1;
+	static uint32_t berr_addr = 0xFFFFFFFF;
+	static long berr_repeat = 0;
+	static int last_fault = 0, last_halted = 0;
+
+	int ov = VERTOPINTERN->debug_overlay;
+	if (ov != last_overlay) {
+		if (last_overlay != -1 || !ov)
+			printf("[MACHINE] overlay %s at cycle %llu\n", ov ? "set" : "cleared",
+			       (unsigned long long)main_time);
+		last_overlay = ov;
+	}
+
+	if (VERTOPINTERN->debug_berr) {
+		uint32_t addr = VERTOPINTERN->debug_data_addr;
+		if (addr == berr_addr) {
+			berr_repeat++;
+		} else {
+			if (berr_repeat > 1)
+				printf("[BERR] %08X repeated x%ld\n", berr_addr, berr_repeat);
+			printf("[BERR] addr=%08X pc=%08X cycle=%llu\n", addr,
+			       (unsigned)VERTOPINTERN->debug_pc, (unsigned long long)main_time);
+			if (cpu_trace_file)
+				fprintf(cpu_trace_file, "[BERR] addr=%08X\n", addr);
+			berr_addr = addr;
+			berr_repeat = 1;
+		}
+	}
+
+	int fault = VERTOPINTERN->debug_cpu_fault;
+	int halted = VERTOPINTERN->debug_cpu_halted;
+	if ((fault && !last_fault) || (halted && !last_halted))
+		printf("[MACHINE] %s at cycle %llu pc=%08X\n",
+		       halted ? "CPU HALTED (double fault)" : "fault",
+		       (unsigned long long)main_time, (unsigned)VERTOPINTERN->debug_pc);
+	last_fault = fault; last_halted = halted;
+}
+
 int main(int argc, char** argv, char** env) {
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--headless") || !strcmp(argv[i], "--no-gui")) {
 			headless = true;
+		} else if (!strcmp(argv[i], "--no-cpu-trace")) {
+			cpu_trace_disabled = true;
+		} else if (!strcmp(argv[i], "--max-cycles") && i + 1 < argc) {
+			max_cycles = strtoull(argv[++i], nullptr, 0);
 		} else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) {
 			screenshot_mode = true;
 			std::stringstream ss(argv[++i]);
@@ -123,9 +222,15 @@ int main(int argc, char** argv, char** env) {
 		} else if (!strcmp(argv[i], "--stop-at-frame") && i + 1 < argc) {
 			stop_at_frame = std::stoi(argv[++i]);
 		} else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-			printf("wombat33 sim: [--headless] [--screenshot F1,F2,..] [--stop-at-frame N]\n");
+			printf("wombat33 sim: [--headless] [--screenshot F1,F2,..] [--stop-at-frame N]\n"
+			       "              [--no-cpu-trace] [--max-cycles N] [+rom=<hexfile>]\n");
 			return 0;
 		}
+	}
+
+	if (!cpu_trace_disabled) {
+		cpu_trace_file = fopen(cpu_trace_filename, "w");
+		if (!cpu_trace_file) { cpu_trace_disabled = true; }
 	}
 
 	top = new Vemu();
@@ -228,6 +333,10 @@ int main(int argc, char** argv, char** env) {
 			printf("Reached frame %d, exiting\n", stop_at_frame);
 			break;
 		}
+		if (max_cycles && main_time >= max_cycles) {
+			printf("Reached %llu cycles, exiting\n", (unsigned long long)main_time);
+			break;
+		}
 
 		if (run_enable)
 			for (int step = 0; step < batchSize; step++) verilate();
@@ -240,6 +349,11 @@ int main(int argc, char** argv, char** env) {
 		if (headless && Verilated::gotFinish()) done = true;
 	}
 
+	if (cpu_trace_file) {
+		printf("CPU trace: %ld instructions, last pc=%08X (%s)\n",
+		       cpu_trace_count, cpu_trace_last_pc, cpu_trace_filename);
+		fclose(cpu_trace_file);
+	}
 	if (!headless) { video.CleanUp(); input.CleanUp(); }
 	top->final();
 	delete top;

@@ -4,7 +4,8 @@ V = verilator
 
 TOP = --top-module emu
 RTL = ../rtl
-V_INC = +incdir+$(RTL)
+AP  = ../rtl/ap68040/rtl
+V_INC = +incdir+$(RTL) +incdir+$(AP) -I$(AP)
 
 V_DEFINE = +define+SIMULATION=1 \
 	-CFLAGS "-I../sim/imgui -I../sim/ -g" \
@@ -29,14 +30,26 @@ LDFLAGS = $(LIBS)
 EXE = ./obj_dir/Vemu
 V_OPT = --x-assign fast --x-initial fast --noassert
 
-# Core RTL under simulation (the template pattern core today; the
-# AP68040 machine's files join this list as bring-up proceeds — the CPU
-# itself comes from ../rtl/ap68040/rtl).
+# Core RTL under simulation: the quadra800 machine (AP68040 submodule +
+# wombat glue) plus the template pattern core, which still paces frames
+# and paints the VGA window until DAFB lands.
 V_SRC = \
 	sim.v \
 	$(RTL)/mycore.v \
 	$(RTL)/cos.sv \
-	sim_lfsr.v
+	sim_lfsr.v \
+	$(RTL)/quadra800.sv \
+	$(RTL)/wombat_cpu.sv \
+	$(RTL)/wombat_bus32.sv \
+	$(AP)/ap040_core.v \
+	$(AP)/ap040_bus_timeout.v \
+	$(AP)/ap040_regfile.v \
+	$(AP)/ap040_alu.v \
+	$(AP)/ap040_muldiv.v \
+	$(AP)/ap040_mmu.v \
+	$(AP)/ap040_cache.v \
+	$(AP)/ap040_fpu.v \
+	$(AP)/primitives/dpram.v
 
 C_SRC = \
 	sim_main.cpp \
@@ -49,7 +62,11 @@ C_SRC = \
 
 VOUT = obj_dir/Vemu.cpp
 
-all: $(EXE)
+all: $(EXE) quadra800.rom.hex
+
+# ROM image as $readmemh words (big-endian: file order = byte order)
+quadra800.rom.hex: ../releases/quadra800.rom
+	xxd -p -c4 $< > $@
 
 $(VOUT): $(V_SRC) $(C_SRC) Makefile
 	$V -cc $(V_OPT) -LDFLAGS "$(LDFLAGS)" -exe --trace --Mdir ./obj_dir \

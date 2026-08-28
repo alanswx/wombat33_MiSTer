@@ -60,12 +60,14 @@ if [[ "$SIM" == verilator ]]; then
     "$VERILATOR" --binary --timing -j 8 -Wno-fatal --top-module tb_corpus \
         -Mdir "$WORK/obj_$SUITE" -I"$RTL" tb_corpus.v $SRC \
         > "$WORK/verilate_$SUITE.log" 2>&1 || { tail -20 "$WORK/verilate_$SUITE.log"; exit 1; }
-    "$WORK/obj_$SUITE/Vtb_corpus" +prog="$WORK/$SUITE.hex" \
-        +results="$WORK/results_$SUITE.bin" | tee "$WORK/run_$SUITE.log"
+    stdbuf -oL "$WORK/obj_$SUITE/Vtb_corpus" +prog="$WORK/$SUITE.hex" \
+        +results="$WORK/results_$SUITE.bin" \
+        ${MAXCYCLES:+"+maxcycles=$MAXCYCLES"} | tee "$WORK/run_$SUITE.log"
 else
     "$IVERILOG" -g2012 -I "$RTL" -o "$WORK/tb_corpus.vvp" tb_corpus.v $SRC
-    "$VVP" "$WORK/tb_corpus.vvp" +prog="$WORK/$SUITE.hex" \
-           +results="$WORK/results_$SUITE.bin" | tee "$WORK/run_$SUITE.log"
+    stdbuf -oL "$VVP" "$WORK/tb_corpus.vvp" +prog="$WORK/$SUITE.hex" \
+           +results="$WORK/results_$SUITE.bin" \
+           ${MAXCYCLES:+"+maxcycles=$MAXCYCLES"} | tee "$WORK/run_$SUITE.log"
 fi
 grep -q "CORPUS DONE" "$WORK/run_$SUITE.log" || { echo "simulation did not finish"; exit 1; }
 
