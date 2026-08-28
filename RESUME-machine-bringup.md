@@ -4,145 +4,106 @@ Paste this whole file as the opening message of a new session.
 
 ---
 
-## Where the project stands (2026-08-28, end of the oracle+CPU campaign)
+## Where the project stands (2026-08-28, end of the first machine-RTL day)
 
-The **CPU question is settled**: AP68040 (`rtl/ap68040` submodule,
-github.com/apolkosnik/AP68040 @ 3fed526, GPL-3) scores **0 REAL diffs
-against the real Quadra 800 on every suite** — saverestore 8/8, fpu
-270/270 (traps exactly where 040-lite silicon traps), integration
-1328/1328 (including the emulator-fatal FDBcc tail and the FPIAR
-low-16 quirk), mmu 24/24 with live translation (stale-ATC retention,
-MMUSR flag ground truth, vec-2 fault recovery). Findings 26–30 in
-`SingleStepTests/test-blockers.md` carry the whole trail; RTL results
-in `SingleStepTests/results/ap68040/`. The full 722-row cpu corpus run
-was in flight at hand-off — check
-`SingleStepTests/preboot/sim040/build/run_cpu.log` /
-`results_cpu.jsonl`, or just rerun:
-`cd SingleStepTests/preboot/sim040 && SIM=verilator ./run_corpus.sh cpu`
-(its 10-row smoke was already 0 REAL).
+The **machine exists and executes the ROM**. `rtl/` now holds the full
+first-cut Quadra 800: `wombat_cpu.sv` (AP68040 core+MMU+cache on its
+native 32-bit post-cache bus — the 16-bit tg68k shim is NOT used),
+`wombat_bus32.sv` (transaction→aligned-beat splitter, big-endian byte
+lanes), `quadra800.sv` (boot overlay, decode, walker/CPU arbiter, VGA +
+block-device + audio + ps2 surfaces), `iosb.sv` (VIA1 with machine ID
+$12, quadra pseudo-VIA, IOSB + djMEMC config regs, Turbo SCSI PDMA, ID
+$A55A2BAD, 3-level IPL), `dafb.sv` (640x480 fixed scanout, 1/2/4/8bpp —
+**the core's display ceiling is 640x480@256 colors by user decision**),
+`rtc3430042.sv`, `asc_wavetable.sv` (boot chime audio), `ncr53c96.sv`
+(SCSI + integrated disk target on the MiSTer sd/img interface, ID 0),
+`adb.sv` + the lbmactwo via6522 (keyboard/mouse over the ADB modem).
+All are in files.qip; wombat33.sv (the Quartus top) still carries the
+template — stage 4 wires it.
 
-In place and committed:
-- **MiSTer core scaffold** from Template_MiSTer: `wombat33.sv` (emu),
-  `sys/`, `files.qip` (already pulls `rtl/ap68040/rtl/ap040.qip`),
-  qsf/qpf/sdc, GPL-3.
-- **GUI Verilator sim** at `/verilator` — the MacLC-style ImGui+SDL2
-  framework (`make && ./obj_dir/Vemu`; `--headless --screenshot N
-  --stop-at-frame M` for scripted runs). `sim.v` is the simulation
-  `emu`; today it wraps the template pattern core and stubs
-  `debug_pc/opcode/...` taps for the machine.
-- **Batch corpus harness** at `SingleStepTests/preboot/sim040` (flat-RAM
-  TB + `SIM=verilator ./run_corpus.sh <suite>`), scored by
-  `gen/score_vs_oracle.py` — THE pass/fail contract vs the silicon
-  captures (`results/*2026-08-28*`).
-- **Boot media**: `preboot/supervisor_bench/dist/quadra800-allinone.hda`
-  (silicon-validated all-suite chain disk, expected boot `C = 862D7F48`)
-  + per-suite disks; `releases/quadra800.rom` (1 MB, the f1a6f343 image
-  everything has run on — if untracked, the user commits it:
-  `git add -f releases/quadra800.rom`).
+Boot progress on the Verilator sim (32 MB RAM config): overlay clears at
+13k cycles, machine ID matches, RTC bit-bang runs, boot chime plays
+(audible — Audio window), the REAL RAM test runs ~100-450M cycles, SCC
+init, NuBus slot probes (clean caught berrs at $FnFFFFFC descending).
+Last verified milestone before hand-off: a full-length run
+(`--max-cycles 4200000000`, screenshots armed) was in flight — check
+`scratchpad/boot_full.log` / `verilator/screenshot_f*.png`. The gray
+desktop has NOT yet been observed; the run before it (pre-ADB binary)
+double-faulted at boot-stack setup only when RAM was 8 MB (fixed by
+32 MB — see the hard rules below).
 
-## THE TASK: machine bring-up
+**Two hard-won machine rules (do not relearn):**
+- **RAM space never bus-errors.** djMEMC acks its whole DRAM window;
+  probes beyond installed RAM read open-bus zeros. A berr there sends
+  the ROM to its critical-error path ($4084A60C → death chime → SCC
+  serial monitor at $408B9886 polling RR0 forever). QEMU never executes
+  $408B98xx on a good boot.
+- **Linear RAM must be ≥32 MB** (bank-conf probes land at $01000000+;
+  8 MB linear ⇒ MemTop 0 ⇒ double fault). Target configs: 32 and 48 MB.
+  Real 8 MB needs bank-conf-driven decode (hardware-core work, later).
 
-Wire AP68040 + the Quadra 800 hardware into the `emu` top and the GUI
-sim. **The acceptance test is already built**: this machine must boot
-`quadra800-allinone.hda` from its own SCSI and produce a
-`/Results.jsonl` that `score_vs_oracle.py` passes against the silicon
-captures — the entire oracle campaign becomes the machine's test suite,
-long before a System 7 boot is attempted.
+**Ground truth technique:** QEMU q800 with device traces
+(`--trace 'djmemc_*' --trace 'iosb_*' --trace 'macfb_*'`) is the boot
+oracle — its device set is the proven minimum and it DISAGREES with MAME
+(djMEMC regs at $5000E000 with readback, IOSB_CONFIG resets to 1, DAFB
+VBL status sets regardless of mask, SCC read base $C020). QEMU -m 32
+boots this ROM to gray desktop + flashing floppy at 640x480
+(`scratchpad/q32.png` was the reference shot).
 
-### The machine (read `MacQuadra800_HardwareConfig.md` first — it is the map)
+## THE TASK (unchanged): the acceptance gate
 
-Quadra 800 = 68040 @ 33 MHz on a flat 32-bit bus + TWO ASICs:
-- **djMEMC** — memory controller + **DAFB II** video (ScrnBase
-  `$F9001000`, boots 640×480@8bpp; the benches REQUIRE that mode).
-- **IOSB** — everything else: VIA1 + pseudo-VIA, **NCR 53C96** SCSI
-  (not the 5380!), SCC, SWIM II floppy, ASC audio, **Cuda** ADB.
-- SONIC Ethernet (skip), NuBus (skip initially).
-- ROM 1 MB at `$40800000` with reset overlay at 0; RAM from 0.
+Boot `preboot/supervisor_bench/dist/quadra800-allinone.hda` (run on a
+COPY — bench disks are single-use) from the machine's own SCSI via
+`--disk <copy>`, watch the boot block's `A/D/E/C/3` rows paint with
+`C = 862D7F48`, let the suites chain, extract `/Results.jsonl`, score
+with `gen/score_vs_oracle.py` against the silicon captures. The 53C96
+model is UNTESTED against the ROM — expect an iteration loop (trace →
+fix chip model → rerun). Known-shaky spots are flagged in ncr53c96.sv:
+non-DMA data transfers are minimal, PDMA byte order unverified
+(MAME's dma16_swap suggests the driver may expect swapped 16-bit reads),
+SELECT-with-DMA-CDB unimplemented.
 
-References, in authority order: the real captures; MAME
-`src/mame/apple/{macquadra800,djmemc,iosb,dafb,cuda}.cpp` (~/repos/mame);
-QEMU `hw/m68k/q800.c` (~/nextstep-test/qemu-src); the ROM disassembly
-notes already in `verilator/sim/` (`quadra800-rom-notes.md`,
-`quadra800-rom-disassembly.asm`, `quadra800-scsi-driver-disassembly.asm`,
-`quadra800-developer-notes.md`, DAFB/boot behavior in
-`docs/` + `QUADRA800_TESTBENCH.md`).
-
-Reuse inventory (adapt, don't fork blindly): `~/repos/MacLC_MiSTer/rtl`
-has `via6522.sv`, `scc.v`, `asc.sv`, `adb.sv`, `ps2_kbd/mouse`,
-`cuda_maclc.sv` (check Cuda vs Egret fit), swim/floppy;
-`~/repos/lbmactwo_MiSTer` the Mac II lineage. NOT reusable as-is: their
-`ncr5380` (Quadra needs 53C96), V8/VASP video (Quadra is DAFB), 16-bit
-bus glue (Quadra is flat 32-bit — consider AP68040's native port rather
-than the tg68k_compat 16-bit shim; the compat top's `busstate` bus is
-what the sim TBs speak today, but djMEMC deserves the 32-bit path —
-decide early, it shapes everything).
-
-### Staged plan (testbench-first, milestone per stage)
-
-1. **ROM executes**: sim.v `emu` = AP68040 + RAM + ROM (ioctl download
-   of `quadra800.rom`, reset overlay) — no devices. Milestone: ROM
-   start-up code runs to its first device probe; instruction trace via
-   the debug taps + `sim/m68kdasm.c` (the MacLC cpu_trace pattern).
-2. **DAFB enough to see**: framebuffer window in the GUI sim (the
-   gray screen / Sad Mac / happy Mac ARE the milestones — the ROM
-   paints diagnostics before any OS). VIA1/pseudo-VIA timers +
-   interrupts as the ROM demands them; Cuda handshake enough for the
-   boot to proceed (MAME `cuda.cpp` is the protocol reference).
-3. **SCSI 53C96 + sim_blkdevice**: mount `quadra800-allinone.hda` via
-   the framework's block device (`sim_blkdevice.cpp`, ported from
-   MacLC's SCSI wiring). Milestone: the boot block's `A/D/E/C/3` rows
-   paint, `C = 862D7F48`, then the suites chain — extract
-   `/Results.jsonl` from the image and score every suite. **This is
-   the machine's pass/fail gate.**
-4. Keyboard/mouse via Cuda ADB, ASC audio, System 7.x boot, then the
-   Quartus build for real MiSTer hardware.
-
-## Know-how (do not relearn)
-
-- **Scoring**: `python3 SingleStepTests/gen/score_vs_oracle.py <suite>
-  <silicon capture> <run.jsonl>` — exit 0 = match modulo classified
-  classes (layout/reloc/env/frame/golden/fp-policy/fpiar/ccr/aexc,
-  all documented in the tool). All-in-one results split with
-  `gen/split_allinone_results.py` + the .hda's manifest; boot checksum
-  via `gen/boot_cksum.py`.
-- **Verilator**: 5.028 in `~/.local/bin` (built from source, with
-  iverilog 12 + vasm). Gotchas already paid for: verilator skips
-  writing identical outputs (the /verilator Makefile touches VOUT and
-  evicts stale user objects — keep that); Verilog unsized literals are
-  32-bit (`64'd...` for big constants); `--timing` is on for the GUI
-  sim (sim_lfsr.v models the template's free-running lcell ring).
-- **sim040 TB facts**: corpus rows that write TC **enable translation**
-  — any bare-RTL environment needs the identity world
-  (`SIM_MMU_WORLD`, 8K-page tables at RAM top) exactly because the
-  Quadra ROM hands off with valid tables (finding 22/30). The cpu
-  suite needs a >2G cycle guard (heavy per-row JSON).
-- **Emulator debug kit**: QEMU git-master q800 (`-d int -D log` + QMP
-  screendump) — the ROM's Sad Mac painter is the `$A05D/408023xx`
-  cluster, the real fault is just before it; MAME `macqd800` for
-  side-by-side ROM behavior. ROM also in MAME's `roms/macqd800.zip`
-  (`f1a6f343.rom`).
-- **Campaign rules that still bind**: cache ops in bench code only via
-  `_HwPriv` sel 1 on Mac / raw CPUSHA on bare-metal (`AMIGA_BENCH`);
-  corpus files change only with a stated reason; one-line code
-  comments, rationale to test-blockers.md; commit to `main`, never
-  push; emulator-validate anything user-facing before handing it over.
-- The bench disks' on-screen contract (per-suite DONE screens, the
-  boot `A/D/E/C/3` rows) is documented in
-  `preboot/supervisor_bench/dist/README.md` — the GUI sim's screen
-  should reproduce it verbatim when the machine is right.
-
-## Quick commands
+## Verilator sim quick reference
 
 ```sh
-# GUI sim (template core today; the machine as it grows):
-cd verilator && make && ./obj_dir/Vemu           # or --headless --screenshot N
-# CPU-vs-silicon regression (any suite, ~minutes under verilator):
-cd SingleStepTests/preboot/sim040 && SIM=verilator ./run_corpus.sh integration
-# AP68040's own self-tests (iverilog + vasm):
-cd rtl/ap68040/tb && PATH=$HOME/.local/bin:$PATH ./run_tests.sh
-# QEMU reference boot of the acceptance disk:
-~/nextstep-test/qemu-src/build/qemu-system-m68k -M q800 -m 128 \
-  -bios releases/quadra800.rom -display none \
-  -drive file=<copy of dist/quadra800-allinone.hda>,format=raw,media=disk,if=none,id=hd0 \
-  -device scsi-hd,drive=hd0,scsi-id=0
+cd verilator && make            # needs PATH=$HOME/.local/bin for verilator 5.028
+./obj_dir/Vemu                  # GUI: Machine panel, Debug log, Audio, VGA
+./obj_dir/Vemu --headless --no-cpu-trace --max-cycles N \
+    [--screenshot F1,F2] [--stop-at-pc lo,hi] [--trace-after N] [--hist] \
+    [--disk path.hda] [+warmstart] [+rom=file.hex]
 ```
+- cpu_trace.log is written headless only (a GUI run once filled the
+  disk); `--trace-after` + `--stop-at-pc` carve windows out of long
+  boots; heartbeat prints pc/a3/d7 every 10M cycles.
+- The per-instruction trace reads the core's `pc_i` via
+  `rootp->emu->__PVT__machine__DOT__cpu__DOT__core__DOT__pc_i`;
+  memories are `rootp->emu->ram/rom/vram` (verilator public).
+- `+warmstart` preloads 'WLSC' at $CFC but does NOT yet skip the RAM
+  test (the ROM checks more — second copy lives at MemTop-4).
+- Cycle counts in --max-cycles/heartbeats are HALF-cycles (2 per clk).
+
+## Open items, in order
+
+1. **Gray screen**: finish the full-length boot run on the current
+   binary; iterate whatever blocks after the slot scan (candidates: ADB
+   init handshake, SWIM2 probe, SCC — all currently inert-or-new).
+2. **SCSI gate**: --disk boot of the all-in-one copy (see above).
+3. **Finding 31 (test-blockers.md): full cpu corpus hangs at results-row
+   408**, state-dependent (405-420 slice alone passes; 0..430
+   reproduction was in flight — check
+   `preboot/sim040/build/run_cpu.log`). Once reproduced, bisect the
+   prefix, then trace the hang (tb_corpus dbg_pc heartbeats name it).
+   Other suites remain 0 REAL vs silicon.
+4. ADB liveness: keyboard/mouse events into the booted machine (adb.sv
+   is wired but untested; the GUI already feeds ps2_key/ps2_mouse).
+5. Stage 4: wombat33.sv Quartus top — replace the template with
+   quadra800 + framework glue (hps_io ioctl ROM download, sd/img block
+   device, SDRAM/DDR for RAM+VRAM, ce pacing at 33 MHz).
+
+## Campaign rules that still bind
+
+Commit to `main`, never push; one-line code comments, rationale to
+test-blockers.md; corpus files change only with a stated reason;
+emulator-validate anything user-facing; bench disks: work on copies;
+clean up big sim logs as you go (the disk sits near-full).
+`gen/score_vs_oracle.py` remains THE pass/fail contract.
