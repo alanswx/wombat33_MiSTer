@@ -112,7 +112,9 @@ assign drq = xfer_dma && (tstate == T_XFER) &&
 
 wire [7:0] sbuf_byte = sbuf_pos[0] ? sbuf[sbuf_pos[9:1]][7:0]
                                    : sbuf[sbuf_pos[9:1]][15:8];
-assign dma_rdata = sbuf_byte;
+// the byte rides with dma_valid: sbuf_pos advances on the same edge
+reg [7:0] dma_rlatch;
+assign dma_rdata = dma_rlatch;
 
 // register reads (side-effect-free except FIFO/istatus handled in the block)
 assign rdata = (rs == 4'h0) ? tcounter[7:0]  :
@@ -169,7 +171,7 @@ always @(posedge clk) begin
 		istatus <= 0; seq_step <= 0; dest_id <= 0;
 		conf1 <= 0; conf2 <= 0; conf3 <= 0; clkconv <= 0;
 		timeout_r <= 0; syncp <= 0; synco <= 0; testr <= 0;
-		irq <= 0; dma_valid <= 0;
+		irq <= 0; dma_valid <= 0; dma_rlatch <= 0;
 		mounted <= 0; disk_blocks <= 0;
 		io_lba <= 0; io_rd <= 0; io_wr <= 0;
 		tstate <= T_IDLE; xfer_dma <= 0;
@@ -202,6 +204,7 @@ always @(posedge clk) begin
 		//------------------------------------------------------------ DMA moves
 		if (drq && dma_rd && data_dir_in && !dma_valid) begin
 			dma_valid <= 1;
+			dma_rlatch <= sbuf_byte;
 			sbuf_pos <= sbuf_pos + 1'b1;
 			tcounter <= tcounter - 1'b1;
 			if (tcounter == 17'd1) tc_zero <= 1;

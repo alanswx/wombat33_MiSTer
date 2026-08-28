@@ -1058,6 +1058,21 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     - iverilog ~50k cycles/s vs Verilator --binary ~800k on this
       design; corpus-scale runs are Verilator territory.
 
+31. **The full 722-row cpu corpus HANGS at results-row 408 — state-
+    dependent, still open (2026-08-28).** Two full runs (2.5G-cycle
+    default guard and a raised 6.5G guard via the new `MAXCYCLES`
+    passthrough in run_corpus.sh) both stopped at exactly 407 emitted
+    rows with the 408th row's JSON cut off at `{"` — 4 billion extra
+    cycles bought zero additional rows, so this is a hard hang, not
+    slowness (the hand-off note "needs a >2G cycle guard" was wrong).
+    Last complete row: `ANDI.W #0x1234,(A6)`. A fresh slice around the
+    suspect indices (`CDEFS="-DFIRST_TEST_INDEX=405 -DLAST_TEST_INDEX=420"`)
+    completes in 9.5M cycles, so the hang needs the accumulated state of
+    the ~400-row prefix; a 0..430 reproduction run is the next step.
+    The 10-row smoke and every other suite (fpu/saverestore/integration/
+    mmu) remain 0 REAL, so this does not retract finding 30's scores —
+    it does block calling the cpu suite RTL-complete.
+
 
 ### Offline verification harness (new)
 
