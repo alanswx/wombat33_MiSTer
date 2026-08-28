@@ -53,7 +53,11 @@ module iosb
 	input   [7:0] sd_buff_addr,
 	input  [15:0] sd_buff_dout,
 	output [15:0] sd_buff_din,
-	input         sd_buff_wr
+	input         sd_buff_wr,
+
+	// ADB input devices
+	input  [10:0] ps2_key,
+	input  [24:0] ps2_mouse
 );
 
 //----------------------------------------------------------------------------
@@ -112,10 +116,16 @@ rtc3430042 rtc (
 	.data_oe(rtc_doe)
 );
 
+wire       via1_sr_active;
+reg        via1_sr_ext_complete, via1_sr_ext_load;
+reg  [7:0] via1_sr_ext_data;
+wire       adb_int_n;
+
 via6522 via1 (
 	.clock     (clk),
 	.rising    (e_rising),
 	.falling   (e_falling),
+	.timer_tick(e_falling),        // T1/T2 count at the 783 kHz E rate
 	.reset     (!nreset),
 
 	.addr      (via1_addr),
@@ -131,7 +141,7 @@ via6522 via1 (
 	.port_a_i  (8'h12),
 	.port_b_o  (via1_pbo),
 	.port_b_t  (via1_pbt),
-	.port_b_i  ({4'b0000, 1'b1, 2'b00, rtc_line}),  // bit3: no ADB int
+	.port_b_i  ({4'b0000, adb_int_n, 2'b00, rtc_line}),
 
 	.ca1_i     (tick_60hz),
 	.ca2_o     (),
@@ -143,17 +153,176 @@ via6522 via1 (
 	.cb2_o     (),
 	.cb2_i     (1'b0),
 	.cb2_t     (),
+	.ca2_lvl_i (1'b0),
+	.cb2_lvl_i (1'b0),
 
 	.irq       (via1_irq),
+	.dbg_irq_state (),
+	.sr_active (via1_sr_active),
 
-	.sr_out_active (),
-	.sr_out_dir    (),
-	.sr_ext_clk    (),
-	.sr_dbg_bit_cnt (),
-	.sr_dbg_edge_pending (),
-	.sr_dbg_fall_pending (),
-	.sr_dbg_shift_reg ()
+	.sr_ext_complete (via1_sr_ext_complete),
+	.sr_ext_load     (via1_sr_ext_load),
+	.sr_ext_data     (via1_sr_ext_data)
 );
+
+//----------------------------------------------------------------------------
+// ADB modem (Mac II style): the ROM talks to it through VIA1's shift
+// register (CB1/CB2) with the state bits on PB4/PB5 and the interrupt on
+// PB3.  adb.sv + the Snow-style timer shim come from lbmactwo_MiSTer,
+// where this exact arrangement is hardware-proven.
+//----------------------------------------------------------------------------
+wire ADBST0 = ~via1_pbt[4] | via1_pbo[4];
+wire ADBST1 = ~via1_pbt[5] | via1_pbo[5];
+wire adb_bus_idle = ADBST0 & ADBST1;
+wire adb_resp_pending;
+wire [7:0] adb_dout;
+wire       adb_dout_strobe;
+reg  [7:0] adb_din;
+reg        adb_din_strobe;
+
+// ~8 MHz enable for the transceiver's bit timing
+reg [1:0] adbdiv;
+wire adb_en = (adbdiv == 2'd3);
+always @(posedge clk) adbdiv <= !nreset ? 2'd0 : adbdiv + 1'b1;
+
+adb adbx (
+	.clk(clk),
+	.clk_en(adb_en),
+	.reset(~nreset),
+	.st({ADBST1, ADBST0}),
+	._int(adb_int_n),
+	.viaBusy(1'b0),
+	.listen(),
+	.adb_din(adb_din),
+	.adb_din_strobe(adb_din_strobe),
+	.adb_dout(adb_dout),
+	.adb_dout_strobe(adb_dout_strobe),
+
+	.ps2_mouse(ps2_mouse),
+	.ps2_key(ps2_key),
+	.resp_pending(adb_resp_pending),
+	.dbg_adb(),
+	.mouse_has_event_o()
+);
+
+// VIA1 SR shim (lbmactwo): the qualified 6522 access edge is A_VIA at
+// e_falling with via1_addr/din held; SR reg $A, ACR reg $B
+wire via1_access = (astate == A_VIA) && e_falling;
+wire via1_sr_wr  = via1_access && via1_wen && (via1_addr == 4'hA);
+wire via1_acr_wr = via1_access && via1_wen && (via1_addr == 4'hB);
+wire via1_sr_rd  = via1_access && via1_ren && (via1_addr == 4'hA);
+
+reg [2:0] via1_acr_shift_mode;
+reg [7:0] via1_sr_shadow;
+reg [21:0] via1_shift_timer;
+reg via1_shift_dir;                // 1 = shift-out, 0 = shift-in
+reg via1_sr_out_pending;
+reg via1_sr_out_ack;
+reg via1_kbd_to_mac_fresh;
+reg [7:0] kbd_to_mac;
+
+localparam SHIFT_DELAY = 22'd100000;    // ~3 ms at 33 MHz
+localparam IDLE_DELAY  = 22'd363000;    // ~11 ms autopoll heartbeat
+
+always @(posedge clk) begin
+	if (!nreset) begin
+		via1_acr_shift_mode <= 3'b000;
+		via1_sr_shadow <= 8'h00;
+		via1_shift_timer <= 22'd0;
+		via1_shift_dir <= 1'b0;
+		via1_sr_ext_complete <= 1'b0;
+		via1_sr_ext_load <= 1'b0;
+		via1_sr_ext_data <= 8'h00;
+		via1_sr_out_pending <= 1'b0;
+		via1_sr_out_ack <= 1'b0;
+		via1_kbd_to_mac_fresh <= 1'b0;
+		kbd_to_mac <= 8'h00;
+		adb_din <= 8'h00;
+		adb_din_strobe <= 1'b0;
+	end
+	else begin
+		via1_sr_ext_complete <= 1'b0;
+		via1_sr_ext_load <= 1'b0;
+		via1_sr_out_ack <= 1'b0;
+		adb_din_strobe <= 1'b0;
+
+		if (adb_dout_strobe) begin
+			kbd_to_mac <= adb_dout;
+			via1_kbd_to_mac_fresh <= 1'b1;
+		end
+
+		// shift-out completion delivers the command byte to the modem
+		if (via1_sr_out_pending && !via1_sr_out_ack) begin
+			adb_din <= via1_sr_shadow;
+			adb_din_strobe <= 1'b1;
+			via1_sr_out_ack <= 1'b1;
+			via1_sr_out_pending <= 1'b0;
+		end
+
+		if (via1_acr_wr) begin
+			via1_acr_shift_mode <= via1_din[4:2];
+			if (via1_din[4:2] == 3'b111 && via1_acr_shift_mode != 3'b111) begin
+				via1_shift_timer <= SHIFT_DELAY;
+				via1_shift_dir <= 1'b1;
+			end
+			else if (via1_din[4:2] == 3'b011 && via1_acr_shift_mode != 3'b011) begin
+				via1_shift_timer <= SHIFT_DELAY;
+				via1_shift_dir <= 1'b0;
+			end
+			else if (via1_din[4:2] == 3'b000)
+				via1_shift_timer <= 22'd0;
+		end
+
+		// an SR read in shift-in mode re-arms the next shift (autopoll
+		// heartbeat); fast only while a real response byte is on the way
+		if (via1_sr_rd && via1_acr_shift_mode == 3'b011) begin
+			via1_shift_timer <= adb_resp_pending ? SHIFT_DELAY : IDLE_DELAY;
+			via1_shift_dir <= 1'b0;
+		end
+
+		if (via1_sr_wr) begin
+			via1_sr_shadow <= via1_din;
+			if (via1_acr_shift_mode == 3'b111) begin
+				via1_shift_timer <= SHIFT_DELAY;
+				via1_shift_dir <= 1'b1;
+			end
+			if (via1_acr_shift_mode == 3'b011) begin
+				via1_shift_timer <= SHIFT_DELAY;
+				via1_shift_dir <= 1'b0;
+			end
+		end
+
+		if (via1_shift_timer > 22'd1)
+			via1_shift_timer <= via1_shift_timer - 22'd1;
+
+		if (via1_shift_dir) begin
+			if (via1_shift_timer == 22'd1) begin
+				via1_shift_timer <= 22'd0;
+				via1_sr_ext_complete <= 1'b1;
+				via1_sr_out_pending <= 1'b1;
+			end
+		end
+		else begin
+			// shift-in completes the instant a fresh byte exists; the timer
+			// path only fires when nothing is pending (or the bus idled)
+			if (via1_kbd_to_mac_fresh) begin
+				via1_shift_timer <= 22'd0;
+				via1_sr_ext_complete <= 1'b1;
+				via1_sr_ext_load <= 1'b1;
+				via1_sr_ext_data <= kbd_to_mac;
+				via1_kbd_to_mac_fresh <= 1'b0;
+			end
+			else if (via1_shift_timer == 22'd1) begin
+				if (!adb_resp_pending || adb_bus_idle) begin
+					via1_shift_timer <= 22'd0;
+					via1_sr_ext_complete <= 1'b1;
+					via1_sr_ext_load <= 1'b1;
+					via1_sr_ext_data <= kbd_to_mac;
+				end
+			end
+		end
+	end
+end
 
 //----------------------------------------------------------------------------
 // VIA2 — quadra pseudo-VIA (MAME quadra_pseudovia_device): ports and

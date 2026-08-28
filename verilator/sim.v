@@ -125,6 +125,9 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.AUDIO_L(AUDIO_L),
 	.AUDIO_R(AUDIO_R),
 
+	.ps2_key(ps2_key),
+	.ps2_mouse(ps2_mouse),
+
 	.img_mounted(img_mounted),
 	.img_size(img_size),
 	.io_lba(sd_lba0),

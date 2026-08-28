@@ -68,6 +68,10 @@ module quadra800
 	output [15:0] sd_buff_din,
 	input         sd_buff_wr,
 
+	// ADB input devices
+	input  [10:0] ps2_key,
+	input  [24:0] ps2_mouse,
+
 	// debug
 	output            dbg_berr,
 	output     [31:0] dbg_berr_addr,
@@ -218,7 +222,10 @@ iosb iosb (
 	.sd_buff_addr(sd_buff_addr),
 	.sd_buff_dout(sd_buff_dout),
 	.sd_buff_din(sd_buff_din),
-	.sd_buff_wr(sd_buff_wr)
+	.sd_buff_wr(sd_buff_wr),
+
+	.ps2_key(ps2_key),
+	.ps2_mouse(ps2_mouse)
 );
 
 //----------------------------------------------------------------------------

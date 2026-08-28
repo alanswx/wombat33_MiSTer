@@ -17,12 +17,13 @@ module via6522 (
     input  wire        clock,
     input  wire        rising,
     input  wire        falling,
+    input  wire        timer_tick,
     input  wire        reset,
     
     input  wire [3:0]  addr,
     input  wire        wen,
     input  wire        ren,
- 
+
     input  wire [7:0]  data_in,
     output reg  [7:0]  data_out,
 
@@ -54,25 +55,36 @@ module via6522 (
     input  wire        cb2_i,
     output wire        cb2_t,
 
+    // Level-driven IFR overlays (Snow-style). While high, the CA2/CB2 IFR
+    // flags read 1 and contribute to IRQ regardless of the edge-latched
+    // state; when the level drops, only the edge latch (if any) remains.
+    // Mac II VIA2 uses these for SCSI: ca2_lvl_i = DRQ, cb2_lvl_i = 5380
+    // IRQ — the HD SC driver POLLS these IFR bits between pseudo-DMA
+    // chunks, and a pure edge model deadlocks (a still-latched 5380 IRQ
+    // produces no new edge). Tie 0 where unused (VIA1).
+    input  wire        ca2_lvl_i,
+    input  wire        cb2_lvl_i,
+
     output wire        irq,
+    // Debug snapshot of the interrupt machinery (PVIA probe):
+    //   [31]=irq_out [30:24]=irq_mask(IER) [22:16]=irq_flags_eff
+    //   [15:8]=pcr [7:0]=acr
+    output wire [31:0] dbg_irq_state,
+    output wire        sr_active, // shift register armed and counting
 
-    // Shift register status (for CUDA interface)
-    output wire        sr_out_active,  // Shift register is actively shifting
-    output wire        sr_out_dir,     // Shift direction: 0=in, 1=out
-    output wire        sr_ext_clk,     // Using external clock (CB1)
-
-    // Debug outputs for FPGA SR diagnostics
-    output wire [2:0]  sr_dbg_bit_cnt,     // Current bit counter (7→0)
-    output wire        sr_dbg_edge_pending, // Rising edge pending (shift-in)
-    output wire        sr_dbg_fall_pending, // Falling edge pending (shift-out)
-    output wire [7:0]  sr_dbg_shift_reg     // Current shift register value
+    // External shift register completion (Snow-style timer-based SR)
+    // When sr_ext_complete pulses, IFR bit 2 is set and shift_active clears.
+    // If sr_ext_load is also high, shift_reg is loaded from sr_ext_data.
+    input  wire        sr_ext_complete,
+    input  wire        sr_ext_load,
+    input  wire [7:0]  sr_ext_data
 );
     localparam [15:0] latch_reset_pattern = 16'h5550;
 
     // PIO signals (replaces record type)
     reg [7:0] pio_i_pra  = 8'h00;
     reg [7:0] pio_i_ddra = 8'h00;
-    reg [7:0] pio_i_prb  = 8'hFF;  // Default high (TIP bit 3 = 1 = not asserted)
+    reg [7:0] pio_i_prb  = 8'h00;
     reg [7:0] pio_i_ddrb = 8'h00;
     reg [7:0] port_a_c = 8'h00;
     reg [7:0] port_b_c = 8'h00;
@@ -125,10 +137,6 @@ module via6522 (
     wire       shift_dir             = acr[4];
     wire [1:0] shift_clk_sel         = acr[3:2];
     wire [2:0] shift_mode_control    = acr[4:2];
-    // External clock modes: Mode 3 (011) = Shift In Ext, Mode 7 (111) = Shift Out Ext
-    wire       si_ext_control        = (shift_mode_control == 3'b011);  // Mode 3
-    wire       so_ext_control        = (shift_mode_control == 3'b111);  // Mode 7
-    wire       ext_clock_mode        = si_ext_control | so_ext_control;
     wire       pb_latch_en           = acr[1];
     wire       pa_latch_en           = acr[0];
     // Aliases for PCR bits
@@ -174,12 +182,12 @@ module via6522 (
 
     always @(*) begin
         irq_events[1] = (ca1_c ^ ca1_d) & (ca1_d ^ ca1_edge_select);
-        irq_events[0] = (ca2_c ^ ca2_d) & (ca2_d ^ ca2_edge_select);
+        irq_events[0] = !ca2_is_output & (ca2_c ^ ca2_d) & (ca2_d ^ ca2_edge_select);
         irq_events[4] = (cb1_c ^ cb1_d) & (cb1_d ^ cb1_edge_select);
-        irq_events[3] = (cb2_c ^ cb2_d) & (cb2_d ^ cb2_edge_select);
+        irq_events[3] = !cb2_is_output & (cb2_c ^ cb2_d) & (cb2_d ^ cb2_edge_select);
         
         // FIXED: Added assignments here to drive irq_events from the wires
-        irq_events[2] = serial_event;
+        irq_events[2] = serial_event | sr_ext_complete;
         irq_events[5] = timer_b_event;
         irq_events[6] = timer_a_event;
     end
@@ -211,8 +219,13 @@ module via6522 (
                    1'b0 : 1'b1;
     end
 
+    // Effective flags = edge-latched flags OR the level overlays (bit 0 =
+    // CA2, bit 3 = CB2). Used for the IRQ line and the IFR readout; the
+    // edge-latch clear protocols (ORA/ORB access, IFR write) are unchanged.
+    wire [6:0] irq_flags_eff = irq_flags | {3'b000, cb2_lvl_i, 2'b00, ca2_lvl_i};
+
     always @(*) begin
-        if ((irq_flags & irq_mask) == 7'h00) begin
+        if ((irq_flags_eff & irq_mask) == 7'h00) begin
             irq_out = 1'b0;
         end else begin
             irq_out = 1'b1;
@@ -291,30 +304,12 @@ module via6522 (
         // Interrupt logic
         irq_flags <= irq_flags |
                      irq_events;
-        
-        // Ensure serial flag is set directly from event
-        if (serial_event) begin
-            irq_flags[2] <= 1'b1;
-        end
-
-`ifdef VERBOSE_TRACE
-        // Debug: trace when serial_event gets captured into irq_flags
-        if (irq_events[2] == 1'b1) begin
-            $display("VIA: IRQ event serial! irq_events=0x%02x, irq_flags before=0x%02x, will be 0x%02x, rising=%b, falling=%b",
-                     irq_events, irq_flags, irq_flags | irq_events, rising, falling);
-        end
-`endif
 
         // Writes
         if (wen == 1'b1 && falling == 1'b1) begin
-// VIA write debug disabled - too verbose during boot
             case (addr)
                 4'h0: begin // ORB
                     pio_i_prb <= data_in;
-`ifdef VIA_VERBOSE
-                    $display("VIA_ORB[%0t]: W 0x%02x TIP=%b TACK=%b TREQ_in=%b",
-                             $time, data_in, data_in[5], data_in[4], port_b_i[3]);
-`endif
                     if (cb2_no_irq_clr == 1'b0) begin
                         irq_flags[3] <= 1'b0;
                     end
@@ -323,6 +318,8 @@ module via6522 (
                 
                 4'h1: begin // ORA
                     pio_i_pra <= data_in;
+                    $display("VIA1 ORA WRITE: addr=%h data_in=%h old_pra=%h wen=%b falling=%b",
+                        addr, data_in, pio_i_pra, wen, falling);
                     if (ca2_no_irq_clr == 1'b0) begin
                         irq_flags[0] <= 1'b0;
                     end
@@ -331,10 +328,6 @@ module via6522 (
                     
                 4'h2: begin // DDRB
                     pio_i_ddrb <= data_in;
-`ifdef VERBOSE_TRACE
-                    $display("VIA DDRB_W[%0t]: %02x (PB5_dir=%b PB4_dir=%b PB3_dir=%b)",
-                             $time, data_in, data_in[5], data_in[4], data_in[3]);
-`endif
                 end
                 
                 4'h3: begin // DDRA
@@ -367,20 +360,12 @@ module via6522 (
                     irq_flags[5] <= 1'b0;
                 end
                     
-                4'hA: begin // Serial port (SR write)
+                4'hA: begin // Serial port
                     irq_flags[2] <= 1'b0;
-`ifdef VIA_VERBOSE
-                    $display("VIA_SR[%0t]: WRITE 0x%02x mode=%d dir=%b active=%b cnt=%d",
-                             $time, data_in, shift_mode_control, shift_dir, shift_active, bit_cnt);
-`endif
                 end
                     
                 4'hB: begin // ACR (Auxiliary Control Register)
                     acr <= data_in;
-`ifdef VERBOSE_TRACE
-                    $display("VIA: ACR WRITE = 0x%02x (shift_mode=%d, shift_dir=%b, ext_clk=%b)",
-                             data_in, data_in[4:2], data_in[4], (data_in[3:2] == 2'b11));
-`endif
                 end
                     
                 4'hC: begin // PCR (Peripheral Control Register)
@@ -393,20 +378,20 @@ module via6522 (
                     
                 4'hE: begin // IER
                     if (data_in[7] == 1'b1) begin // set
-                        irq_mask <= irq_mask | data_in[6:0];
-`ifdef VERBOSE_TRACE
-                        $display("VIA: IER SET = 0x%02x, mask now 0x%02x", data_in, irq_mask | data_in[6:0]);
-`endif
+                        irq_mask <= irq_mask |
+                                    data_in[6:0];
                     end else begin // clear
                         irq_mask <= irq_mask & ~data_in[6:0];
-`ifdef VERBOSE_TRACE
-                        $display("VIA: IER CLEAR = 0x%02x, mask now 0x%02x", data_in, irq_mask & ~data_in[6:0]);
-`endif
                     end
                 end
                 
                 4'hF: begin // ORA no handshake
                     pio_i_pra <= data_in;
+`ifdef VIA_VERBOSE
+                    if ($test$plusargs("via_debug"))
+                        $display("VIA1 ORA_NH WRITE: addr=%h data_in=%h old_pra=%h",
+                            addr, data_in, pio_i_pra);
+`endif
                 end
                 
                 default: begin
@@ -418,23 +403,19 @@ module via6522 (
         data_out <= 8'h00;
         case (addr)
             4'h0: begin // ORB
-                // Port B ALWAYS reads the actual pin level for ALL bits, unlike
-                // Port A which reads output latch for outputs. Per 6522 datasheet,
-                // ORB reads perform a read-modify-write on the actual pin state.
-                data_out <= irb;
+                // Port B reads its own output register for pins set to output.
+                data_out <= (pio_i_prb & pio_i_ddrb) | (irb & ~pio_i_ddrb);
                 if (tmr_a_output_en == 1'b1) begin
                     data_out[7] <= timer_a_out;
                 end
-`ifdef VERBOSE_TRACE
-                // Log ORB reads when TREQ changes or during SR activity
-                if (shift_active || !irb[3]) begin
-                    $display("VIA ORB_R[%0t]: %02x TREQ=%b TIP=%b BYTEACK=%b [SR=%b cnt=%d]",
-                             $time, irb, ~irb[3], ~irb[5], ~irb[4], shift_active, bit_cnt);
-                end
-`endif
             end
             4'h1: begin // ORA
                 data_out <= ira;
+`ifdef VIA_VERBOSE
+                if (ren && $test$plusargs("via_debug"))
+                    $display("VIA1 ORA READ: addr=%h ira=%h port_a_c=%h port_a_i=%h pra=%h ddra=%h",
+                        addr, ira, port_a_c, port_a_i, pio_i_pra, pio_i_ddra);
+`endif
             end
             4'h2: begin // DDRB
                 data_out <= pio_i_ddrb;
@@ -470,19 +451,18 @@ module via6522 (
                 data_out <= pcr;
             end
             4'hD: begin // IFR
-                data_out <= {irq_out, irq_flags};
-`ifdef VERBOSE_TRACE
-                if (shift_active || irq_flags[2]) begin
-                    $display("VIA_SR[%0t]: IFR_READ 0x%02x SR_bit=%b active=%b cnt=%d",
-                             $time, {irq_out, irq_flags}, irq_flags[2], shift_active, bit_cnt);
-                end
-`endif
+                data_out <= {irq_out, irq_flags_eff};
             end
             4'hE: begin // IER
                 data_out <= {1'b1, irq_mask};
             end
             4'hF: begin // ORA
                 data_out <= ira;
+`ifdef VIA_VERBOSE
+                if (ren && $test$plusargs("via_debug"))
+                    $display("VIA1 ORA_NH READ: ira=%h port_a_c=%h port_a_i=%h pra=%h ddra=%h",
+                        ira, port_a_c, port_a_i, pio_i_pra, pio_i_ddra);
+`endif
             end
             default: begin
             end
@@ -501,12 +481,22 @@ module via6522 (
                                             
                 4'h1: begin // ORA
                     if (ca2_no_irq_clr == 1'b0) begin
-             
+
                         irq_flags[0] <= 1'b0;
                     end
                     irq_flags[1] <= 1'b0;
                 end
-                    
+
+                4'hF: begin // ORA no-handshake
+                    // Snow clears CA1/CA2 IFR bits on 0x0F reads too
+                    // (../snow/core/src/mac/via.rs:374-375). Real 6522 does not,
+                    // but Mac II ROM apparently expects this behavior.
+                    if (ca2_no_irq_clr == 1'b0) begin
+                        irq_flags[0] <= 1'b0;
+                    end
+                    irq_flags[1] <= 1'b0;
+                end
+
                 4'h4: begin // TA LO counter
                     irq_flags[6] <= 1'b0;
                 end
@@ -517,12 +507,8 @@ module via6522 (
                     
                 4'hA: begin // SR
                     irq_flags[2] <= 1'b0;
-`ifdef VIA_VERBOSE
-                    $display("VIA_SR[%0t]: READ 0x%02x mode=%d dir=%b active=%b cnt=%d",
-                             $time, shift_reg, shift_mode_control, shift_dir, shift_active, bit_cnt);
-`endif
                 end
-
+    
                 default: begin
                 end
             endcase
@@ -531,7 +517,7 @@ module via6522 (
         if (reset == 1'b1) begin
             pio_i_pra       <= 8'h00;
             pio_i_ddra      <= 8'h00;
-            pio_i_prb       <= 8'hFF;  // Default high (TIP bit 3 = 1 = not asserted)
+            pio_i_prb       <= 8'h00;
             pio_i_ddrb      <= 8'h00;
             irq_mask        <= 7'h00;
             irq_flags       <= 7'h00;
@@ -554,35 +540,14 @@ module via6522 (
     assign port_a_t = pio_i_ddra;
     assign port_b_t[6:0] = pio_i_ddrb[6:0];
     assign port_b_t[7] = pio_i_ddrb[7] | tmr_a_output_en;
-    // ------------------------------------------------------------------
-    // Mac LC timer prescaler: the V8 clocks the real VIA at C15M/20 =
-    // 783.36 kHz (MAME v8.cpp: R65NC22(..., 15.6672_MHz_XTAL / 20)), but our
-    // rising/falling enables come from the TG68's 68000-style E = CPU/10 =
-    // 1.56672 MHz — exactly 2x too fast. Software that times against the VIA
-    // (TattleTech CPU-speed report, T2 delay loops) reads half the true CPU
-    // speed. Divide ONLY the timer count cadence by 2; register access, port
-    // latching and the (Egret-critical) shift-register path stay on the bus-E
-    // rate so VPA-timed reads/writes are never missed. Reload consumption and
-    // the timeout/tick clears stay at full rate so each timeout still spans
-    // exactly one falling→falling window and IRQ events fire exactly once.
-    // ------------------------------------------------------------------
-    reg timer_phase = 1'b0;
-    always @(posedge clock) begin
-        if (reset == 1'b1)
-            timer_phase <= 1'b0;
-        else if (falling == 1'b1)
-            timer_phase <= ~timer_phase;
-    end
-    wire timer_tick = timer_phase;  // true on every other falling (783.36 kHz)
-
     // Timer A
     reg        timer_a_reload = 1'b0;
     reg        timer_a_toggle = 1'b1;
     reg        timer_a_may_interrupt = 1'b0;
     always @(posedge clock) begin
-        if (falling == 1'b1) begin
+        if (timer_tick == 1'b1) begin
             // always count, or load
-
+                
             if (timer_a_reload == 1'b1) begin
                 timer_a_count <= timer_a_latch;
                 if (write_t1c_l == 1'b1) begin
@@ -590,7 +555,7 @@ module via6522 (
                 end
                 timer_a_reload <= 1'b0;
                 timer_a_may_interrupt <= timer_a_may_interrupt & tmr_a_freerun;
-            end else if (timer_tick == 1'b1) begin
+            end else begin
                 if (timer_a_count == 16'h0000) begin
                     // generate an event if we were triggered
                     timer_a_reload <= 1'b1;
@@ -600,7 +565,7 @@ module via6522 (
             end
         end
         
-        if (rising == 1'b1) begin
+        if (timer_tick == 1'b1) begin
             if (timer_a_event == 1'b1 && tmr_a_output_en == 1'b1) begin
                 timer_a_toggle <= ~timer_a_toggle;
             end
@@ -622,7 +587,7 @@ module via6522 (
     end
 
     assign timer_a_out = timer_a_toggle;
-    assign timer_a_event = rising & timer_a_reload & timer_a_may_interrupt;
+    assign timer_a_event = timer_tick & timer_a_reload & timer_a_may_interrupt;
 
     // Timer B
     reg        timer_b_reload_lo = 1'b0;
@@ -634,23 +599,21 @@ module via6522 (
         reg timer_b_decrement;
         
         timer_b_decrement = 1'b0;
-        if (rising == 1'b1) begin
+        if (timer_tick == 1'b1) begin
             pb6_c <= port_b_i[6];
             pb6_d <= pb6_c;
         end
                         
-        if (falling == 1'b1) begin
+        if (timer_tick == 1'b1) begin
             timer_b_timeout <= 1'b0;
             timer_b_tick <= 1'b0;
 
             if (tmr_b_count_mode == 1'b1) begin
-                // PB6 pulse counting stays at full rate (counts external edges)
                 if (pb6_d == 1'b1 && pb6_c == 1'b0) begin
                     timer_b_decrement = 1'b1;
                 end
             end else begin // one shot or used for shift register
-                // Timed mode: prescaled to 783.36 kHz (see timer_phase above)
-                timer_b_decrement = timer_tick;
+                timer_b_decrement = 1'b1;
             end
                 
             if (timer_b_decrement == 1'b1) begin
@@ -693,7 +656,7 @@ module via6522 (
         end
     end
 
-    assign timer_b_event = rising & timer_b_timeout;
+    assign timer_b_event = timer_tick & timer_b_timeout;
     // Serial port
     reg        trigger_serial;
     reg        shift_clock_d = 1'b1;
@@ -704,10 +667,6 @@ module via6522 (
     reg        ser_cb2_c = 1'b0;
     reg [2:0]  bit_cnt = 3'd0;
     reg        shift_pulse;
-    reg        shift_active_prev_rising = 1'b0;  // For detecting shift completion
-    reg        cb2_shift_out = 1'b1;             // Registered shift-out data bit on CB2
-                                                 // (presents MSB, held across the CB1
-                                                 // edge before rotating - MAME shift_out)
 
     always @(*) begin
         case (shift_clk_sel)
@@ -720,97 +679,67 @@ module via6522 (
             end
             
             default: begin
-                // In external clock mode, use the latched edge to ensure falling phase sees it
-                shift_pulse = ext_edge_pending;
+                shift_pulse = shift_clock & ~shift_clock_d;
             end
         endcase
 
         if (shift_active == 1'b0) begin
             // Mode 0 still loads the shift register to external pulse (MMBEEB SD-Card interface uses this)
-            // External clock mode (ext_clock_mode) also pulses without trigger - needed for CUDA
             if (shift_mode_control == 3'b000) begin
                 shift_pulse = shift_clock & ~shift_clock_d;
-            end else if (ext_clock_mode) begin
-                shift_pulse = ext_edge_pending;
             end else begin
                 shift_pulse = 1'b0;
             end
         end
     end
 
-    // Debug: track CB1 input edges
-`ifdef VERBOSE_TRACE
-    reg cb1_i_prev;
-    always @(posedge clock) begin
-        if (reset) cb1_i_prev <= 1'b1;
-        else if (rising) begin
-            cb1_i_prev <= cb1_i;
-            if (cb1_i != cb1_i_prev && ext_clock_mode) begin
-                $display("VIA: CB1_i %s (ext_clk mode) - shift_active=%b bit_cnt=%d SR=0x%02x",
-                         cb1_i ? "RISING" : "FALLING", shift_active, bit_cnt, shift_reg);
-            end
-        end
-    end
-`endif
-
-    // In external clock mode, latch rising edges until consumed by falling phase
-    reg ext_edge_pending = 1'b0;
-    reg ext_fall_edge_pending = 1'b0;  // Latch CB1 falling edges for shift-out in ext clock mode
-    reg cb2_latched = 1'b0;            // kept for debug port but not used in logic
-
     always @(posedge clock) begin
         ser_cb2_c <= cb2_i;
-
-        // In external clock mode (ext_clock_mode), sample CB1 on EVERY clock
-        // cycle to catch fast edges, then latch until consumed by falling phase
-        if (ext_clock_mode) begin
-            shift_clock <= cb1_i;
-            shift_clock_d <= shift_clock;
-            // Latch rising edge until falling phase consumes it
-            if (~shift_clock_d & shift_clock) begin
-                ext_edge_pending <= 1'b1;
-            end
-            // Latch falling edge until falling phase consumes it (for shift-out)
-            if (shift_clock_d & ~shift_clock) begin
-                ext_fall_edge_pending <= 1'b1;
-            end
-        end else if (rising == 1'b1) begin
+        if (rising == 1'b1) begin
             if (shift_active == 1'b0) begin
                 if (shift_mode_control == 3'b000) begin
                     shift_clock <= cb1_i;
                 end else begin
                     shift_clock <= 1'b1;
                 end
+            end else if (shift_clk_sel == 2'b11) begin
+                shift_clock <= cb1_i;
             end else if (shift_pulse == 1'b1) begin
                 shift_clock <= ~shift_clock;
             end
+
             shift_clock_d <= shift_clock;
         end
 
         if (falling == 1'b1) begin
             shift_timer_tick <= timer_b_tick;
-            // Clear the pending edges after falling phase processes them
-            if (ext_clock_mode && ext_edge_pending) begin
-                ext_edge_pending <= 1'b0;
-            end
-            if (ext_clock_mode && ext_fall_edge_pending) begin
-                ext_fall_edge_pending <= 1'b0;
-            end
         end
 
         if (reset == 1'b1) begin
             shift_clock <= 1'b1;
             shift_clock_d <= 1'b1;
-            ext_edge_pending <= 1'b0;
-            ext_fall_edge_pending <= 1'b0;
         end
     end
 
     always @(*) begin
-        cb1_t_int = (ext_clock_mode) ?
+        cb1_t_int = (shift_clk_sel == 2'b11) ?
                     1'b0 : serport_en;
         cb1_o_int = shift_clock_d;
-        ser_cb2_o = cb2_shift_out;   // registered MSB (see cb2_shift_out)
+        ser_cb2_o = shift_reg[7];
+    end
+
+    // Detect ACR write enabling a shift mode — arms shift register like SR access.
+    // On real Mac II, ROM writes ACR to set shift mode without first writing SR.
+    // Snow emulator also starts shift on ACR write.
+    reg trigger_acr_shift;
+    always @(posedge clock) begin
+        if (reset)
+            trigger_acr_shift <= 1'b0;
+        else if (falling) begin
+            trigger_acr_shift <= 1'b0;
+            if (wen && addr == 4'hB && data_in[4:2] != 3'b000)
+                trigger_acr_shift <= 1'b1;
+        end
     end
 
     always @(*) begin
@@ -821,87 +750,62 @@ module via6522 (
         shift_tick_f = shift_clock_d & ~shift_clock;
     end
 
+    // synthesis translate_off
+    // Uncomment for VIA SR debugging:
+    // always @(posedge clock) begin
+    //     if ((trigger_serial || trigger_acr_shift) && falling && shift_active == 1'b0)
+    //         $display("VIA_SR_ARM: trigger_sr=%b trigger_acr=%b sr=%02x acr_mode=%03b shift_dir=%b clk_sel=%02b", trigger_serial, trigger_acr_shift, shift_reg, shift_mode_control, shift_dir, shift_clk_sel);
+    //     if (shift_active_d && !shift_active && rising)
+    //         $display("VIA_SR_COMPLETE: sr=%02x ifr=%02x ier=%02x bit_cnt=%0d", shift_reg, irq_flags, irq_mask, bit_cnt);
+    // end
+    // synthesis translate_on
+
     always @(posedge clock) begin
         if (reset == 1'b1) begin
             shift_reg <= 8'hFF;
-            cb2_shift_out <= 1'b1;
-        end else begin
-            // CPU writes the SR (E-timed bus access) - highest priority.
-            if (falling == 1'b1 && wen == 1'b1 && addr == 4'hA) begin
+        end else if (falling == 1'b1) begin
+            if (wen == 1'b1 && addr == 4'hA) begin
                 shift_reg <= data_in;
-                cb2_shift_out <= data_in[7];   // present MSB immediately on load
-                `ifdef VIA_VERBOSE
-                $display("VIA: SR write = 0x%02x, ACR=0x%02x (mode=%d, dir=%b, serport_en=%b, cb2_o=%b)",
-                         data_in, acr, shift_mode_control, shift_dir, serport_en, ser_cb2_o);
-                `endif
-            // External-clock mode (Egret): match MAME 6522via.cpp write_cb1() -
-            // shift the SR on EACH CB1 edge, decoupled from the VIA E phase:
-            // shift-in on CB1 rising, shift-out on CB1 falling. Using the
-            // per-clk edge pulses (shift_tick_r/shift_tick_f) instead of the
-            // E-consumed ext_edge_pending flags stops fast HC05 CB1 edges from
-            // coalescing into one shift per E-period (the Egret SR hang).
-            end else if (ext_clock_mode) begin
-                if (shift_dir == 1'b1 && shift_tick_f == 1'b1) begin            // output (falling)
-                    // MAME shift_out: latch the current MSB onto CB2 (held across
-                    // the edge) BEFORE rotating, so the Egret - which reads CB2
-                    // AFTER its CB1 falling+rising ($14EF-$14F3) - samples bit7
-                    // first. Combinational CB2=shift_reg[7] was one bit early and
-                    // rotated every received byte (the byte-4 turnaround stall).
-                    cb2_shift_out <= shift_reg[7];
-                    shift_reg <= {shift_reg[6:0], shift_reg[7]};
-                end else if (shift_dir == 1'b0 && shift_mode_control != 3'b000 && shift_tick_r == 1'b1) begin // input (rising)
-                    `ifdef VIA_VERBOSE
-                    $display("VIA: shift-in cb2_i=%b SR_before=0x%02x bit_cnt=%0d", cb2_i, shift_reg, bit_cnt);
-                    `endif
-                    shift_reg <= {shift_reg[6:0], cb2_i};
-                end
-            // Internal-clock modes (T2 / O2): unchanged, E-paced.
-            end else if (falling == 1'b1) begin
-                if (shift_dir == 1'b1 && shift_tick_f == 1'b1) begin            // output
-                    cb2_shift_out <= shift_reg[7];
-                    shift_reg <= {shift_reg[6:0], shift_reg[7]};
-                end else if (shift_mode_control != 3'b000 && shift_dir == 1'b0 && shift_clk_sel != 2'b11 && shift_tick_r == 1'b1) begin // input
-                    shift_reg <= {shift_reg[6:0], cb2_i};
-                end
+            end else if (shift_dir == 1'b1 && shift_tick_f == 1'b1) begin // output
+                shift_reg <= {shift_reg[6:0], shift_reg[7]};
+            end else if (shift_dir == 1'b0 && shift_tick_r == 1'b1) begin // input
+                shift_reg <= {shift_reg[6:0], ser_cb2_c};
             end
+        end
+        // Snow-style external shift completion load (kept here to avoid
+        // multi-driver on shift_reg).
+        if (sr_ext_complete == 1'b1 && sr_ext_load == 1'b1) begin
+            shift_reg <= sr_ext_data;
         end
     end
 
-    // Tell people that we're ready!
-    // FIX: In external clock mode, shift_active goes low on falling, but shift_tick_r
-    // happens on rising. By the next rising, shift_tick_r is gone. So we detect the
-    // falling edge of shift_active instead - when it transitions from 1 to 0.
-    // shift_active_prev_rising samples shift_active on rising, so when shift_active
-    // goes low (on falling), the next rising sees prev=1, current=0 -> edge detected.
-    assign serial_event = (shift_active_prev_rising & ~shift_active) & rising & serport_en;
+    // tell people that we're ready!
+    // Detect shift_active falling edge (1→0 transition) for SR completion.
+    // The original logic (shift_tick_r & ~shift_active) required a CB1 edge
+    // AFTER shift_active cleared, but with external clocking the clock stops
+    // at exactly 8 edges, so the event could never fire.
+    reg shift_active_d;
     always @(posedge clock) begin
-        // Sample shift_active on rising edge for edge detection
-        if (rising == 1'b1) begin
-            shift_active_prev_rising <= shift_active;
-        end
-
+        if (rising == 1'b1)
+            shift_active_d <= shift_active;
+        if (reset == 1'b1)
+            shift_active_d <= 1'b0;
+    end
+    assign serial_event = (shift_active_d & ~shift_active & rising & serport_en)
+                        | (shift_tick_r & ~shift_active & rising & serport_en);
+    assign sr_active = shift_active;
+    assign dbg_irq_state = { irq_out, irq_mask, 1'b0, irq_flags_eff, pcr, acr };
+    always @(posedge clock) begin
         if (falling == 1'b1) begin
-`ifdef VERBOSE_TRACE
-            if (addr == 4'hA && (ren == 1'b1 || wen == 1'b1)) begin
-                $display("VIA: SR access check - trigger_serial=%b, shift_active=%b, mode=%d, wen=%b, ren=%b",
-                         trigger_serial, shift_active, shift_mode_control, wen, ren);
-            end
-`endif
             if (shift_active == 1'b0 && shift_mode_control != 3'b000) begin
-                if (trigger_serial == 1'b1) begin
-                    // Start a transfer: 8 bits = 8 relevant CB1 edges. Per-edge
-                    // counting (below, decoupled from E) handles edge timing, so
-                    // no more "simultaneous edge" -6 hack is needed.
+                if (trigger_serial == 1'b1 || trigger_acr_shift == 1'b1) begin
                     bit_cnt <= 3'd7;
-                    `ifdef VIA_VERBOSE
-                    $display("VIA: SR triggered - mode=%d, dir=%b, ext_clk=%b, start_cnt=7",
-                             shift_mode_control, shift_dir, (ext_clock_mode));
-                    `endif
                     shift_active <= 1'b1;
                 end
-            end else if (!ext_clock_mode) begin // internal-clock active decrement (E-paced, unchanged)
+            end else begin // we're active
                 if (shift_clk_sel == 2'b00) begin
                     shift_active <= shift_dir;
+                    // when '1' we're active, but for mode 000 we go inactive.
                 end else if (shift_pulse == 1'b1 && shift_clock == 1'b1) begin
                     if (bit_cnt == 3'd0) begin
                         shift_active <= 1'b0;
@@ -911,47 +815,19 @@ module via6522 (
                 end
             end
         end
-        // External-clock active count: match MAME (6522via.cpp shift_in/shift_out
-        // called per CB1 edge from write_cb1). One count per CB1 edge, decoupled
-        // from E: shift-in counts on CB1 rising, shift-out on CB1 falling. The
-        // matching shift_reg shift happens on the same edge (above), so 8 edges
-        // shift 8 bits and complete -> serial_event -> IFR[2].
-        if (ext_clock_mode && shift_active == 1'b1) begin
-            if ((shift_dir == 1'b0 && shift_tick_r == 1'b1) ||
-                (shift_dir == 1'b1 && shift_tick_f == 1'b1)) begin
-                if (bit_cnt == 3'd0) begin
-                    shift_active <= 1'b0;
-`ifdef VIA_VERBOSE
-                    $display("VIA_SR[%0t]: COMPLETE (ext) SR=0x%02x dir=%b", $time, shift_reg, shift_dir);
-`endif
-                end else begin
-                    bit_cnt <= bit_cnt - 3'd1;
-                end
-            end
-        end
 
-        `ifdef VERBOSE_TRACE
-        if (rising == 1'b1 && serial_event == 1'b1) begin
-            $display("VIA: SR IRQ fired! SR=0x%02x, IFR before=0x%02x", shift_reg, irq_flags);
+        // External shift completion (Snow-style timer-based)
+        // shift_reg and irq_flags[2] are written in their primary always blocks
+        // above to avoid Quartus multi-driver errors.
+        if (sr_ext_complete == 1'b1) begin
+            shift_active <= 1'b0;
+            bit_cnt <= 3'd0;
         end
-        `endif
 
         if (reset == 1'b1) begin
             shift_active <= 1'b0;
-            shift_active_prev_rising <= 1'b0;
             bit_cnt <= 3'd0;
         end
     end
-
-    // Shift register status outputs for CUDA interface
-    assign sr_out_active = shift_active;
-    assign sr_out_dir    = shift_dir;
-    assign sr_ext_clk    = (ext_clock_mode);  // External clock mode (CB1)
-
-    // Debug outputs for FPGA SR diagnostics (SignalTap / on-screen indicators)
-    assign sr_dbg_bit_cnt     = bit_cnt;
-    assign sr_dbg_edge_pending = ext_edge_pending;
-    assign sr_dbg_fall_pending = ext_fall_edge_pending;
-    assign sr_dbg_shift_reg   = shift_reg;
 
 endmodule

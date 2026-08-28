@@ -47,6 +47,7 @@ V_SRC = \
 	$(RTL)/rtc3430042.sv \
 	$(RTL)/asc_wavetable.sv \
 	$(RTL)/ncr53c96.sv \
+	$(RTL)/adb.sv \
 	$(AP)/ap040_core.v \
 	$(AP)/ap040_bus_timeout.v \
 	$(AP)/ap040_regfile.v \
