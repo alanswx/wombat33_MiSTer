@@ -1,4 +1,21 @@
-# Resume prompt — bisection RESOLVED: the 68020 CACR relic (finding 25)
+# Resume prompt — hardware campaign in flight (2026-08-28, latest)
+
+**Run order with the user:** (1) saverestore — DONE, results reported
+saved (not yet copied back for analysis); (2) cpu-fpu integration
+(disk C=FD355319) — the tail past row ~972 is emulator-uncheckable and
+hardware-first; (3) **mmu-full** (`dist/quadra800-mmu-full.hda`,
+C=6CE9E20C, payload byte-identical to the QEMU-green harness) — expect
+ran=24 skipped=0, two FAULT rows at vec 2, PTEST MMUSR values are
+hardware adjudications. Analyze MMU results with
+`gen/mmu_live_check.py results/mmu/mame_baseline_2026-06-12.json <dev.jsonl>`
+(labels the two known oracle-artifact classes; QEMU reference scores
+49 match / 7 artifact / 0 real). Then: fold all hardware results into
+findings, refresh the full -28b bundle set on current defaults, and
+compare the supervisor-page + ATC rows against QEMU (MAME has no ATC).
+
+---
+
+# Bisection RESOLVED: the 68020 CACR relic (finding 25)
 
 **2026-08-28, later:** the srtest-27c-writepath disk (verbatim 017acee
 write code) ALSO failed on hardware — correctly exonerating the sliced
