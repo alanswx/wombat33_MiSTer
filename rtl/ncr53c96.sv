@@ -121,7 +121,7 @@ assign rdata = (rs == 4'h0) ? tcounter[7:0]  :
                (rs == 4'h1) ? tcounter[15:8] :
                (rs == 4'h2) ? ((fifo_cnt != 0) ? fifo[0] : 8'h00) :
                (rs == 4'h3) ? cmd_r :
-               (rs == 4'h4) ? {1'b0, 1'b0, 1'b0, tc_zero, 1'b1, phase} :
+               (rs == 4'h4) ? {irq, 1'b0, 1'b0, tc_zero, 1'b1, phase} :   // bit7 = INT mirrors irq (QEMU esp STAT_INT)
                (rs == 4'h5) ? istatus :
                (rs == 4'h6) ? {5'd0, seq_step} :
                (rs == 4'h7) ? {3'd0, fifo_cnt} :
