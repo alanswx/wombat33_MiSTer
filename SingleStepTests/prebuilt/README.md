@@ -41,7 +41,47 @@ Run it to **"ALL TESTS DONE"**, power off, pull `/Results.jsonl`, and diff:
 # fpu: per row, vec 11 = an unimplemented op correctly trapped; vec 0 = executed
 ```
 
-## 2026-08-27b bundles — the SCSI `_Write` F-line shim
+## 2026-08-27c bundles — the write bug is root-caused and FIXED
+
+**Boot these.** The `-27b` CPU disk did its diagnostic job on hardware:
+instead of the Sad Mac it painted `FLINE OP+PC: FFFF 0000FF44` at the
+first flush — a garbage jump into low RAM. Root cause
+(`../test-blockers.md` **finding 21**): the boot block parked its stack
+at `$10000`, on top of the ROM boot heap, and its own calls smashed the
+SCSI Manager 4.3 write-path glue that lives just below — on this
+hardware ~$BC below the stack top (always destroyed), on MAME/QEMU
+~$B38 below (never reached, which is why no emulator ever reproduced
+it). `_Read` doesn't use that structure; the first `_Write` executed
+the corpse.
+
+**Fix in these builds: stacks only on RAM we own.** The boot block no
+longer touches SP at all (the ROM's stack is valid), and the payload
+stack moved from `$100000` to `$80000`, the top of its own 256 KB read
+window. The F-line shim stays in every payload — dormant when all is
+well, and on any future unknown fault it now paints the frame
+format/vector, the format-2 effective address, the instruction bytes
+around the stacked PC, and up to three return addresses, so one photo
+identifies the fault completely.
+
+This is the **complete bench set** — all payloads carry the stack fix
+and the shim:
+
+| Bundle | Contents | expected `C` |
+|---|---|---|
+| `quadra800-cpu-2026-08-27c.tgz` | CPU corpus `.hda` + `.dsk` | `15B290B9` |
+| `quadra800-fpu-2026-08-27c.tgz` | FPU corpus `.hda` + `.dsk` | `ACA128F0` |
+| `quadra800-mmu-2026-08-27c.tgz` | MMU corpus `.hda` + `.dsk` | `F1F9AAAE` |
+| `quadra800-cpu-nowrite-diag-2026-08-27c.tgz` | CPU bench, writes stubbed | `AF16311A` |
+| `quadra800-cpu-bootwritetest-diag-2026-08-27c.tgz` | boot-block `_Write` probe (`.hda`) | `15B290B9` |
+
+Regression state (all on these exact payloads): MAME `macqd800` — CPU
+corpus `ALL TESTS DONE`, `ioResult=0000`, no shim line, extracted
+results **667/696 match** vs baseline; FPU 270/270 rows,
+`ioResult=0000`; MMU 24 rows (`ran=14 skipped=10`); nowrite full
+corpus. QEMU — CPU diff report **byte-identical** to the pre-shim
+build; FPU 270/270; MMU 24/10.
+
+## 2026-08-27b bundles — the SCSI `_Write` F-line shim (SUPERSEDED by -27c)
 
 **Boot these for the write investigation.** The one thing the `-27`
 CPU bundle cannot do on the real machine — write `/Results.jsonl` (Sad
