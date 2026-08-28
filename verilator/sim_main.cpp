@@ -409,6 +409,7 @@ int main(int argc, char** argv, char** env) {
 				audio.CollectDebug((signed short)VERTOPINTERN->AUDIO_L,
 				                   (signed short)VERTOPINTERN->AUDIO_R);
 				float channelWidth = 320.0f;
+				ImPlot::CreateContext();
 				if (ImPlot::BeginPlot("Audio - L", ImVec2(channelWidth, 220),
 				        ImPlotFlags_NoLegend | ImPlotFlags_NoMenus | ImPlotFlags_NoTitle)) {
 					ImPlot::PlotStairs("", audio.debug_positions, audio.debug_wave_l,
@@ -422,6 +423,7 @@ int main(int argc, char** argv, char** env) {
 					                   audio.debug_max_samples, audio.debug_pos);
 					ImPlot::EndPlot();
 				}
+				ImPlot::DestroyContext();
 			}
 			ImGui::End();
 
