@@ -10,3 +10,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/quadra800.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/iosb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/via6522.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dafb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rtc3430042.sv

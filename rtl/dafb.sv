@@ -59,10 +59,15 @@ module dafb
 //----------------------------------------------------------------------------
 reg [20:0] fb_base;
 reg [13:0] stride;               // bytes
+reg  [2:0] sense_drive;          // last value written to the sense register
 reg [11:0] timing_ctrl, config_r, swatch_mode, test_r, swatch_test;
 reg [11:0] hparam [0:9];
 reg [11:0] vparam [0:6];
-reg  [1:0] int_en;               // bit0 VBL, bit2 cursor (unsupported)
+// MAME's DAFB has VBL on status bit 0 (clear at +$114); QEMU's macfb has
+// it on bit 2 (clear at +$10C, irq masked by +$104).  The ROM boots on
+// both, so serve both conventions: VBL raises bits {2,0} as enabled,
+// either clear address drops them, irq = |(status & enable).
+reg  [2:0] int_en;
 reg  [2:0] int_status;
 reg [11:0] cursor_line, anim_line;
 
@@ -74,7 +79,7 @@ reg  [7:0] pal_b [0:255];
 reg  [7:0] pbctrl;
 reg  [2:0] mode;                 // 0=1bpp 1=2bpp 2=4bpp 3=8bpp 4=24bpp
 
-assign vbl_irq = |int_status;
+assign vbl_irq = |(int_status & int_en);
 
 wire [5:0] rsel = addr[7:2];     // register within a block
 wire [1:0] blk  = addr[9:8];
@@ -82,7 +87,7 @@ wire [1:0] blk  = addr[9:8];
 always @(posedge clk) begin
 	if (!nreset) begin
 		ack <= 0; rdata <= 0;
-		fb_base <= 0; stride <= 14'd1024;
+		fb_base <= 0; stride <= 14'd1024; sense_drive <= 3'b111;
 		timing_ctrl <= 0; config_r <= 0; swatch_mode <= 12'd1;
 		test_r <= 0; swatch_test <= 0;
 		int_en <= 0; int_status <= 0;
@@ -92,8 +97,12 @@ always @(posedge clk) begin
 	else if (ce) begin
 		ack <= 0;
 
-		// VBL: rises at the first blank line while enabled
-		if (int_en[0] && vbl_start) int_status[0] <= 1'b1;
+		// VBL: status rises at the blank unconditionally (QEMU macfb — the
+		// ROM polls INTR_STAT with the mask off); the irq output is masked
+		if (vbl_start) begin
+			int_status[0] <= 1'b1;
+			int_status[2] <= 1'b1;
+		end
 
 		if (sel && !ack) begin
 			ack   <= 1;
@@ -107,8 +116,9 @@ always @(posedge clk) begin
 					6'h02: stride        <= {wdata[11:0], 2'b00};
 					6'h03: timing_ctrl   <= wdata[11:0];
 					6'h04: config_r      <= wdata[11:0];
+					6'h07: sense_drive   <= wdata[2:0];
 					6'h0B: test_r        <= wdata[11:0];
-					default: ;                            // sense drive, SCSI ctl
+					default: ;                            // SCSI ctl etc
 					endcase
 				end
 				else begin
@@ -118,7 +128,9 @@ always @(posedge clk) begin
 					6'h02: rdata <= {20'd0, stride[13:2]};
 					6'h03: rdata <= {20'd0, timing_ctrl};
 					6'h04: rdata <= {20'd0, config_r};
-					6'h07: rdata <= 32'h1;                // 13" 640x480, inverted
+					// 13" 640x480 (code 6), QEMU macfb normal-sense formula:
+					// (~code & 7) | (~driven & 7)
+					6'h07: rdata <= {29'd0, 3'b001 | ~sense_drive};
 					6'h0B: rdata <= {20'd0, 3'd3, test_r[8:0]};  // DAFB version 3
 					default: ;
 					endcase
@@ -129,12 +141,12 @@ always @(posedge clk) begin
 					case (rsel)
 					6'h00: swatch_mode <= wdata[11:0];
 					6'h01: begin
-						int_en <= {wdata[2], wdata[0]};
+						int_en <= wdata[2:0];
 						if (!wdata[0]) int_status[0] <= 0;
 						if (!wdata[2]) int_status[2] <= 0;
 					end
-					6'h03: int_status[2] <= 0;            // cursor int clear
-					6'h05: int_status[0] <= 0;            // VBL int clear
+					6'h03: int_status <= 0;               // clear (macfb $10C)
+					6'h05: int_status <= 0;               // clear (DAFB $114)
 					6'h06: cursor_line <= wdata[11:0];
 					6'h07: anim_line   <= wdata[11:0];
 					6'h08: swatch_test <= wdata[11:0];
@@ -149,8 +161,8 @@ always @(posedge clk) begin
 				else begin
 					case (rsel)
 					6'h02: rdata <= {29'd0, int_status};
-					6'h03: begin rdata <= 0; int_status[2] <= 0; end
-					6'h05: begin rdata <= 0; int_status[0] <= 0; end
+					6'h03: begin rdata <= 0; int_status <= 0; end
+					6'h05: begin rdata <= 0; int_status <= 0; end
 					6'h08: rdata <= {20'd0, swatch_test};
 					default: begin
 						if (rsel >= 6'h09 && rsel <= 6'h12)

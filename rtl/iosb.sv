@@ -70,13 +70,32 @@ always @(posedge clk) begin
 end
 
 //----------------------------------------------------------------------------
-// VIA1 — machine ID $12 on port A (PA1|PA4), ADB/RTC on port B later
+// VIA1 — machine ID $12 on port A (PA1|PA4); port B: PB0/1/2 bit-bang the
+// RTC (data/clock/enable), PB3 reads the ADB interrupt (high = none)
 //----------------------------------------------------------------------------
 reg        via1_ren, via1_wen;
 reg  [3:0] via1_addr;
 reg  [7:0] via1_din;
 wire [7:0] via1_dout;
 wire       via1_irq;
+wire [7:0] via1_pbo, via1_pbt;
+
+// undriven VIA pins float high through the pull-ups
+wire rtc_ce_n  = via1_pbt[2] ? via1_pbo[2] : 1'b1;
+wire rtc_clk   = via1_pbt[1] ? via1_pbo[1] : 1'b1;
+wire rtc_din   = via1_pbt[0] ? via1_pbo[0] : 1'b1;
+wire rtc_dout, rtc_doe;
+wire rtc_line  = rtc_doe ? rtc_dout : 1'b1;
+
+rtc3430042 rtc (
+	.clk(clk),
+	.nreset(nreset),
+	.ce_n(rtc_ce_n),
+	.clk_in(rtc_clk),
+	.data_in(rtc_din),
+	.data_out(rtc_dout),
+	.data_oe(rtc_doe)
+);
 
 via6522 via1 (
 	.clock     (clk),
@@ -95,9 +114,9 @@ via6522 via1 (
 	.port_a_o  (),
 	.port_a_t  (),
 	.port_a_i  (8'h12),
-	.port_b_o  (),
-	.port_b_t  (),
-	.port_b_i  (8'h08),         // bit 3 high: no ADB interrupt pending
+	.port_b_o  (via1_pbo),
+	.port_b_t  (via1_pbt),
+	.port_b_i  ({4'b0000, 1'b1, 2'b00, rtc_line}),  // bit3: no ADB int
 
 	.ca1_i     (tick_60hz),
 	.ca2_o     (),
@@ -143,12 +162,22 @@ wire [7:0] via2_ifr_r = {via2_active, via2_ifr[6:0]};
 reg [15:0] iosb_regs [0:31];
 
 //----------------------------------------------------------------------------
+// djMEMC memory controller registers at $5000E000 (QEMU hw/misc/djmemc.c:
+// interleave, bank0-9 config, memtop, config, refresh).  Architecturally
+// djMEMC's, but they live in the I/O block this module decodes.  The ROM's
+// RAM sizing writes bank configurations and reads them back — scratch
+// readback is what the known-good QEMU model provides.
+//----------------------------------------------------------------------------
+reg [31:0] djmemc_regs [0:15];
+
+//----------------------------------------------------------------------------
 // Decode (offset relative to $50000000; MAME iosb.cpp map with mirrors)
 //----------------------------------------------------------------------------
 wire in_low     = (addr[27:24] == 4'h0);
 wire sel_via1   = in_low && (addr[17:13] == 5'b00000);
 wire sel_via2   = in_low && (addr[19:13] == 7'b0000001);
 wire sel_regs   = in_low && (addr[19:13] == 7'b0001100);
+wire sel_djmemc = in_low && (addr[19:13] == 7'b0000111);   // $E000-$FFFF
 wire sel_id     = (addr[27:16] == 12'hFFF);
 wire [3:0] rsel = addr[12:9];
 
@@ -172,6 +201,9 @@ always @(posedge clk) begin
 		via2_ifr  <= 8'h00;
 		via2_ier  <= 8'h00;
 		vbl_d <= 0; scsi_d <= 0; drq_d <= 0; asc_d <= 0; slot_d <= 0;
+		for (int j = 0; j < 16; j = j + 1) djmemc_regs[j] <= 32'd0;
+		for (int j = 0; j < 32; j = j + 1) iosb_regs[j] <= 16'd0;
+		iosb_regs[0] <= 16'd1;               // IOSB_CONFIG: BCLK 33 MHz (QEMU)
 	end
 	else if (ce) begin
 		ack <= 0;
@@ -228,6 +260,10 @@ always @(posedge clk) begin
 						end
 					end
 					else rdata <= {2{iosb_regs[addr[12:8]]}};
+				end
+				else if (sel_djmemc) begin
+					if (write) djmemc_regs[addr[5:2]] <= wdata;
+					else       rdata <= djmemc_regs[addr[5:2]];
 				end
 				else if (sel_id) rdata <= 32'hA55A2BAD;
 				else rdata <= 32'h0;             // inert device space

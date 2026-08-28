@@ -44,6 +44,7 @@ V_SRC = \
 	$(RTL)/iosb.sv \
 	$(RTL)/via6522.sv \
 	$(RTL)/dafb.sv \
+	$(RTL)/rtc3430042.sv \
 	$(AP)/ap040_core.v \
 	$(AP)/ap040_bus_timeout.v \
 	$(AP)/ap040_regfile.v \
