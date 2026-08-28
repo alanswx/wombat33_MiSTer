@@ -1234,6 +1234,50 @@ First real-Quadra-800 run surfaced two display/IO issues:
    MAME is NOT the FPU oracle — `gen_fpu.c` (host IEEE) is, and the TRAP
    rows expect vector 11 from the 68040 manual.
 
+### Finding 33 — boot Sad Mac 0000000F/00000033 was dsBadSlotInt, one bad concat bit (2026-08-28)
+
+The machine boot's Sad Mac at ~2.21G cycles printed `0000000F /
+00000033`. The hand-off read $33 through the exception dispatcher's
+`ID = vector − 1` formula (vector 52 = FPU OPERR) and queued an FPU
+exception-delivery hunt. **The trace refuted it**: a 20.7M-cycle
+`--trace-after` window ending at the Sad Mac entry contains no FPSP
+handler flow at all. The real path (`cpu_trace` tail):
+
+- ROM enables pseudo-VIA slot interrupts (`move.b #$82,($1c13,A0)` =
+  IER set bit 1) once video is up;
+- pseudo-VIA IFR bit 1 (any-slot) is pending — the DAFB VBL — so the
+  autovector handler dispatches to the slot-int service at `$4088BC56`;
+- it reads the per-slot active-low status (pseudo-VIA reg $F / Port A,
+  the `($1e00,A1)` read), finds a LOW bit, maps it to a slot, looks up
+  the slot's handler in the table at `[[$D04]+$40]` — entry is zero —
+  and does `moveq #$33,d0` + `_SysError`. **$33 = 51 = dsBadSlotInt**
+  ("unserviceable slot interrupt"), an explicit SysError, NOT vector−1.
+
+Root cause in `rtl/iosb.sv`: `nubus_irqs = {1'b1, ~vbl_irq, 5'b11111}`
+is a 7-bit concat zero-extended to [7:0], so the DAFB VBL landed on
+**bit 5 = NuBus slot $E** (and bit 7 read 0) instead of **bit 6 =
+internal video** (QEMU `VIA2_NUBUS_IRQ_INTVIDEO`, q800.c wires macfb
+there). The ROM has a handler installed for internal video but slot $E
+is an empty socket → dsBadSlotInt. Fix: `{1'b1, ~vbl_irq, 6'b111111}`.
+QEMU q800 boots the same ROM through this exact sequence with VBL on
+bit 6.
+
+Side discovery while chasing the (wrong) FPU theory, kept for upstream
+AP68040 work — real bugs, NOT this Sad Mac: the core's FSAVE frame
+payloads are one longword low versus the real 040 layout that the ROM
+FPSP's a6-relative equates (Motorola fpsp.h, LOCAL_SIZE=192) address —
+the $30 unimp frame writes 13 longs (52 B) and FRESTORE pops 52, the
+$41/$60 busy frame writes 25 longs (100 B) and pops 100, both
+overrunning their architected 48/96 sizes, and displacing
+STAG/CMDREG1B/DTAG/E-T/FPTEMP/ETEMP by +4 from where fpsp.h equates
+(ETEMP LV-12, FPTEMP LV-24, E_BYTE LV-28 with E1=bit2/E3=bit1, T_BYTE
+LV-27 with TFLAG=bit4, CMDREG1B LV-36, STAG LV-40, CMDREG3B LV-48)
+place them. The ROM's vector-52 handler `$4088D28C` is a compacted
+x_operr port reading exactly those offsets. The fpu corpus (270/270)
+never caught it because its frames were generated against the same
+shifted layout, and "68040 FSAVE/FRESTORE frames" under Open work
+already flags the corpus side.
+
 ## Open work (hardware-iterated)
 
 - **MMU live/fault runner.** `mmu_bench_main.c` runs the register-mask +

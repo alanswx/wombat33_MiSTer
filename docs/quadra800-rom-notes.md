@@ -224,6 +224,20 @@ instruction and should not trap — but it is the last `$Fxxx` we execute,
 and a variant with `PFLUSHA` removed still produced the same Sad Mac.
 The obvious experiment is a boot block with the `CPUSHA` pair removed.
 
+## Caution: not every Sad Mac code is `vector − 1`
+
+The dispatcher formula above covers exceptions that arrive through the
+BSR table. System Error IDs also arrive via **explicit `_SysError`
+($A9C9) calls** with the ID in D0 — same `DSErrCode` store at
+`$40802786`, same Sad Mac, no exception vector involved. Seen in the
+wild: the slot-interrupt service at `$4088BC56` reads the pseudo-VIA
+per-slot status (reg $F, active-low), and an asserting slot with no
+handler installed in the table at `[[$D04]+$40]` ends at `$40806F10`:
+`moveq #$33,d0` + `_SysError` — **$33 = 51 = dsBadSlotInt**, which
+reads deceptively like "vector 52 − 1" but is nothing of the sort
+(finding 33). Decode a Sad Mac second line by finding who STORED it,
+not by arithmetic alone.
+
 ## Useful low-memory globals seen in this path
 
 | Address | Name | Use |

@@ -332,7 +332,7 @@ end
 //----------------------------------------------------------------------------
 reg  [7:0] via2_ifr;      // bit 7 = summary, computed below
 reg  [7:0] via2_ier;
-wire [7:0] nubus_irqs = {1'b1, ~vbl_irq, 5'b11111};   // bit 6 = DAFB VBL
+wire [7:0] nubus_irqs = {1'b1, ~vbl_irq, 6'b111111};  // bit 6 = internal video (QEMU VIA2_NUBUS_IRQ_INTVIDEO); 5:0 = slots E..9 idle
 wire       slot_any   = (nubus_irqs & 8'h79) != 8'h79;
 
 reg vbl_d, scsi_d, drq_d, asc_d, slot_d;
