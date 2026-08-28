@@ -48,6 +48,19 @@ module emu
 	input  [7:0]  ioctl_index,
 	output reg    ioctl_wait = 1'b0,
 
+	// SCSI disk: MiSTer block-device surface for sim_blkdevice.cpp
+	output [31:0] sd_lba0,
+	output        sd_rd,
+	output        sd_wr,
+	input         sd_ack,
+	input   [7:0] sd_buff_addr,
+	input  [15:0] sd_buff_dout,
+	output [15:0] sd_buff_din0,
+	input         sd_buff_wr,
+	input         img_mounted,
+	input         img_readonly,
+	input  [63:0] img_size,
+
 	// CPU debug taps
 	output [31:0] debug_pc,        // fetch pointer (debug_status pc)
 	output [15:0] debug_opcode,    // current IR
@@ -111,6 +124,17 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 
 	.AUDIO_L(AUDIO_L),
 	.AUDIO_R(AUDIO_R),
+
+	.img_mounted(img_mounted),
+	.img_size(img_size),
+	.io_lba(sd_lba0),
+	.io_rd(sd_rd),
+	.io_wr(sd_wr),
+	.io_ack(sd_ack),
+	.sd_buff_addr(sd_buff_addr),
+	.sd_buff_dout(sd_buff_dout),
+	.sd_buff_din(sd_buff_din0),
+	.sd_buff_wr(sd_buff_wr),
 
 	.dbg_berr(debug_berr),
 	.dbg_berr_addr(debug_data_addr),

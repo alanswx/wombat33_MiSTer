@@ -56,6 +56,18 @@ module quadra800
 	output signed [15:0] AUDIO_L,
 	output signed [15:0] AUDIO_R,
 
+	// SCSI disk block device
+	input         img_mounted,
+	input  [63:0] img_size,
+	output [31:0] io_lba,
+	output        io_rd,
+	output        io_wr,
+	input         io_ack,
+	input   [7:0] sd_buff_addr,
+	input  [15:0] sd_buff_dout,
+	output [15:0] sd_buff_din,
+	input         sd_buff_wr,
+
 	// debug
 	output            dbg_berr,
 	output     [31:0] dbg_berr_addr,
@@ -195,7 +207,18 @@ iosb iosb (
 	.ipl_n(ipl_n),
 
 	.audio_l(AUDIO_L),
-	.audio_r(AUDIO_R)
+	.audio_r(AUDIO_R),
+
+	.img_mounted(img_mounted),
+	.img_size(img_size),
+	.io_lba(io_lba),
+	.io_rd(io_rd),
+	.io_wr(io_wr),
+	.io_ack(io_ack),
+	.sd_buff_addr(sd_buff_addr),
+	.sd_buff_dout(sd_buff_dout),
+	.sd_buff_din(sd_buff_din),
+	.sd_buff_wr(sd_buff_wr)
 );
 
 //----------------------------------------------------------------------------

@@ -27,6 +27,7 @@
 #include "sim_input.h"
 #include "sim_clock.h"
 #include "sim_audio.h"
+#include "sim_blkdevice.h"
 #include "implot.h"
 #include "m68k_dasm.h"
 
@@ -95,6 +96,8 @@ double sc_time_stamp() { return main_time; }
 
 SimClock clk_sys(1);
 SimAudio audio(33000000, false);
+SimBlockDevice blockdevice(console);
+std::string scsi_disk_file;      // --disk <path> mounts on SCSI ID 0
 
 DebugConsole console;
 const char* windowTitle = "wombat33 sim";
@@ -126,8 +129,12 @@ int verilate() {
 			((opt_tvmode & 1) << 2) | ((opt_noise & 3) << 3);
 
 		if (clk_sys.clk != clk_sys.old) {
-			if (clk_sys.clk) input.BeforeEval();
+			if (clk_sys.clk) {
+				input.BeforeEval();
+				if (!scsi_disk_file.empty()) blockdevice.BeforeEval(main_time);
+			}
 			top->eval();
+			if (clk_sys.clk && !scsi_disk_file.empty()) blockdevice.AfterEval();
 			if (clk_sys.clk && !VERTOPINTERN->reset) {
 				machine_events();
 				if (!cpu_trace_disabled && main_time >= trace_after) cpu_trace_step();
@@ -270,6 +277,8 @@ int main(int argc, char** argv, char** env) {
 			trace_after = strtoull(argv[++i], nullptr, 0);
 		} else if (!strcmp(argv[i], "--stop-at-pc") && i + 1 < argc) {
 			sscanf(argv[++i], "%x,%x", &stop_pc_lo, &stop_pc_hi);
+		} else if (!strcmp(argv[i], "--disk") && i + 1 < argc) {
+			scsi_disk_file = argv[++i];
 		} else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) {
 			screenshot_mode = true;
 			std::stringstream ss(argv[++i]);
@@ -306,6 +315,19 @@ int main(int argc, char** argv, char** env) {
 	VERTOPINTERN->ioctl_dout = 0;
 	VERTOPINTERN->ioctl_index = 0;
 	top->eval();
+
+	blockdevice.sd_lba[0]      = &VERTOPINTERN->sd_lba0;
+	blockdevice.sd_rd          = &VERTOPINTERN->sd_rd;
+	blockdevice.sd_wr          = &VERTOPINTERN->sd_wr;
+	blockdevice.sd_ack         = &VERTOPINTERN->sd_ack;
+	blockdevice.sd_buff_addr   = &VERTOPINTERN->sd_buff_addr;
+	blockdevice.sd_buff_dout   = &VERTOPINTERN->sd_buff_dout;
+	blockdevice.sd_buff_din[0] = &VERTOPINTERN->sd_buff_din0;
+	blockdevice.sd_buff_wr     = &VERTOPINTERN->sd_buff_wr;
+	blockdevice.img_mounted    = &VERTOPINTERN->img_mounted;
+	blockdevice.img_readonly   = &VERTOPINTERN->img_readonly;
+	blockdevice.img_size       = &VERTOPINTERN->img_size;
+	if (!scsi_disk_file.empty()) blockdevice.MountDisk(scsi_disk_file, 0);
 
 	input.Initialise();
 	if (!headless) {

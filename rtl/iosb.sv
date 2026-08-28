@@ -41,7 +41,19 @@ module iosb
 	output  [2:0] ipl_n,           // active-low to the CPU
 
 	output signed [15:0] audio_l,
-	output signed [15:0] audio_r
+	output signed [15:0] audio_r,
+
+	// SCSI disk on the MiSTer block-device interface
+	input         img_mounted,
+	input  [63:0] img_size,
+	output [31:0] io_lba,
+	output        io_rd,
+	output        io_wr,
+	input         io_ack,
+	input   [7:0] sd_buff_addr,
+	input  [15:0] sd_buff_dout,
+	output [15:0] sd_buff_din,
+	input         sd_buff_wr
 );
 
 //----------------------------------------------------------------------------
@@ -157,6 +169,8 @@ wire       slot_any   = (nubus_irqs & 8'h79) != 8'h79;
 reg vbl_d, scsi_d, drq_d, asc_d, slot_d;
 wire via2_active = |(via2_ifr[6:0] & via2_ier[6:0] & 7'h1b);
 wire [7:0] via2_ifr_r = {via2_active, via2_ifr[6:0]};
+wire scsi_irq_i = scsi_irq | ncr_irq;
+wire scsi_drq_i = scsi_drq | ncr_drq;
 
 //----------------------------------------------------------------------------
 // IOSB config registers: 16-bit scratch at 256-byte strides, readback only
@@ -182,8 +196,54 @@ wire sel_via2   = in_low && (addr[19:13] == 7'b0000001);
 wire sel_regs   = in_low && (addr[19:13] == 7'b0001100);
 wire sel_djmemc = in_low && (addr[19:13] == 7'b0000111);   // $E000-$FFFF
 wire sel_asc    = in_low && (addr[19:12] == 8'h14);
+wire sel_scsi   = in_low && (addr[19:8] == 12'h100);   // 53C96 regs, 16-byte strides
+wire sel_sdma   = in_low && (addr[19:8] == 12'h101);   // Turbo SCSI pseudo-DMA
 wire sel_id     = (addr[27:16] == 12'hFFF);
 wire [3:0] rsel = addr[12:9];
+
+//----------------------------------------------------------------------------
+// NCR 53C96 + Turbo SCSI pseudo-DMA
+//----------------------------------------------------------------------------
+wire       scsi_strobe = ce && (astate == A_IDLE) && sel && !ack && sel_scsi;
+wire [7:0] ncr_rdata;
+reg        sdma_rd, sdma_wr;
+wire [7:0] sdma_rbyte;
+reg  [7:0] sdma_wbyte;
+wire       sdma_valid;
+wire       ncr_irq, ncr_drq;
+reg  [2:0] sdma_left;              // bytes still to move in this beat
+reg [31:0] sdma_shift;
+
+ncr53c96 #(.DISK_ID(0)) scsi (
+	.clk(clk),
+	.nreset(nreset),
+	.ce(ce),
+
+	.sel(scsi_strobe),
+	.write(write),
+	.rs(addr[7:4]),
+	.wdata(wbyte),
+	.rdata(ncr_rdata),
+
+	.dma_rd(sdma_rd),
+	.dma_wr(sdma_wr),
+	.dma_wdata(sdma_wbyte),
+	.dma_rdata(sdma_rbyte),
+	.dma_valid(sdma_valid),
+	.drq(ncr_drq),
+	.irq(ncr_irq),
+
+	.img_mounted(img_mounted),
+	.img_size(img_size),
+	.io_lba(io_lba),
+	.io_rd(io_rd),
+	.io_wr(io_wr),
+	.io_ack(io_ack),
+	.sd_buff_addr(sd_buff_addr),
+	.sd_buff_dout(sd_buff_dout),
+	.sd_buff_din(sd_buff_din),
+	.sd_buff_wr(sd_buff_wr)
+);
 
 //----------------------------------------------------------------------------
 // EASC wavetable voice (the boot chime); FIFO mode is a later stage
@@ -212,8 +272,9 @@ wire [7:0] wbyte = be[3] ? wdata[31:24] :
                    be[2] ? wdata[23:16] :
                    be[1] ? wdata[15:8]  : wdata[7:0];
 
-localparam A_IDLE = 2'd0, A_VIA = 2'd1, A_CAPTURE = 2'd2;
+localparam A_IDLE = 2'd0, A_VIA = 2'd1, A_CAPTURE = 2'd2, A_SDMA = 2'd3;
 reg [1:0] astate;
+reg       sdma_word2;              // 16-bit pseudo-DMA beat (else 32-bit)
 
 always @(posedge clk) begin
 	if (!nreset) begin
@@ -230,15 +291,17 @@ always @(posedge clk) begin
 		for (int j = 0; j < 16; j = j + 1) djmemc_regs[j] <= 32'd0;
 		for (int j = 0; j < 32; j = j + 1) iosb_regs[j] <= 16'd0;
 		iosb_regs[0] <= 16'd1;               // IOSB_CONFIG: BCLK 33 MHz (QEMU)
+		sdma_rd <= 0; sdma_wr <= 0; sdma_left <= 0;
+		sdma_shift <= 0; sdma_wbyte <= 0; sdma_word2 <= 0;
 	end
 	else if (ce) begin
 		ack <= 0;
 
 		// interrupt line edges latch into the pseudo-VIA IFR
-		vbl_d <= vbl_irq; scsi_d <= scsi_irq; drq_d <= scsi_drq;
+		vbl_d <= vbl_irq; scsi_d <= scsi_irq_i; drq_d <= scsi_drq_i;
 		asc_d <= asc_irq; slot_d <= slot_any;
-		if (scsi_irq != scsi_d) via2_ifr[3] <= scsi_irq;
-		if (scsi_drq != drq_d)  via2_ifr[0] <= scsi_drq;
+		if (scsi_irq_i != scsi_d) via2_ifr[3] <= scsi_irq_i;
+		if (scsi_drq_i != drq_d)  via2_ifr[0] <= scsi_drq_i;
 		if (slot_any != slot_d) via2_ifr[1] <= slot_any;
 		if (asc_irq && !asc_d)  via2_ifr[4] <= 1'b1;
 
@@ -292,6 +355,20 @@ always @(posedge clk) begin
 					else       rdata <= djmemc_regs[addr[5:2]];
 				end
 				else if (sel_asc) rdata <= asc_rdata;   // writes strobe asc_stb
+				else if (sel_scsi) rdata <= {4{ncr_rdata}};  // scsi_strobe fires
+				else if (sel_sdma) begin
+					// pseudo-DMA beat: hold off the ack until the chip has
+					// moved every byte (the real IOSB holds /DTACK on !DRQ;
+					// a wedged transfer ends in the CPU watchdog's berr)
+					ack        <= 0;
+					sdma_word2 <= !(be == 4'b1111);
+					sdma_left  <= (be == 4'b1111) ? 3'd4 : 3'd2;
+					sdma_shift <= wdata;
+					sdma_wbyte <= wdata[31:24];
+					sdma_rd    <= ~write;
+					sdma_wr    <= write;
+					astate     <= A_SDMA;
+				end
 				else if (sel_id) rdata <= 32'hA55A2BAD;
 				else rdata <= 32'h0;             // inert device space
 			end
@@ -306,6 +383,21 @@ always @(posedge clk) begin
 			rdata  <= {4{via1_dout}};
 			ack    <= 1;
 			astate <= A_IDLE;
+		end
+		A_SDMA: if (sdma_valid) begin
+			if (sdma_left == 3'd1) begin
+				sdma_rd <= 0;
+				sdma_wr <= 0;
+				ack     <= 1;
+				rdata   <= sdma_word2 ? {sdma_shift[7:0], sdma_rbyte, 16'h0}
+				                      : {sdma_shift[23:0], sdma_rbyte};
+				astate  <= A_IDLE;
+			end
+			else begin
+				sdma_shift <= {sdma_shift[23:0], sdma_rbyte};
+				sdma_wbyte <= sdma_shift[23:16];
+				sdma_left  <= sdma_left - 1'b1;
+			end
 		end
 		endcase
 	end

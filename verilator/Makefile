@@ -46,6 +46,7 @@ V_SRC = \
 	$(RTL)/dafb.sv \
 	$(RTL)/rtc3430042.sv \
 	$(RTL)/asc_wavetable.sv \
+	$(RTL)/ncr53c96.sv \
 	$(AP)/ap040_core.v \
 	$(AP)/ap040_bus_timeout.v \
 	$(AP)/ap040_regfile.v \
@@ -59,7 +60,7 @@ V_SRC = \
 C_SRC = \
 	sim_main.cpp \
 	sim/sim_console.cpp sim/sim_video.cpp sim/sim_input.cpp sim/sim_clock.cpp \
-	sim/sim_audio.cpp \
+	sim/sim_audio.cpp sim/sim_blkdevice.cpp \
 	sim/m68kdasm.c sim/m68k_dasm_stubs.cpp \
 	sim/imgui/imgui_impl_sdl.cpp sim/imgui/imgui_impl_opengl2.cpp \
 	sim/imgui/imgui_draw.cpp sim/imgui/imgui_widgets.cpp \
