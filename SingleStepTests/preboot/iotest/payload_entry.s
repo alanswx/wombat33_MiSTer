@@ -24,7 +24,7 @@ _payload_start:
     move.l  #0x00100000, %sp              | 1 MB high — generous stack
 
     | --- Load handoff slot ($00050000: refnum word, drive word) ---
-    move.w  0x00050000.l, %d0
+    move.w  0x00080000.l, %d0
     move.w  %d0, g_handoff_refnum
     move.w  0x00050002.l, %d0
     move.w  %d0, g_handoff_drive

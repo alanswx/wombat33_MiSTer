@@ -16,7 +16,7 @@ TEMPLATE="${1:-$HOME/testdisk.hda}"
 OUT="${2:-/tmp/mmubench.hda}"
 BUILD=build
 BOOT="$BUILD/boot_stub_patch.bin"
-PAYLOAD="$BUILD/payload_mmu_scsi.bin"
+PAYLOAD="${MMU_PAYLOAD:-$BUILD/payload_mmu_scsi.bin}"
 RESULTS_SIZE=409600          # must be >= g_results_max_bytes in variant_cpu_scsi.s
 IMG="${OUT}@1"
 

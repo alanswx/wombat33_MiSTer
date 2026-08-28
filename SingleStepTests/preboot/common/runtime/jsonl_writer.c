@@ -33,14 +33,16 @@ extern void use_os_vbr(void)       __attribute__((weak));
 extern void use_recovery_vbr(void) __attribute__((weak));
 
 /* Single-sector _Write at byte offset (ctx.base_offset + sector_idx * 512).
- * Returns ioResult (0 = noErr). Inline asm calls $A003 _Write. */
-static i16 driver_write_sector(const JwCtx *ctx, u32 sector_idx, const u8 *buf)
+ * Returns ioResult (0 = noErr). Inline asm calls $A003 _Write.
+ * Batches above 16 KB are sliced into 16 KB driver requests (see the
+ * JW_BATCH_BYTES note below) by the wrapper at the end of this block. */
+static i16 driver_write_chunk(const JwCtx *ctx, u32 byte_off, const u8 *buf, u32 len)
 {
 #ifdef JW_NO_WRITE
     /* Diagnostic build: skip the SCSI _Write entirely so we can confirm
      * whether the bench freeze is the disk write (runs to completion with
      * this defined => yes) or a CPU hang in a test (still freezes => no). */
-    (void)ctx; (void)sector_idx; (void)buf;
+    (void)ctx; (void)byte_off; (void)buf; (void)len;
     return 0;
 #else
     u8 *pb = g_pb;
@@ -49,9 +51,9 @@ static i16 driver_write_sector(const JwCtx *ctx, u32 sector_idx, const u8 *buf)
     *(i16 *)(pb + PB_OFF_IOREFNUM)   = ctx->refnum;
     *(i16 *)(pb + PB_OFF_IOVREFNUM)  = ctx->drive;
     *(u32 *)(pb + PB_OFF_IOBUFFER)   = (u32)buf;
-    *(u32 *)(pb + PB_OFF_IOREQCOUNT) = JW_BATCH_BYTES;
+    *(u32 *)(pb + PB_OFF_IOREQCOUNT) = len;
     *(i16 *)(pb + PB_OFF_IOPOSMODE)  = 1;     /* fsFromStart */
-    *(u32 *)(pb + PB_OFF_IOPOSOFFSET) = ctx->base_offset + (u32)sector_idx * JW_BATCH_BYTES;
+    *(u32 *)(pb + PB_OFF_IOPOSOFFSET) = byte_off;
 
     /* 68040 cache coherency: the buffer and param block were filled
      * through the copyback data cache, but the Quadra 800's SCSI does
@@ -85,6 +87,20 @@ static i16 driver_write_sector(const JwCtx *ctx, u32 sector_idx, const u8 *buf)
     return *(i16 *)(pb + PB_OFF_IORESULT);
 #endif
 }
+
+static i16 driver_write_sector(const JwCtx *ctx, u32 sector_idx, const u8 *buf)
+{
+    u32 base = ctx->base_offset + sector_idx * JW_BATCH_BYTES;
+    u32 off = 0;
+    while (off < JW_BATCH_BYTES) {
+        u32 len = JW_BATCH_BYTES - off;
+        if (len > 16384) len = 16384;
+        i16 r = driver_write_chunk(ctx, base + off, buf + off, len);
+        if (r != 0) return r;
+        off += len;
+    }
+    return 0;
+}
 #endif /* JW_BACKEND_EXTERN */
 
 void jw_init(JsonlWriter *w, const JwCtx *ctx)
@@ -105,6 +121,13 @@ static void write_current_batch(JsonlWriter *w)
     i16 r = driver_write_sector(&w->ctx, batch_idx, w->sector);
     if (r != 0 && w->last_err == 0) w->last_err = r;
 }
+
+#if JW_BATCH_BYTES > 16384
+/* Big-batch builds only: a single pre-System _Write above 16 KB drives
+ * the ROM Device Manager into a queued path whose low-mem structures
+ * are still boot-fill ($FFFFFFFF) -> Enqueue faults -> Sad Mac. Slice
+ * every batch into <=16 KB requests, the size every bench has proven. */
+#endif
 
 static void flush_sector(JsonlWriter *w)
 {

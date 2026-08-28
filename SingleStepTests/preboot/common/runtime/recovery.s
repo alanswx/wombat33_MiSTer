@@ -249,6 +249,13 @@ install_recovery_traps:
 | common recovery_core.
     .macro RSTUB n
 recovery_stub_v\n:
+    | MMU builds: translation may still be on (live-row faults) and the
+    | post-fault MMU state is untrusted -- kill TC before ANY data access.
+    | D0 is dead here: crashed rows never reach the register dump.
+    .ifdef MMU_RECOVERY
+    moveq   #0, %d0
+    .short  0x4E7B, 0x0003
+    .endif
     move.l  #\n, g_last_vector
     bra     recovery_core
     .endm

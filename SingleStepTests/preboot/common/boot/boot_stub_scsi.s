@@ -169,7 +169,7 @@ PAYLOAD_CKSUM_BYTES   = 0x1E000         | 122880 bytes
 | Until then --defsym HANDOFF_ADDR=... lets a boot block be rebuilt to
 | match whatever an already-built payload expects.
 .ifndef HANDOFF_ADDR
-HANDOFF_ADDR          = 0x00050000
+HANDOFF_ADDR          = 0x00080000
 .endif
 
 | DrvQHdr / DrvQEl

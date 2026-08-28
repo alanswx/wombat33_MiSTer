@@ -77,6 +77,8 @@ $(BUILD):
 # ---------- Shared runtime objects (from preboot/common) ----------
 $(BUILD)/jsonl_writer.o: $(COMMON_RUNTIME)/jsonl_writer.c | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
+$(BUILD)/jsonl_writer_48k.o: $(COMMON_RUNTIME)/jsonl_writer.c | $(BUILD)
+	$(CC) $(CFLAGS) -DJW_BATCH_BYTES=49152 -c -o $@ $<
 $(BUILD)/freestanding.o: $(COMMON_RUNTIME)/freestanding.c | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 $(BUILD)/eject.o: $(COMMON_RUNTIME)/eject.c $(COMMON_RUNTIME)/eject.h | $(BUILD)
@@ -147,8 +149,11 @@ $(BUILD)/recovery_mmu.o: $(COMMON_RUNTIME)/recovery.s | $(BUILD)
 	$(AS) $(ASFLAGS) --defsym MMU_RECOVERY=1 -o $@ $<
 $(BUILD)/mmu_bench_main.o: mmu_bench_main.c ../../gen/mmu_tests.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
+# 48K batch: the whole full-MMU run buffers in RAM and flushes ONCE at the
+# end, after mmu_restore() — mid-corpus SCSI writes must not run on test
+# MMU state, and MAME cannot emulate the alternative (finding 24).
 $(BUILD)/mmu_bench_main_full.o: mmu_bench_main.c ../../gen/mmu_tests.h | $(BUILD)
-	$(CC) $(CFLAGS) -DMMU_FULL -c -o $@ $<
+	$(CC) $(CFLAGS) -DMMU_FULL -DJW_BATCH_BYTES=49152 -c -o $@ $<
 # Display kernel with runtime ScrnRow stride detection (see common.mk
 # VIDEO_VARIANT=auto). Built explicitly here so one make run can link
 # both the fixed-stride and auto payloads.
@@ -271,8 +276,9 @@ $(BUILD)/payload_mmu_scsi.elf: $(MMU_BASE_OBJS) $(BUILD)/mmu_bench_main.o $(BUIL
 	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(MMU_BASE_OBJS) $(BUILD)/mmu_bench_main.o $(BUILD)/font_ascii.o
 $(BUILD)/payload_mmu_scsi_auto.elf: $(MMU_BASE_OBJS) $(BUILD)/mmu_bench_main.o $(BUILD)/font_ascii_auto.o $(PAYLOAD_LD)
 	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(MMU_BASE_OBJS) $(BUILD)/mmu_bench_main.o $(BUILD)/font_ascii_auto.o
-$(BUILD)/payload_mmu_full_scsi.elf: $(MMU_BASE_OBJS) $(BUILD)/mmu_bench_main_full.o $(BUILD)/font_ascii.o $(PAYLOAD_LD)
-	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(MMU_BASE_OBJS) $(BUILD)/mmu_bench_main_full.o $(BUILD)/font_ascii.o
+MMU_FULL_OBJS := $(filter-out $(BUILD)/jsonl_writer.o,$(MMU_BASE_OBJS)) $(BUILD)/jsonl_writer_48k.o
+$(BUILD)/payload_mmu_full_scsi.elf: $(MMU_FULL_OBJS) $(BUILD)/mmu_bench_main_full.o $(BUILD)/font_ascii.o $(PAYLOAD_LD)
+	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(MMU_FULL_OBJS) $(BUILD)/mmu_bench_main_full.o $(BUILD)/font_ascii.o
 $(BUILD)/payload_mmu_full_scsi_auto.elf: $(MMU_BASE_OBJS) $(BUILD)/mmu_bench_main_full.o $(BUILD)/font_ascii_auto.o $(PAYLOAD_LD)
 	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(MMU_BASE_OBJS) $(BUILD)/mmu_bench_main_full.o $(BUILD)/font_ascii_auto.o
 

@@ -253,6 +253,13 @@ void bench_main(void) {
     paint_string(16, 18, "of ", 3);    format_decimal(buf, n_run, 4);  paint_string(16, 21, buf, 4);
     jw_flush(w);
 
+    /* Write-path diagnosis: what the writer actually used (finding 24). */
+    paint_string(40, 4, "rn=", 3);
+    format_hex32(buf, (u32)(u16)g_jw_ctx.refnum); paint_string(40, 7, buf+4, 4);
+    paint_string(40, 13, "dr=", 3);
+    format_hex32(buf, (u32)(u16)g_jw_ctx.drive);  paint_string(40, 16, buf+4, 4);
+    paint_string(40, 22, "base=", 5);
+    format_hex32(buf, g_jw_ctx.base_offset);      paint_string(40, 27, buf, 8);
     format_hex32(buf, (u32)(u16)w->last_err);
     paint_string(28, 4, "ioResult=", 9);
     paint_string(28, 13, buf + 4, 4);

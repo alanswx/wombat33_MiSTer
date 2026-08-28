@@ -75,7 +75,7 @@ PAYLOAD_READ_BYTES    = 262144          | 256 KB — comfortable headroom for th
 
 | Slot at $00041000 where the boot block stashes (refnum << 16) | drive
 | for the payload to find. Stable above the payload load area.
-HANDOFF_ADDR          = 0x00050000
+HANDOFF_ADDR          = 0x00080000
 
 | DrvQHdr / DrvQEl
 DRVQHDR_QHEAD         = 0x0000030A

@@ -62,7 +62,84 @@ extern void display_wipe(u32 rows);
  * targets instead of live low memory. */
 static u8 reloc_scratch[64] __attribute__((aligned(16)));
 
-static u8  prog_buffer[256];
+
+#ifdef MMU_FULL
+/* Live-translation world (finding 22 plan): one 4K page replicating the
+ * corpus table page $3000-$3FFF (root @+0, ptr @+$200, page @+$400, and
+ * our harness page table hidden @+$600 so VA-space descriptor edits hit
+ * the live tables), plus dedicated pages for the remap targets and the
+ * fault-frame stack page, plus a catch-all for untouched identity pas. */
+static u8 tbl4k[4096]    __attribute__((aligned(4096)));
+static u8 page1e[4096]   __attribute__((aligned(4096)));
+static u8 page1f[4096]   __attribute__((aligned(4096)));
+static u8 page3f[4096]   __attribute__((aligned(4096)));
+static u8 dontcare[4096] __attribute__((aligned(4096)));
+static u32 g_sp_slot;                 /* bench SP across the live window */
+static u32 g_mmusr_val;               /* MMUSR right after a live row */
+static u32 g_masked_ptr1;             /* corpus-planted ptr[1] for emission */
+
+#define C_ROOT   0x00003000U
+#define C_PTRT   0x00003200U
+#define C_PAGET  0x00003400U
+#define C_TBLPG  0x00003000U
+#define HARNESS_PT_OFF 0x600U
+
+/* corpus physical page -> our buffer (page-aligned pa in, base out) */
+static u8 *reloc_pa_page(u32 pa) {
+    switch (pa) {
+    case 0x00003000U: return tbl4k;
+    case 0x0001E000U: return page1e;
+    case 0x0001F000U: return page1f;
+    case 0x0003F000U: return page3f;
+    default:          return dontcare;
+    }
+}
+/* corpus plant address -> where we actually write it */
+static u8 *reloc_addr(u32 a) {
+    if (a >= 0x3000U && a < 0x4000U)        return tbl4k + (a - 0x3000U);
+    if (a >= 0x1E000U && a < 0x1F000U)      return page1e + (a & 0xFFFU);
+    if (a >= 0x1F000U && a < 0x20000U)      return page1f + (a & 0xFFFU);
+    if (a >= 0x3F000U && a < 0x40000U)      return page3f + (a & 0xFFFU);
+    if (a >= 0x1800U && a < 0x1840U)        return reloc_scratch + (a - 0x1800U);
+    return dontcare + (a & 0xFFFU);
+}
+static void put_be32(u8 *p, u32 v) {
+    p[0]=(u8)(v>>24); p[1]=(u8)(v>>16); p[2]=(u8)(v>>8); p[3]=(u8)v;
+}
+static u32 get_be32(const u8 *p) {
+    return ((u32)p[0]<<24)|((u32)p[1]<<16)|((u32)p[2]<<8)|p[3];
+}
+/* Install plants with descriptor relocation: root/ptr entries carry table
+ * addresses (rebased into tbl4k), page entries carry page pas (rebased via
+ * reloc_pa_page), everything else is raw data. */
+static void install_plants(const MmuTestSpec *t) {
+    int i;
+    f_memset(tbl4k, 0, sizeof(tbl4k));   f_memset(page1e, 0, sizeof(page1e));
+    f_memset(page1f, 0, sizeof(page1f)); f_memset(page3f, 0, sizeof(page3f));
+    f_memset(dontcare, 0, sizeof(dontcare));
+    for (i = 0; i < t->n_plants; i++) {
+        u32 a = t->plants[i].addr, v = t->plants[i].value;
+        if (a >= C_ROOT && a < C_PAGET) {           /* root/ptr: table descs */
+            if ((v & 3U) >= 2U)
+                v = ((u32)tbl4k + ((v & 0xFFFFFF00U) - C_TBLPG)) | (v & 0xFFU);
+        } else if (a >= C_PAGET && a < C_PAGET + 0x100U) {  /* page descs */
+            if ((v & 3U) != 0U)
+                v = (u32)reloc_pa_page(v & 0xFFFFF000U) | (v & 0xFFFU);
+        }
+        put_be32(reloc_addr(a), v);
+    }
+    /* Harness identity map for the payload ($40000..$7FFFF): page table at
+     * tbl4k+$600, hooked in as ptr[1]. Register dumps, the VBR table and
+     * fault-frame vector fetches stay reachable while TC.E=1. The corpus
+     * ptr[1] value is remembered so emitted windows show the planted one. */
+    for (i = 0; i < 64; i++)
+        put_be32(tbl4k + HARNESS_PT_OFF + i*4, (0x40000U + (u32)i*0x1000U) | 1U);
+    g_masked_ptr1 = get_be32(tbl4k + 0x204U);
+    put_be32(tbl4k + 0x204U, ((u32)tbl4k + HARNESS_PT_OFF) | 2U);
+}
+#endif /* MMU_FULL */
+
+static u8  prog_buffer[512];
 static u32 g_d[8], g_a[8];          /* captured GP regs (via state dump) */
 void format_decimal_stub(char *out, u32 v);   /* defined at end of file */
 
@@ -81,6 +158,7 @@ static void cpusha_bc(void) {
 
 /* Save / restore the live OS 68040 MMU registers via MOVEC. */
 typedef struct { u32 tc, itt0, itt1, dtt0, dtt1, urp, srp; } MmuRegs;
+static MmuRegs g_now;                 /* post-test MMU snapshot per row */
 static void mmu_save(MmuRegs *m) {
     asm volatile(
         ".short 0x4E7A,0x0003 \n movel %%d0,%0 \n"   /* MOVEC TC,D0   */
@@ -154,6 +232,67 @@ static u8 *build_program(const MmuTestSpec *t) {
     return prog_buffer;
 }
 
+#ifdef MMU_FULL
+/* Live rows: [GP preload][save SP, SP=va$40000][MMU prologue: URP/SRP/
+ * ITTs/DTTs from the row (urp/srp rebased to tbl4k), PFLUSHA, TC on]
+ * [test bytes][reg dump — still translated, harness map covers it]
+ * [TC off][restore SP][RTS]. Fault rows never reach the dump; recovery
+ * (MMU_RECOVERY) forces TC off on the way out. */
+static u8 *movec_to(u8 *p, u16 ctrl, u32 val) {
+    p = put_w(p, 0x203C); p = put_l(p, val);        /* MOVE.L #val,D0  */
+    p = put_w(p, 0x4E7B); p = put_w(p, ctrl);       /* MOVEC  D0,ctrl  */
+    return p;
+}
+static u8 *build_live_program(const MmuTestSpec *t) {
+    u8 *p = prog_buffer;
+    int n;
+    u32 tbl = (u32)tbl4k;
+
+    for (n = 0; n < 8; n++) { p = put_w(p, (u16)(0x203C | (n<<9))); p = put_l(p, t->d[n]); }
+    for (n = 0; n < 7; n++) { p = put_w(p, (u16)(0x207C | (n<<9))); p = put_l(p, t->a[n]); }
+
+    p = put_w(p, 0x23CF); p = put_l(p, (u32)&g_sp_slot);   /* MOVE.L A7,slot */
+    p = put_w(p, 0x2E7C); p = put_l(p, t->a[7]);           /* MOVEA.L #ssp,A7 */
+
+    p = movec_to(p, 0x0806, tbl);                          /* URP  -> tbl4k  */
+    p = movec_to(p, 0x0807, tbl);                          /* SRP  -> tbl4k  */
+    p = movec_to(p, 0x0005, t->itt1);
+    p = movec_to(p, 0x0006, t->dtt0);
+    p = movec_to(p, 0x0007, t->dtt1);
+    p = movec_to(p, 0x0004, t->itt0);                      /* fetches transparent */
+    p = put_w(p, 0xF518);                                  /* PFLUSHA */
+    p = movec_to(p, 0x0003, t->tc);                        /* translation ON */
+
+    /* Relocate descriptor-shaped IMMEDIATES inside the test bytes: the
+     * ATC rows edit the live page table with a new descriptor baked into
+     * the program (e.g. $0001E001); without this the post-PFLUSH store
+     * punches the CORPUS physical page - the ROM boot heap (finding 24). */
+    {
+        u8 tmp[MMU_TEST_MAX_BYTES];
+        int i2;
+        f_memcpy(tmp, t->test, t->test_len);
+        for (i2 = 0; i2 + 4 <= t->test_len; i2++) {
+            u32 v = get_be32(tmp + i2);
+            u32 pa = v & 0xFFFFF000U, fl = v & 0xFFFU;
+            if ((v & 3U) != 0U && fl <= 0x7FU &&
+                (pa == 0x1E000U || pa == 0x1F000U || pa == 0x9000U ||
+                 pa == 0x3000U  || pa == 0x3F000U))
+                put_be32(tmp + i2, (u32)reloc_pa_page(pa) | fl);
+        }
+        f_memcpy(p, tmp, t->test_len); p += t->test_len;
+    }
+
+    for (n = 0; n < 8; n++) { p = put_w(p, (u16)(0x23C0|n)); p = put_l(p, (u32)&g_d[n]); }
+    for (n = 0; n < 7; n++) { p = put_w(p, (u16)(0x23C8|n)); p = put_l(p, (u32)&g_a[n]); }
+
+    p = put_w(p, 0x7000);                                  /* MOVEQ #0,D0 */
+    p = put_w(p, 0x4E7B); p = put_w(p, 0x0003);            /* TC off      */
+    p = put_w(p, 0x2E79); p = put_l(p, (u32)&g_sp_slot);   /* restore A7  */
+    *p++ = 0x4E; *p++ = 0x75;                              /* RTS */
+    return prog_buffer;
+}
+#endif /* MMU_FULL */
+
 static void write_name(JsonlWriter *w, const char *s) {
     jw_putc(w,'"');
     while (*s) { if (*s=='"'||*s=='\\') jw_putc(w,'\\'); jw_putc(w,*s); s++; }
@@ -163,9 +302,9 @@ static void write_name(JsonlWriter *w, const char *s) {
 static JwCtx g_ctx;
 static JsonlWriter g_w;
 
+static MmuRegs saved;                 /* OS MMU state; fixed address on purpose */
 void bench_main(void) {
     JsonlWriter *w = &g_w;
-    MmuRegs saved;
     int idx;
     u32 n_run = 0, n_skip = 0;
     char buf[16];
@@ -184,6 +323,12 @@ void bench_main(void) {
     /* reloc header so mmu_diff_corpus.py can normalize addresses. */
     jw_putc(w,'{');
     jw_puts(w,"\"reloc\":{\"data\":"); jw_putul(w,(u32)&reloc_scratch[0]);
+#ifdef MMU_FULL
+    jw_puts(w,",\"tbl\":");  jw_putul(w,(u32)tbl4k);
+    jw_puts(w,",\"p1e\":");  jw_putul(w,(u32)page1e);
+    jw_puts(w,",\"p1f\":");  jw_putul(w,(u32)page1f);
+    jw_puts(w,",\"p3f\":");  jw_putul(w,(u32)page3f);
+#endif
     jw_puts(w,"}}\n");
 
     for (idx = 0; idx < MMU_N_TESTS; idx++) {
@@ -193,34 +338,62 @@ void bench_main(void) {
         paint_string(16, 4, "Test ", 5);
         paint_string(16, 16, t->name, 56);
 
-        /* Live-translation and fault rows need a private identity page
-         * table installed around the test (the hardware-iteration TODO);
-         * emit them as skipped for now so the safe rows produce a clean
-         * comparable run. */
+#ifndef MMU_FULL
+        /* Safe build: live-translation and fault rows still need the
+         * private page-table harness; the full build runs them. */
         if (t->mmu_live || t->raises_exception || t->hw_unsafe) {
             n_skip++;
             jw_putc(w,'{'); jw_puts(w,"\"name\":"); write_name(w,t->name);
             jw_puts(w,",\"skipped\":true,\"reason\":\"live-reloc-todo\"}\n");
             continue;
         }
+#endif
 
         f_memset(reloc_scratch, 0, sizeof(reloc_scratch));
         f_memset(g_d, 0, sizeof(g_d)); f_memset(g_a, 0, sizeof(g_a));
 
+#ifdef MMU_FULL
+#ifdef MMU_LIVE_FILTER
+        /* bisection builds: run only live rows whose name starts with the
+         * filter; skip the other live rows entirely (temporary tooling) */
+        if (t->mmu_live && t->name[0] != MMU_LIVE_FILTER) {
+            n_skip++;
+            jw_putc(w,'{'); jw_puts(w,"\"name\":"); write_name(w,t->name);
+            jw_puts(w,",\"skipped\":true,\"reason\":\"bisect\"}\n");
+            continue;
+        }
+#endif
+        if (t->mmu_live) { install_plants(t); build_live_program(t); }
+        else build_program(t);
+#else
         build_program(t);
+#endif
         cpusha_bc();
         vec = (u32)invoke_test_with_recovery(prog_buffer);
         asm volatile ("move.w #0x2700,%%sr" ::: "memory");
+        mmu_save(&g_now);            /* the test's post-MMU state, for the row */
+#ifdef MMU_FULL
+        g_mmusr_val = 0;
+        if (t->mmu_live)
+            asm volatile(".short 0x4E7A,0x0805 \n movel %%d0,%0"
+                         : "=m"(g_mmusr_val) : : "d0","memory");
+        cpusha_bc();   /* invalidate: window reads must see walker writebacks */
+#endif
         n_run++;
 
         /* Emit GP regs, the (relocated) data window, and live MMU regs. */
         {
             MmuRegs now; int i;
-            mmu_save(&now);   /* read-back is non-destructive */
+            now = g_now;      /* captured right after the test ran */
+            u32 mmusr_val = 0;
+#ifdef MMU_FULL
+            mmusr_val = g_mmusr_val;
+#endif
             jw_putc(w,'{');
             jw_puts(w,"\"name\":"); write_name(w,t->name);
             jw_puts(w,",\"vec\":"); jw_putul(w,vec);
-            jw_puts(w,",\"regs_valid\":true,\"final\":{\"d\":[");
+            jw_puts(w, vec==0 ? ",\"regs_valid\":true" : ",\"regs_valid\":false");
+            jw_puts(w,",\"final\":{\"d\":[");
             for (i=0;i<8;i++){ if(i) jw_putc(w,','); jw_putul(w,g_d[i]); }
             jw_puts(w,"],\"a\":[");
             for (i=0;i<8;i++){ if(i) jw_putc(w,','); jw_putul(w, i<7?g_a[i]:0); }
@@ -231,14 +404,43 @@ void bench_main(void) {
             jw_puts(w,",\"dtt1\":"); jw_putul(w,now.dtt1);
             jw_puts(w,",\"urp\":"); jw_putul(w,now.urp);
             jw_puts(w,",\"srp\":"); jw_putul(w,now.srp);
-            jw_puts(w,",\"mmusr\":0}},\"windows\":[{\"base\":");
+            jw_puts(w,",\"mmusr\":"); jw_putul(w,mmusr_val);
+            jw_puts(w,"}},\"windows\":[{\"base\":");
             jw_putul(w, CORPUS_DATA_BASE); jw_puts(w,",\"bytes\":[");
             for (i=0;i<0x40;i++){ if(i) jw_putc(w,','); jw_putul(w,reloc_scratch[i]); }
-            jw_puts(w,"]}]}\n");
+            jw_puts(w,"]}");
+#ifdef MMU_FULL
+            if (t->mmu_live) {
+                static const u32 WBASE[] = { 0x00003000U, 0x00003200U,
+                    0x00003400U, 0x0001E000U, 0x0001F000U, 0x0003FFA0U };
+                static const u32 WLEN[]  = { 0x20, 0x20, 0x100, 0x40, 0x40, 0x60 };
+                int wi;
+                for (wi = 0; wi < 6; wi++) {
+                    const u8 *src = reloc_addr(WBASE[wi]);
+                    u32 len = WLEN[wi], j;
+                    jw_puts(w,",{\"base\":"); jw_putul(w,WBASE[wi]);
+                    jw_puts(w,",\"bytes\":[");
+                    for (j=0;j<len;j++){
+                        u8 b = src[j];
+                        /* ptr window: show the corpus-planted ptr[1], not our
+                         * harness hook. */
+                        if (WBASE[wi]==0x3200U && j>=4 && j<8)
+                            b = (u8)(g_masked_ptr1 >> (8*(3-(j-4))));
+                        if (j) jw_putc(w,',');
+                        jw_putul(w,b);
+                    }
+                    jw_puts(w,"]}");
+                }
+            }
+#endif
+            jw_puts(w,"]}\n");
         }
     }
 
     mmu_restore(&saved);
+    /* Live rows left test-table entries in the ATC; flush before the OS
+     * translation the restore just re-enabled walks anything (fnd 24). */
+    asm volatile (".short 0xF518" ::: "memory");
     jw_flush(w);
 
     display_wipe(480);

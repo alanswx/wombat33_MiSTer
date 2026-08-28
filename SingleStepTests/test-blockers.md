@@ -710,6 +710,61 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     carries the wrong boot block (a hardware stub under MAME shows the
     ROM boot-scanner screen: the finding-11 low-memory wipe).
 
+24. **The MMU live-translation harness (MMU_FULL) — built, QEMU-green,
+    and the debugging trail behind it (2026-08-28).** All 24 MMU rows
+    now run: `make mmu_full` relocates the corpus's 4K-page world into
+    payload buffers — one 4K block replicating corpus page `$3000`
+    (root @+0, ptr @+$200, page table @+$400, and our harness page
+    table hidden @+$600 so VA-space descriptor edits hit the live
+    tables), dedicated pages for `$1E000`/`$1F000` (remap targets) and
+    `$3F000` (fault frames), a catch-all page for untouched identity
+    pas — rewrites descriptor address fields (plants AND
+    descriptor-shaped immediates inside test bytes: the ATC rows edit
+    the live table with a baked `$0001E001`), hooks `ptr[1]` to an
+    identity map of the payload so register dumps and vector fetches
+    work under translation (masked out of emitted windows), and wraps
+    each live row in a MOVEC prologue (row URP/SRP rebased, PFLUSHA,
+    TC on) and epilogue (dump-then-TC-off, SP juggled to the corpus VA
+    stack so fault frames land in the compared window).
+    `recovery.s` stubs now kill TC before any data access in
+    MMU_RECOVERY builds. Emission: seven corpus-based windows per live
+    row, real MMUSR, honest `regs_valid`. The full run buffers in a
+    48K batch and flushes once at the end (a single pre-System `_Write`
+    above 16 KB drives the ROM Device Manager into a queued path whose
+    low-mem structures are still boot-fill `$FFFFFFFF` -> Enqueue
+    faults; the writer also now slices any batch into <=16 KB driver
+    requests).
+
+    **QEMU (primary oracle): 24/24 rows, deliberate faults recover as
+    vec 2, PTESTR/PTESTW return real walk results (MMUSR `$58001` /
+    `$58005` = relocated page | resident/WP).** Baseline flag-byte
+    comparison: 49 comparable bytes match; the 7 divergences are
+    oracle artifacts, not harness bugs — (a) the ATC-staleness row:
+    **MAME models no ATC** (its "stale" store re-walked and hit the
+    NEW page; QEMU's hit the OLD page and left the edited descriptor
+    unwalked — architecturally correct; silicon adjudicates), and (b)
+    the capture ran vectors at VA 0, so its fault rows set U on
+    page[0]; our VBR lives in the payload. MAME cannot host the full
+    bench at all (unhandled-PFLUSHA instruction storms, the
+    fragile pre-System Enqueue) — MMU-full is QEMU/hardware territory,
+    like the integration-corpus tail (finding 23).
+
+    **The wedge that ate the debugging day: finding 10's landmine
+    detonated.** The full payload's .bss (20K page buffers + 48K
+    batch) grew past `$50000` = HANDOFF_ADDR, so the entry shim's
+    .bss zero-loop wiped the boot block's handoff before the bench
+    read it -> `_Write` to refnum 0 -> the Device Manager walked a
+    boot-fill queue pointer (`ea=$FFFFFFFF`, Enqueue at `$40809948`)
+    -> Sad Mac `0F/01` on QEMU. Diagnosed via QEMU `-d int,cpu`
+    register capture at the fault (the writer ctx showed
+    refnum=0/drive=0 with correct base/max). **HANDOFF_ADDR moved to
+    `$00080000`** (finding 10's prescribed cure) in all eight
+    boot-stub/payload-entry sites in one commit; the payload stack at
+    `$80000` predecrements so the slot itself is never touched.
+    Hardware verdict on the new address pending (the integration
+    benches' on-hardware write failures are under live diagnosis with
+    a build that paints the writer's refnum/drive/base + ioResult).
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local

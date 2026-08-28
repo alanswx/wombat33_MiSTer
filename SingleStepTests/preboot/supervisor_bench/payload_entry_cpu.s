@@ -29,7 +29,7 @@ SCRNROW  = 0x00000106
 | Handoff slot written by the boot block: refnum word, drive word.
 | Must match HANDOFF_ADDR in common/boot/boot_stub_scsi.s — see the
 | long comment there before changing it.
-HANDOFF_ADDR = 0x00050000
+HANDOFF_ADDR = 0x00080000
 
     .text
     .global _payload_start

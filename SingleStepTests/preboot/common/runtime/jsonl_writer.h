@@ -15,7 +15,9 @@ typedef struct {
 /* 16 KB batches drop the _Write call count by ~32x, which keeps us
  * well under the SCSI driver's "too many rapid calls" threshold we
  * hit at ~227 single-sector writes. Must be a multiple of 512. */
-#define JW_BATCH_BYTES (16 * 1024)
+#ifndef JW_BATCH_BYTES
+#define JW_BATCH_BYTES (16 * 1024)   /* overridable: -DJW_BATCH_BYTES=... */
+#endif
 
 typedef struct {
     JwCtx ctx;
