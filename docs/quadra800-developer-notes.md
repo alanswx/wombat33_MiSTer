@@ -233,3 +233,55 @@ with a stale termination decision.
 
 For all four, the 1 MB ROM image is the authority. Disassembling its
 mount and boot-block path is more reliable than any secondary source.
+
+## 13. Apple SCSI is pseudo-DMA, and bus errors are *normal*
+
+Not in the Developer Note — from NetBSD's `sys/arch/mac68k/obio/esp.c`,
+the mac68k driver for this exact 53C96. Quoted because it reframes what
+a fault during a SCSI transfer means:
+
+> "Apple 'DMA' is weird. Basically, **the CPU acts like the DMA
+> controller**. The DREQ/ off the chip goes to a register that we've
+> mapped at attach time (on the IOSB or DAFB, depending on the machine).
+> Apple also provides some space for which the memory controller
+> handshakes data to/from the NCR chip with the DACK/ line."
+
+> "When you're attempting to read or write memory to this DACK/ed space,
+> and the NCR is not ready for some timeout period, **the system will
+> generate a bus error**. This might be for one of several reasons:
+> 1) (on write) **The FIFO is full and is not draining.**
+> 2) (on read) The FIFO is empty and is not filling.
+> 3) An interrupt condition has occurred."
+
+> "So if a bus error occurs, we first turn off the nofault bus error
+> handler, then we check for an interrupt... If there's no interrupt,
+> check for a DREQ/. If we have that, then attempt to resume stuffing
+> (or unstuffing) the FIFO."
+
+> "**NOTE!!! In order to make allowances for the hardware structure of
+> the mac, spl values in here are hardcoded!!!** This is done to **allow
+> serial interrupts to get in during scsi transfers.**"
+
+NetBSD's recovery loop drops to `spl2()` then back to `splhigh()` inside
+the bus-error handler explicitly to let interrupts land.
+
+**Why this matters to the bench.** Three consequences:
+
+1. There is **no real DMA engine**. The CPU moves every byte through a
+   handshake window. So "flush the cache before the DMA reads our
+   buffer" is the wrong mental model — and the cache-flush theories built
+   on it were aimed at something that does not exist.
+2. **A bus error mid-transfer is expected behaviour**, not a crash. The
+   driver installs a temporary bus-error handler and resumes. Anything
+   that disturbs bus-error handling during a `_Write` — a swapped VBR, a
+   replaced vector 2, an exception frame the handler does not expect —
+   breaks the driver's own recovery path.
+3. **Interrupts must be able to get in during a transfer.** The bench
+   runs the write at IPL 7.
+
+The write path is the one place the bench both replaces the vector table
+(`recovery.s`) and masks interrupts, which is exactly the combination
+this driver cannot tolerate. `use_os_vbr()` restores the ROM's table
+around the call, but the ROM's PDMA recovery may need more than the
+vector — and the 68040 access-error frame is not the frame the older
+code was written against (see §5).
