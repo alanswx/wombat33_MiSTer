@@ -38,6 +38,9 @@ wire [31:0] walker_addr, walker_wdat;
 
 reg         mem_ready;
 wire        clkena_in = (busstate == 2'b01) | mem_ready;
+reg         walker_ack_r;
+reg  [31:0] walker_data_r;
+reg         walker_armed;
 
 ap040_tg68k_compat dut
 (
@@ -73,8 +76,8 @@ ap040_tg68k_compat dut
     .walker_we(walker_we),
     .walker_addr(walker_addr),
     .walker_wdat(walker_wdat),
-    .walker_ack(1'b0),            // corpus never enables translation
-    .walker_data(32'd0),
+    .walker_ack(walker_ack_r),
+    .walker_data(walker_data_r),
     .walker_berr(1'b0),
     .cache_req(),
     .cache_addr(),
@@ -108,15 +111,45 @@ wire ram_sel = (addr_out < 32'h00400000);
 assign data_in = ram_sel ? mem[addr_out[21:1]] : 16'h0000;
 
 integer result;      // 0 running, 1 done
-integer cycles;
+longint cycles;
 reg [1023:0] prog_file;
 reg [1023:0] results_file;
-integer maxcycles;
+longint maxcycles;
 
 always @(posedge clk) begin
     mem_ready <= 0;
     if (nreset && busstate != 2'b01 && !mem_ready)
         mem_ready <= 1;
+end
+
+// Dedicated 32-bit table-walker memory port (the mmu suite's page tables
+// live in payload .bss inside the same flat RAM). Zero wait states, one
+// acknowledge per request edge — the shape of tb_ap040_program.v's model
+// without its latency sweep or fault injection.
+always @(posedge clk) begin
+    walker_ack_r <= 0;
+    if (!nreset) walker_armed <= 1;
+    else begin
+        if (!walker_req) walker_armed <= 1;
+        else if (walker_armed) begin
+            walker_armed <= 0;
+            if (walker_addr < 32'h00400000) begin
+                if (walker_we) begin
+                    mem[walker_addr[21:1]]        = walker_wdat[31:16];
+                    mem[walker_addr[21:1] + 1'b1] = walker_wdat[15:0];
+                end
+                else
+                    walker_data_r <= {mem[walker_addr[21:1]],
+                                      mem[walker_addr[21:1] + 1'b1]};
+            end
+            walker_ack_r <= 1;
+            if ($test$plusargs("walkdbg"))
+                $display("WALK %s addr=%08x data=%08x wdat=%08x pc=%h",
+                         walker_we ? "wr" : "rd", walker_addr,
+                         {mem[walker_addr[21:1]], mem[walker_addr[21:1]+1'b1]},
+                         walker_wdat, dbg_pc);
+        end
+    end
 end
 
 always @(posedge clk) begin
@@ -160,9 +193,28 @@ initial begin
         $finish;
     end
     if (!$value$plusargs("maxcycles=%d", maxcycles))
-        maxcycles = 800000000;
+        maxcycles = 64'd2500000000;
     for (i = 0; i < RAM_WORDS; i = i + 1) mem[i] = 16'h0000;
     $readmemh(prog_file, mem);
+
+    // Identity translation world (68040 8K-page format) at the top of
+    // RAM: root[0] -> pointer table -> 512 pages mapping 0..4MB 1:1.
+    // The Quadra ROM hands the bench a machine with valid tables; the
+    // corpus's safe MOVEC TC row enables translation assuming exactly
+    // that, so the sim provides the same environment (finding 22/30).
+    // payload_entry_sim (SIM_MMU_WORLD) points URP/SRP here.
+    begin : ident_world
+        integer k;
+        mem[32'h3FE000 >> 1] = 16'h003F; mem[(32'h3FE000 >> 1)+1] = 16'hE203;
+        for (k = 0; k < 16; k = k + 1) begin
+            mem[(32'h3FE200 + 4*k) >> 1]       = (32'h3FE400 + 128*k) >> 16;
+            mem[((32'h3FE200 + 4*k) >> 1) + 1] = ((32'h3FE400 + 128*k) | 3) & 16'hFFFF;
+        end
+        for (k = 0; k < 512; k = k + 1) begin
+            mem[(32'h3FE400 + 4*k) >> 1]       = (k * 32'h2000) >> 16;
+            mem[((32'h3FE400 + 4*k) >> 1) + 1] = ((k * 32'h2000) | 1) & 16'hFFFF;
+        end
+    end
 
     nreset = 0;
     repeat (10) @(posedge clk);
@@ -173,8 +225,11 @@ initial begin
     if (result == 0)
         $display("FAIL: timeout after %0d cycles, pc=%h ir=%h", cycles,
                  dbg_pc, dbg_ir);
-    else if (result == 1) begin
-        $display("CORPUS DONE in %0d cycles", cycles);
+    if (result != 1)
+        $display("dumping partial results for post-mortem");
+    begin
+        if (result == 1)
+            $display("CORPUS DONE in %0d cycles", cycles);
         if ($value$plusargs("results=%s", results_file)) begin
             f = $fopen(results_file, "wb");
             for (i = 0; i < RES_LEN; i = i + 1)

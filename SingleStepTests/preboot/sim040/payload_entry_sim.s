@@ -25,6 +25,15 @@ _payload_start:
     lea     sim_fb, %a0
     move.l  %a0, g_display_fb
 
+.ifdef SIM_MMU_WORLD
+    | Point URP/SRP at the TB's identity page tables (Quadra-equivalent
+    | handoff state): the corpus's safe MOVEC TC row enables translation
+    | and needs a walkable world (finding 30).
+    move.l  #0x003FE000, %d0
+    .short  0x4E7B, 0x0806                | movec d0,urp
+    .short  0x4E7B, 0x0807                | movec d0,srp
+.endif
+
     jsr     bench_main
 
     move.w  #0x600D, (DOORBELL).l         | DONE — TB dumps results + exits

@@ -25,6 +25,7 @@ case "$SUITE" in
     fpu)         DEF_ORACLE=../../results/fpu/hardware_quadra800_2026-08-28.jsonl ;;
     saverestore) DEF_ORACLE=../../results/cpu_fpu/hardware_saverestore_2026-08-28.jsonl ;;
     integration) DEF_ORACLE=../../results/cpu_fpu/hardware_quadra800_2026-08-28.jsonl ;;
+    mmu)         DEF_ORACLE=../../results/mmu/hardware_full_quadra800_2026-08-28.jsonl ;;
     *) echo "unknown suite $SUITE"; exit 1 ;;
 esac
 ORACLE="${ORACLE:-$DEF_ORACLE}"
@@ -34,7 +35,8 @@ PAYLOAD="$WORK/payload_${SUITE}_sim.bin"
 # CDEFS is not a make dependency (the finding-23 footgun): always rebuild
 # the corpus-bearing objects so a narrowed smoke build cannot go stale.
 rm -f "$WORK"/bench_main.o "$WORK"/fpu_bench_main.o \
-      "$WORK"/cpu_fpu_bench_main.o "$WORK"/cpu_fpu_save_restore_bench_main.o
+      "$WORK"/cpu_fpu_bench_main.o "$WORK"/cpu_fpu_save_restore_bench_main.o \
+      "$WORK"/mmu_bench_main_full.o
 make payloads CDEFS="${CDEFS:-}"
 
 # hex image: reset vectors @0 (SP=$80000, PC=$40000), payload @$40000

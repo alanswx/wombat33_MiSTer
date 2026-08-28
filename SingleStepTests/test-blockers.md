@@ -1026,6 +1026,38 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     68040 softcore DUTs, no Quadra required. WinUAE-on-Linux (newer
     core than FS-UAE 3.1's) noted as an optional better referee.
 
+30. **First RTL campaign: AP68040 vs the silicon oracle — every suite
+    0 REAL diffs (2026-08-28).** `preboot/sim040/` runs the shared
+    bench payloads against an RTL 68040 (`rtl/ap68040` submodule,
+    apolkosnik/AP68040 @ 3fed526) in a flat-RAM Verilog testbench
+    (tb_corpus.v: 16-bit TG68K-shaped bus, dedicated 32-bit table-
+    walker port, doorbell + RAM results window), scored with
+    `gen/score_vs_oracle.py` against the 2026-08-28 hardware captures.
+    Results (results/ap68040/): saverestore 8/8, fpu 270/270,
+    integration 1328/1328 and mmu 24/24 — **zero REAL diffs on all of
+    them.** The core matches silicon on the emulator-fatal FDBcc tail,
+    the 176 FINT/FINTRZ vector-11 traps, the FPIAR low-16 write quirk,
+    stale-ATC retention, and the MMUSR flag ground truth. (Full cpu
+    corpus run in flight at writing time.)
+
+    RTL-campaign lessons:
+    - The corpus's safe `MOVEC TC w/r` rows ENABLE translation and
+      inherit the platform's tables — fine on the Quadra (ROM tables,
+      finding 22) and survivable on FS-UAE, a double-fault HALT on
+      real RTL with root=0. The sim provides a Quadra-equivalent
+      identity world (8K-page tables at RAM top, URP/SRP pointed at
+      them by the SIM_MMU_WORLD entry) — translation-on rows then run
+      1:1.
+    - score_vs_oracle's mmu path adopted mmu_live_check's relocation
+      rules for cross-build comparison: table-window descriptor
+      ADDRESS bytes and the MMUSR PA field are per-build (`reloc`/
+      `layout` classes); descriptor FLAG bytes stay strict — they are
+      the ATC/M/U signal.
+    - Verilog unsized literals are 32-bit: `maxcycles = 2500000000`
+      went negative and ended runs at 9 cycles. Size big literals.
+    - iverilog ~50k cycles/s vs Verilator --binary ~800k on this
+      design; corpus-scale runs are Verilator territory.
+
 
 ### Offline verification harness (new)
 

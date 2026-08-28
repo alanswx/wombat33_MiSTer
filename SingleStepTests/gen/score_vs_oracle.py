@@ -32,6 +32,9 @@ Every mismatch is classified; only REAL diffs fail (exit 1):
             CPU behavior (differs across platforms by construction)
   env       mmu: a non-targeted MMU register differs (platform
             handoff state, finding 22)
+  reloc     mmu: table-window descriptor address bytes / the MMUSR PA
+            field point at the run's own relocated tables (finding 24);
+            descriptor FLAG bytes still compare strictly
   frame     mmu: fault-frame window bytes (contain payload PCs)
 """
 import argparse
@@ -346,6 +349,11 @@ def score_mmu(oracle, cand, args, t):
             vo, vc = mo.get(k), mc.get(k)
             if vo == vc or (k in ("urp", "srp") and translated(vo) == vc):
                 t.ok()
+            elif k == "mmusr" and (vo & 0xFFF) == (vc & 0xFFF) and vo and vc:
+                # PTEST PA field points at the run's own relocated page;
+                # the flag bits are the silicon-adjudicated signal (f26).
+                t.cls("layout", f"{n} mmu.mmusr: {vo:#x} vs {vc:#x} "
+                                f"(PA relocated, flags equal)")
             elif target and k != target:
                 t.cls("env", f"{n} mmu.{k}: {vo:#x} vs {vc:#x} (not the "
                              f"row's target register)")
@@ -354,12 +362,28 @@ def score_mmu(oracle, cand, args, t):
         wo = {w["base"]: w["bytes"] for w in o.get("windows", [])}
         wc = {w["base"]: w["bytes"] for w in c.get("windows", [])}
         for base in sorted(set(wo) | set(wc)):
+            bo, bc = wo.get(base, []), wc.get(base, [])
             if 0x3FF00 <= base < 0x40000:
-                if wo.get(base) != wc.get(base):
+                if bo != bc:
                     t.cls("frame", f"{n} window {base:#x} (fault frame)")
                 else:
                     t.ok()
-            elif wo.get(base) != wc.get(base):
+            elif 0x3000 <= base < 0x3500:
+                # Corpus table windows: descriptor ADDRESS bytes differ by
+                # construction (the runner relocates the tables — finding
+                # 24); only the low flag byte of each descriptor compares,
+                # the rule gen/mmu_live_check.py established.
+                bad = [off for off in range(min(len(bo), len(bc)))
+                       if (base + off) & 3 == 3 and bo[off] != bc[off]]
+                if bad:
+                    t.fail(f"{n} window {base:#x}: flag bytes differ at "
+                           f"+{bad[:6]}")
+                elif bo != bc:
+                    t.cls("reloc", f"{n} window {base:#x}: address bytes "
+                                   f"relocated, flags equal")
+                else:
+                    t.ok()
+            elif bo != bc:
                 t.fail(f"{n} window {base:#x} differs")
             else:
                 t.ok()
