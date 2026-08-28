@@ -26,6 +26,8 @@
 #include "sim_video.h"
 #include "sim_input.h"
 #include "sim_clock.h"
+#include "sim_audio.h"
+#include "implot.h"
 #include "m68k_dasm.h"
 
 // sim.v keeps its own module class (the public arrays force it), so its
@@ -92,6 +94,7 @@ vluint64_t main_time = 0;
 double sc_time_stamp() { return main_time; }
 
 SimClock clk_sys(1);
+SimAudio audio(33000000, false);
 
 DebugConsole console;
 const char* windowTitle = "wombat33 sim";
@@ -145,6 +148,9 @@ int verilate() {
 				}
 			}
 		}
+
+		if (clk_sys.IsRising() && !headless)
+			audio.Clock(VERTOPINTERN->AUDIO_L, VERTOPINTERN->AUDIO_R);
 
 		if (clk_sys.IsRising() && VERTOPINTERN->CE_PIXEL) {
 			uint32_t colour = 0xFF000000 |
@@ -303,6 +309,7 @@ int main(int argc, char** argv, char** env) {
 
 	input.Initialise();
 	if (!headless) {
+		audio.Initialise();
 		if (video.Initialise(windowTitle) == 1) return 1;
 	} else {
 		// video.Initialise allocates the pixel buffer; headless runs skip
@@ -395,6 +402,29 @@ int main(int argc, char** argv, char** env) {
 			console.Draw("Debug log", &showDebugLog, ImVec2(500, 400));
 			ImGui::SetWindowPos("Debug log", ImVec2(0, 580), ImGuiCond_Once);
 
+			ImGui::Begin("Audio output");
+			ImGui::SetWindowPos("Audio output", ImVec2(510, 540), ImGuiCond_Once);
+			ImGui::SetWindowSize("Audio output", ImVec2(680, 250), ImGuiCond_Once);
+			{
+				audio.CollectDebug((signed short)VERTOPINTERN->AUDIO_L,
+				                   (signed short)VERTOPINTERN->AUDIO_R);
+				float channelWidth = 320.0f;
+				if (ImPlot::BeginPlot("Audio - L", ImVec2(channelWidth, 220),
+				        ImPlotFlags_NoLegend | ImPlotFlags_NoMenus | ImPlotFlags_NoTitle)) {
+					ImPlot::PlotStairs("", audio.debug_positions, audio.debug_wave_l,
+					                   audio.debug_max_samples, audio.debug_pos);
+					ImPlot::EndPlot();
+				}
+				ImGui::SameLine();
+				if (ImPlot::BeginPlot("Audio - R", ImVec2(channelWidth, 220),
+				        ImPlotFlags_NoLegend | ImPlotFlags_NoMenus | ImPlotFlags_NoTitle)) {
+					ImPlot::PlotStairs("", audio.debug_positions, audio.debug_wave_r,
+					                   audio.debug_max_samples, audio.debug_pos);
+					ImPlot::EndPlot();
+				}
+			}
+			ImGui::End();
+
 			ImGui::Begin(windowTitle_Video);
 			ImGui::SetWindowPos(windowTitle_Video, ImVec2(510, 0), ImGuiCond_Once);
 			ImGui::SetWindowSize(windowTitle_Video,
@@ -451,7 +481,7 @@ int main(int argc, char** argv, char** env) {
 		for (size_t i = 0; i < idx.size() && i < 15; i++)
 			printf("  %08X: %u cycles\n", pc_hist_pc(idx[i]), pc_hist[idx[i]]);
 	}
-	if (!headless) { video.CleanUp(); input.CleanUp(); }
+	if (!headless) { audio.CleanUp(); video.CleanUp(); input.CleanUp(); }
 	top->final();
 	delete top;
 	return 0;

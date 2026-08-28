@@ -38,7 +38,10 @@ module iosb
 	input         asc_irq,
 	input         scc_irq,
 
-	output  [2:0] ipl_n            // active-low to the CPU
+	output  [2:0] ipl_n,           // active-low to the CPU
+
+	output signed [15:0] audio_l,
+	output signed [15:0] audio_r
 );
 
 //----------------------------------------------------------------------------
@@ -178,8 +181,31 @@ wire sel_via1   = in_low && (addr[17:13] == 5'b00000);
 wire sel_via2   = in_low && (addr[19:13] == 7'b0000001);
 wire sel_regs   = in_low && (addr[19:13] == 7'b0001100);
 wire sel_djmemc = in_low && (addr[19:13] == 7'b0000111);   // $E000-$FFFF
+wire sel_asc    = in_low && (addr[19:12] == 8'h14);
 wire sel_id     = (addr[27:16] == 12'hFFF);
 wire [3:0] rsel = addr[12:9];
+
+//----------------------------------------------------------------------------
+// EASC wavetable voice (the boot chime); FIFO mode is a later stage
+//----------------------------------------------------------------------------
+wire        asc_stb = ce && (astate == A_IDLE) && sel && !ack && sel_asc;
+wire [31:0] asc_rdata;
+
+asc_wavetable asc (
+	.clk(clk),
+	.nreset(nreset),
+	.ce(ce),
+
+	.sel(asc_stb),
+	.write(write),
+	.a(addr[11:2]),
+	.be(be),
+	.wdata(wdata),
+	.rdata(asc_rdata),
+
+	.sample_l(audio_l),
+	.sample_r(audio_r)
+);
 
 // write byte: highest enabled lane (VIA registers never span lanes)
 wire [7:0] wbyte = be[3] ? wdata[31:24] :
@@ -265,6 +291,7 @@ always @(posedge clk) begin
 					if (write) djmemc_regs[addr[5:2]] <= wdata;
 					else       rdata <= djmemc_regs[addr[5:2]];
 				end
+				else if (sel_asc) rdata <= asc_rdata;   // writes strobe asc_stb
 				else if (sel_id) rdata <= 32'hA55A2BAD;
 				else rdata <= 32'h0;             // inert device space
 			end

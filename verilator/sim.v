@@ -61,8 +61,6 @@ module emu
 	output [31:0] debug_a7
 );
 
-assign AUDIO_L = 16'd0;
-assign AUDIO_R = 16'd0;
 
 //----------------------------------------------------------------------------
 // The machine
@@ -110,6 +108,9 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.VGA_HB(VGA_HB),
 	.VGA_VB(VGA_VB),
 	.CE_PIXEL(CE_PIXEL),
+
+	.AUDIO_L(AUDIO_L),
+	.AUDIO_R(AUDIO_R),
 
 	.dbg_berr(debug_berr),
 	.dbg_berr_addr(debug_data_addr),

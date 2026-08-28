@@ -53,6 +53,9 @@ module quadra800
 	output            VGA_VB,
 	output            CE_PIXEL,
 
+	output signed [15:0] AUDIO_L,
+	output signed [15:0] AUDIO_R,
+
 	// debug
 	output            dbg_berr,
 	output     [31:0] dbg_berr_addr,
@@ -189,7 +192,10 @@ iosb iosb (
 	.asc_irq(1'b0),
 	.scc_irq(1'b0),
 
-	.ipl_n(ipl_n)
+	.ipl_n(ipl_n),
+
+	.audio_l(AUDIO_L),
+	.audio_r(AUDIO_R)
 );
 
 //----------------------------------------------------------------------------
