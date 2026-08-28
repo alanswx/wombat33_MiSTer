@@ -41,6 +41,29 @@ Run it to **"ALL TESTS DONE"**, power off, pull `/Results.jsonl`, and diff:
 # fpu: per row, vec 11 = an unimplemented op correctly trapped; vec 0 = executed
 ```
 
+## Amiga 68040 floppies (`amiga40-*.adf`, 2026-08-28)
+
+The same six 68040 suites as bootable **Amiga** floppies — for real
+A4000/040-class machines (extra silicon oracles anyone can run without
+a Quadra), FS-UAE, and Minimig-style 68040 softcore DUTs. Raw ADFs are
+committed next to this file (copy straight to a Gotek/MiSTer SD card);
+`SHA256SUMS.amiga40` covers them. A startup gate refuses anything that
+is not a 68040 (FPU-bearing disks also refuse the 68LC040; MMU disks
+probe and refuse the 68EC040).
+
+The disk is a raw layout, not a filesystem: boot it, let it run to the
+DONE screen, then pull the JSONL stream from byte `0x78000` of the
+mutated ADF and score it against the Quadra captures with
+`gen/score_vs_oracle.py`. Full instructions, FS-UAE command lines and
+the debugging playbook: `../preboot/amiga/README.md`.
+
+FS-UAE (A4000/040) validation status is recorded in
+`../results/amiga40/` — every suite boots, gates, runs and writes
+results; the saverestore suite matches the Quadra 800 silicon capture
+exactly. FS-UAE-vs-silicon divergences on the other suites are the
+scorer's documented classes (emulator FPU model, layout normalization);
+real-silicon Amiga captures are the interesting contribution.
+
 ## 2026-08-28b bundles — the full set on one tree, plus the all-in-one chain disk
 
 **Boot these.** Every suite rebuilt from one tree carrying every hardware

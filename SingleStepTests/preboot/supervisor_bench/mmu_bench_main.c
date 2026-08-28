@@ -76,7 +76,15 @@ static u8 page3f[4096]   __attribute__((aligned(4096)));
 static u8 dontcare[4096] __attribute__((aligned(4096)));
 static u32 g_sp_slot;                 /* bench SP across the live window */
 static u32 g_mmusr_val;               /* MMUSR right after a live row */
-static u32 g_masked_ptr1;             /* corpus-planted ptr[1] for emission */
+static u32 g_masked_ptr1;             /* corpus-planted hook entry, for emission */
+
+/* Payload window the harness identity-maps (Mac $40000, Amiga $80000 via
+ * -D). The hook lands in ptr entry base>>18 (256 KB per entry). */
+#ifndef MMU_PAYLOAD_WINDOW_BASE
+#define MMU_PAYLOAD_WINDOW_BASE 0x40000U
+#endif
+#define HOOK_PTR_IDX  (MMU_PAYLOAD_WINDOW_BASE >> 18)
+#define HOOK_PTR_OFF  (0x200U + HOOK_PTR_IDX * 4U)
 
 #define C_ROOT   0x00003000U
 #define C_PTRT   0x00003200U
@@ -128,14 +136,17 @@ static void install_plants(const MmuTestSpec *t) {
         }
         put_be32(reloc_addr(a), v);
     }
-    /* Harness identity map for the payload ($40000..$7FFFF): page table at
-     * tbl4k+$600, hooked in as ptr[1]. Register dumps, the VBR table and
-     * fault-frame vector fetches stay reachable while TC.E=1. The corpus
-     * ptr[1] value is remembered so emitted windows show the planted one. */
+    /* Harness identity map for the payload window (256 KB from the load
+     * base — Mac $40000, Amiga $80000 via -DMMU_PAYLOAD_WINDOW_BASE):
+     * page table at tbl4k+$600, hooked in as ptr[1]. Register dumps, the
+     * VBR table and fault-frame vector fetches stay reachable while
+     * TC.E=1. The corpus ptr[1] value is remembered so emitted windows
+     * show the planted one. */
     for (i = 0; i < 64; i++)
-        put_be32(tbl4k + HARNESS_PT_OFF + i*4, (0x40000U + (u32)i*0x1000U) | 1U);
-    g_masked_ptr1 = get_be32(tbl4k + 0x204U);
-    put_be32(tbl4k + 0x204U, ((u32)tbl4k + HARNESS_PT_OFF) | 2U);
+        put_be32(tbl4k + HARNESS_PT_OFF + i*4,
+                 (MMU_PAYLOAD_WINDOW_BASE + (u32)i*0x1000U) | 1U);
+    g_masked_ptr1 = get_be32(tbl4k + HOOK_PTR_OFF);
+    put_be32(tbl4k + HOOK_PTR_OFF, ((u32)tbl4k + HARNESS_PT_OFF) | 2U);
 }
 #endif /* MMU_FULL */
 
@@ -152,8 +163,14 @@ static u8 *put_l(u8 *p, u32 v) {
 /* Cache push+invalidate (we rewrite prog_buffer each test). Raw CPUSHA BC
  * ($F4F8) bus-errors on real Quadra 800 silicon, so use the ROM call. */
 static void cpusha_bc(void) {
+#ifdef AMIGA_BENCH
+    /* Bare-boot Amiga: gate guarantees a 68040, MMU off — raw CPUSHA BC
+     * is safe (the Quadra bus error is a Mac ROM effect, finding 16). */
+    asm volatile (".short 0xF4F8 \n nop" : : : "memory");
+#else
     asm volatile ("moveq #1,%%d0 \n .short 0xA198"
                   : : : "d0", "a0", "a1", "d1", "d2", "memory");
+#endif
 }
 
 /* Save / restore the live OS 68040 MMU registers via MOVEC. */
@@ -422,10 +439,11 @@ void bench_main(void) {
                     jw_puts(w,",\"bytes\":[");
                     for (j=0;j<len;j++){
                         u8 b = src[j];
-                        /* ptr window: show the corpus-planted ptr[1], not our
-                         * harness hook. */
-                        if (WBASE[wi]==0x3200U && j>=4 && j<8)
-                            b = (u8)(g_masked_ptr1 >> (8*(3-(j-4))));
+                        /* ptr window: show the corpus-planted hook entry,
+                         * not our harness hook (entry HOOK_PTR_IDX). */
+                        if (WBASE[wi]==0x3200U && j>=HOOK_PTR_IDX*4U
+                                               && j<HOOK_PTR_IDX*4U+4U)
+                            b = (u8)(g_masked_ptr1 >> (8*(3-(j-HOOK_PTR_IDX*4U))));
                         if (j) jw_putc(w,',');
                         jw_putul(w,b);
                     }

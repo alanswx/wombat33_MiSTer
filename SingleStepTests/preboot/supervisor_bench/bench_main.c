@@ -116,6 +116,12 @@ static u8 *build_program(const CpuTestSpec *t)
  * Privileged -- we are already in supervisor mode. */
 static void flush_icache(void)
 {
+#ifdef AMIGA_BENCH
+    /* Bare-boot Amiga: no _HwPriv, MMU off, gate guarantees a 68040 —
+     * raw CPUSHA BC is safe here (the Quadra bus error is a Mac ROM
+     * environment effect, findings 16/25). */
+    asm volatile (".short 0xF4F8 \n nop" : : : "memory");
+#else
     /* Raw CPUSHA BC ($F4F8) bus-errors on real Quadra 800 silicon; use the
      * ROM call, which flushes both caches on the 68040. Clobbers D0/A0. */
     asm volatile (
@@ -125,6 +131,7 @@ static void flush_icache(void)
         :
         : "d0", "a0", "a1", "d1", "d2", "memory"
     );
+#endif
 }
 
 /* Save callee-saved regs, jsr into the assembled test, restore.
@@ -242,8 +249,12 @@ static void format_hex32(char *out, u32 v) {
  * corpus is [0 .. CPU_N_TESTS-1]: a single consolidated run covering
  * the normal supervisor tests AND the exception tests, all through the
  * same recovery handler. Narrow the range only for targeted debugging. */
+#ifndef FIRST_TEST_INDEX
 #define FIRST_TEST_INDEX 0
+#endif
+#ifndef LAST_TEST_INDEX
 #define LAST_TEST_INDEX  (CPU_N_TESTS - 1)
+#endif
 
 /* Skip filter applied inside the loop. Set to 1 to run ONLY tests
  * flagged raises_exception; 0 to run every test in [FIRST, LAST].

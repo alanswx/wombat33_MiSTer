@@ -129,12 +129,18 @@ static u8 *build_program(const CpuFpuTestSpec *t) {
 }
 
 static void flush_icache(void) {
+#ifdef AMIGA_BENCH
+    /* Bare-boot Amiga: gate guarantees a 68040, MMU off — raw CPUSHA BC
+     * is safe (the Quadra bus error is a Mac ROM effect, finding 16). */
+    asm volatile (".short 0xF4F8 \n nop" : : : "memory");
+#else
     /* 68020-era MOVEC #$09,CACR survived the Mac II import here; on the
      * 040 that value DISABLES both caches without pushing dirty data --
      * every cached global reads back as raw-RAM zeros from then on
      * (finding 25; same lesson as finding 16). Use the ROM call. */
     asm volatile ("moveq #1,%%d0 \n .short 0xA198"
                   : : : "d0", "a0", "a1", "d1", "d2", "memory");
+#endif
 }
 
 static void write_name(JsonlWriter *w, const char *name) {
@@ -172,6 +178,10 @@ static void format_hex32(char *out, u32 v) {
     out[8] = '\0';
 }
 
+#ifdef DISPLAY_FB_EXTERN
+extern void display_wipe(u32 rows);
+static void wipe_screen(void) { display_wipe(480); }  /* Amiga: own bitplane */
+#else
 static void wipe_screen(void) {
     u32 fb = *(u32 *)0x0824;
     u32 *p = (u32 *)fb;
@@ -179,6 +189,7 @@ static void wipe_screen(void) {
     if (fb < 0x00100000) return;
     for (i = 0; i < 9600; i++) *p++ = 0xFFFFFFFF;   /* 640x480 1bpp */
 }
+#endif
 
 #define FIRST_TEST_INDEX 0
 #define LAST_TEST_INDEX  (CPU_FPU_N_TESTS - 1)

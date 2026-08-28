@@ -992,6 +992,41 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     already recorded ground truth) and a per-row-FPSR-clear FPU
     re-capture; neither blocks RTL bring-up.
 
+29. **The Amiga 68040 test floppies — every suite as a bootable ADF,
+    FS-UAE-validated (2026-08-28).** The MacIIvi project's 68030 Amiga
+    port (raw-layout bootblock, SuperState + custom-chip takeover,
+    trackdisk JSONL backend, diagnostic marker slots) ported forward
+    into `preboot/amiga/` for the 68040 suite: six disks (cpu, fpu,
+    saverestore, integration, mmu, mmu-full) in `prebuilt/amiga40-*`.
+    040 adaptations: the gate checks AttnFlags AFB_68040 (+FPU40 on
+    FPU disks, +a MOVEC-TC probe under recovery on MMU disks — LC040/
+    EC040 refused); every cache op is raw CPUSHA (`-DAMIGA_BENCH` in
+    the shared mains — no _HwPriv exists, the bare-boot MMU is off,
+    and the Quadra CPUSHA bus error is a Mac ROM effect; the old
+    gate's `MOVEC #9,CACR` was the finding-25 relic class); the entry
+    zeroes .bss (finding 15 postdated the original); the trackdisk
+    bracket pushes the 040 D-cache; the mmu-full identity window
+    follows the `$80000` load base (`MMU_PAYLOAD_WINDOW_BASE`). Mac
+    binaries verified byte-identical across the shared-file edits.
+
+    FS-UAE (A4000/040, kicka4000) validation — baselines in
+    `results/amiga40/`: saverestore 8/8 **identical to Quadra
+    silicon**; mmu-safe 25 rows, 0 real diffs; cpu 717/717 with 33
+    FS-UAE-model divergences (incl. the finding-13 platform-local
+    rows); **integration 1328/1328 — FS-UAE is the only emulator that
+    survives the corpus tail** (finding 23) — with exactly the 16
+    FPIAR rows real-diverging; fpu 270/270 but 243 per-op FPU
+    divergences (FS-UAE, like MAME, is a CPU-shaped oracle only);
+    mmu-full 20/25 rows (FS-UAE's 040 MMU loses 5 live rows — QEMU/
+    silicon stay the MMU oracles). `score_vs_oracle.py` grew
+    cross-platform layout support for this: a small trusted set of
+    payload deltas (each seen ≥3 times) instead of exactly one, and
+    a7 classified as harness `stack` state. The disks' purpose:
+    real-silicon captures from A4000/040 owners and Minimig-style
+    68040 softcore DUTs, no Quadra required. WinUAE-on-Linux (newer
+    core than FS-UAE 3.1's) noted as an optional better referee.
+
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local

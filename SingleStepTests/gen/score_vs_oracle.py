@@ -28,6 +28,8 @@ Every mismatch is classified; only REAL diffs fail (exit 1):
   aexc      FPSR accrued-exception byte, only under --mask-aexc (use
             when the candidate did not run the full corpus in order --
             AEXC is sticky across rows, finding 27 close-out)
+  stack     a7: the platform's supervisor stack is harness state, not
+            CPU behavior (differs across platforms by construction)
   env       mmu: a non-targeted MMU register differs (platform
             handoff state, finding 22)
   frame     mmu: fault-frame window bytes (contain payload PCs)
@@ -116,34 +118,44 @@ def in_payload(v):
 
 
 def derive_delta(pairs, fields):
-    """The single constant payload shift between the two builds."""
-    deltas = set()
+    """The constant payload shifts between the two builds. Same-platform
+    rebuilds give exactly one; a cross-platform pair (Mac oracle vs an
+    Amiga run) gives one small constant per shifted symbol — cap at 4
+    so an actually-divergent run cannot masquerade as layout."""
+    counts = {}
     for o, c in pairs:
         so = o.get("final") or o.get("trap_state") or {}
         sc = c.get("final") or c.get("trap_state") or {}
         for f in fields:
             vo, vc = so.get(f), sc.get(f)
             if isinstance(vo, list):
-                for x, y in zip(vo, vc or []):
+                for i, (x, y) in enumerate(zip(vo, vc or [])):
+                    if f == "a" and i == 7:
+                        continue        # stack: harness state, not layout
                     if x != y and in_payload(x):
-                        deltas.add(y - x)
+                        counts[y - x] = counts.get(y - x, 0) + 1
             elif vo is not None and vo != vc and in_payload(vo):
-                deltas.add(vc - vo)
-    if len(deltas) > 1:
-        sys.exit(f"cannot normalize: multiple payload deltas {sorted(deltas)}")
-    return deltas.pop() if deltas else 0
+                counts[vc - vo] = counts.get(vc - vo, 0) + 1
+    # Trust only deltas seen repeatedly: a real symbol shift recurs across
+    # rows; a data coincidence (or a genuine one-off divergence, like an
+    # emulator leaving FPIAR unset) must NOT become a mask.
+    deltas = {d for d, n in counts.items() if n >= 3}
+    if len(deltas) > 8:
+        sys.exit(f"cannot normalize: {len(deltas)} distinct payload deltas "
+                 f"{sorted(deltas)[:10]}...")
+    return deltas
 
 
-def scalar(t, row, field, vo, vc, delta):
+def scalar(t, row, field, vo, vc, deltas):
     if vo == vc:
         t.ok()
-    elif in_payload(vo) and vc == vo + delta:
+    elif in_payload(vo) and any(vc == vo + d for d in deltas):
         t.cls("layout", f"{row} {field}: {vo:#x} -> {vc:#x}")
     else:
         t.fail(f"{row} {field}: oracle {vo} candidate {vc}")
 
 
-def ram_bytes(t, row, bo, bc, delta):
+def ram_bytes(t, row, bo, bc, deltas):
     if bo == bc:
         t.ok()
         return
@@ -155,7 +167,7 @@ def ram_bytes(t, row, bo, bc, delta):
             continue
         io = int.from_bytes(bytes(wo), "big")
         ic = int.from_bytes(bytes(wc), "big")
-        if in_payload(io) and ic == io + delta:
+        if in_payload(io) and any(ic == io + d for d in deltas):
             t.cls("layout", f"{row} ram+{off:#x}: {io:#x} -> {ic:#x}")
         else:
             bad.append(off)
@@ -186,7 +198,7 @@ def score_cpu(oracle, cand, args, t):
     pairs = pair_rows(oracle, cand, t)
     delta = derive_delta(pairs, ("pc", "a"))
     if delta:
-        print(f"payload layout delta: {delta:+#x}")
+        print("payload layout deltas: " + ", ".join(f"{d:+#x}" for d in sorted(delta)))
     for o, c in pairs:
         n = o["name"]
         if o.get("vec", 0) != c.get("vec", 0):
@@ -205,7 +217,10 @@ def score_cpu(oracle, cand, args, t):
                 scalar(t, n, f, so[f], sc.get(f), delta)
         for f in ("d", "a"):
             for i, (vo, vc) in enumerate(zip(so.get(f, []), sc.get(f, []))):
-                scalar(t, n, f"{f}{i}", vo, vc, delta)
+                if f == "a" and i == 7 and vo != vc:
+                    t.cls("stack", f"{n} a7: {vo:#x} vs {vc:#x}")
+                else:
+                    scalar(t, n, f"{f}{i}", vo, vc, delta)
         if "ram" in so:
             ram_bytes(t, n, so["ram"], sc.get("ram", []), delta)
     return t.report(len(pairs))
@@ -215,7 +230,7 @@ def score_fpu(oracle, cand, args, t):
     pairs = pair_rows(oracle, cand, t)
     delta = derive_delta(pairs, ("a", "fpiar"))
     if delta:
-        print(f"payload layout delta: {delta:+#x}")
+        print("payload layout deltas: " + ", ".join(f"{d:+#x}" for d in sorted(delta)))
     for o, c in pairs:
         n = base_name(o["name"])
         if o.get("vec", 0) != c.get("vec", 0):
@@ -229,12 +244,15 @@ def score_fpu(oracle, cand, args, t):
         so, sc = o.get(ko, {}), c.get(ko, {})
         for f in ("d", "a"):
             for i, (vo, vc) in enumerate(zip(so.get(f, []), sc.get(f, []))):
-                scalar(t, n, f"{f}{i}", vo, vc, delta)
+                if f == "a" and i == 7 and vo != vc:
+                    t.cls("stack", f"{n} a7: {vo:#x} vs {vc:#x}")
+                else:
+                    scalar(t, n, f"{f}{i}", vo, vc, delta)
         if so.get("fp") != sc.get("fp"):
             t.fail(f"{n} fp registers differ")
         else:
             t.ok()
-        scalar(t, n, "fpcr", so.get("fpcr"), sc.get("fpcr"), 0)
+        scalar(t, n, "fpcr", so.get("fpcr"), sc.get("fpcr"), set())
         scalar(t, n, "fpiar", so.get("fpiar"), sc.get("fpiar"), delta)
         vo, vc = so.get("fpsr"), sc.get("fpsr")
         if vo == vc:

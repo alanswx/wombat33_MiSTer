@@ -132,6 +132,11 @@ static u8 *build_program(const FpuTestSpec *t) {
  * the new test bytes. Required between tests since we keep rewriting
  * prog_buffer. Privileged — we're in supervisor mode. */
 static void flush_icache(void) {
+#ifdef AMIGA_BENCH
+    /* Bare-boot Amiga: gate guarantees a 68040, MMU off — raw CPUSHA BC
+     * is safe (the Quadra bus error is a Mac ROM effect, finding 16). */
+    asm volatile (".short 0xF4F8 \n nop" : : : "memory");
+#else
     /* Raw CPUSHA BC ($F4F8) bus-errors on real Quadra 800 silicon; use the
      * ROM call, which flushes both caches on the 68040. Clobbers D0/A0. */
     asm volatile (
@@ -139,6 +144,7 @@ static void flush_icache(void) {
         ".short 0xA198           \n"   /* _HwPriv FlushInstructionCache */
         : : : "d0", "a0", "a1", "d1", "d2", "memory"
     );
+#endif
 }
 
 static void write_name(JsonlWriter *w, const char *name) {
@@ -188,6 +194,10 @@ static void format_hex32(char *out, u32 v) {
     out[8] = '\0';
 }
 
+#ifdef DISPLAY_FB_EXTERN
+extern void display_wipe(u32 rows);
+static void wipe_screen(void) { display_wipe(480); }  /* Amiga: own bitplane */
+#else
 static void wipe_screen(void) {
     u32 fb = *(u32 *)0x0824;
     u32 *p = (u32 *)fb;
@@ -195,6 +205,7 @@ static void wipe_screen(void) {
     if (fb < 0x00100000) return;
     for (i = 0; i < 9600; i++) *p++ = 0xFFFFFFFF;   /* 640x480 1bpp */
 }
+#endif
 
 /* Full corpus, inclusive range. Narrow only for targeted debugging. */
 #define FIRST_TEST_INDEX 0
