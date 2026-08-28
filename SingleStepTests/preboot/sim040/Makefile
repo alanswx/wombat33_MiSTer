@@ -18,8 +18,13 @@ COMMON_DISPLAY := $(COMMON)/display
 
 SCFLAGS := $(CFLAGS) -DDISPLAY_FB_EXTERN -DJW_BACKEND_EXTERN -DAMIGA_BENCH
 
+PAYLOADS := $(BUILD)/payload_cpu_sim.bin \
+            $(BUILD)/payload_fpu_sim.bin \
+            $(BUILD)/payload_saverestore_sim.bin \
+            $(BUILD)/payload_integration_sim.bin
+
 all: payloads
-payloads: $(BUILD)/payload_cpu_sim.bin
+payloads: $(PAYLOADS)
 .PHONY: all payloads clean
 
 $(BUILD):
@@ -41,18 +46,29 @@ $(BUILD)/recovery.o: $(COMMON_RUNTIME)/recovery.s | $(BUILD)
 	$(AS) $(ASFLAGS) --defsym NO_SCRNBASE_DOT=1 -o $@ $<
 $(BUILD)/bench_main.o: $(SB)/bench_main.c ../../gen/cpu_tests.h | $(BUILD)
 	$(CC) $(SCFLAGS) -I$(SB) -c -o $@ $<
+$(BUILD)/fpu_bench_main.o: $(SB)/fpu_bench_main.c ../../gen/fpu_tests.h | $(BUILD)
+	$(CC) $(SCFLAGS) -I$(SB) -c -o $@ $<
+$(BUILD)/cpu_fpu_bench_main.o: $(SB)/cpu_fpu_bench_main.c ../../macos_bench/cpu_fpu_tests.h | $(BUILD)
+	$(CC) $(SCFLAGS) -I$(SB) -c -o $@ $<
+$(BUILD)/cpu_fpu_save_restore_bench_main.o: $(SB)/cpu_fpu_bench_main.c ../../macos_bench/save_restore_tests.h | $(BUILD)
+	$(CC) $(SCFLAGS) -I$(SB) -DCPU_FPU_CORPUS_HEADER='"../../macos_bench/save_restore_tests.h"' -c -o $@ $<
 
-SIM_OBJS := $(BUILD)/payload_entry_sim.o \
+SIM_BASE := $(BUILD)/payload_entry_sim.o \
             $(BUILD)/jsonl_sim.o \
             $(BUILD)/eject_stub.o \
             $(BUILD)/jsonl_writer.o \
             $(BUILD)/freestanding.o \
             $(BUILD)/font_ascii.o \
-            $(BUILD)/recovery.o \
-            $(BUILD)/bench_main.o
+            $(BUILD)/recovery.o
 
-$(BUILD)/payload_cpu_sim.elf: $(SIM_OBJS) $(PAYLOAD_LD)
-	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(SIM_OBJS)
+$(BUILD)/payload_cpu_sim.elf: $(SIM_BASE) $(BUILD)/bench_main.o $(PAYLOAD_LD)
+	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(SIM_BASE) $(BUILD)/bench_main.o
+$(BUILD)/payload_fpu_sim.elf: $(SIM_BASE) $(BUILD)/fpu_bench_main.o $(PAYLOAD_LD)
+	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(SIM_BASE) $(BUILD)/fpu_bench_main.o
+$(BUILD)/payload_saverestore_sim.elf: $(SIM_BASE) $(BUILD)/cpu_fpu_save_restore_bench_main.o $(PAYLOAD_LD)
+	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(SIM_BASE) $(BUILD)/cpu_fpu_save_restore_bench_main.o
+$(BUILD)/payload_integration_sim.elf: $(SIM_BASE) $(BUILD)/cpu_fpu_bench_main.o $(PAYLOAD_LD)
+	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(SIM_BASE) $(BUILD)/cpu_fpu_bench_main.o
 $(BUILD)/payload%.bin: $(BUILD)/payload%.elf
 	$(OBJCOPY) -O binary $< $@
 

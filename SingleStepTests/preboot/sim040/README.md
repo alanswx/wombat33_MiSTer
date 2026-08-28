@@ -7,8 +7,9 @@ platform runs. First target: **AP68040** (`~/repos/AP68040`), whose
 TG68K-shaped top (`ap040_tg68k_compat`) the testbench instantiates.
 
 ```sh
-./run_corpus.sh                              # full 722-row CPU corpus
-CDEFS="-DLAST_TEST_INDEX=9" ./run_corpus.sh  # 10-row smoke (~2 min)
+./run_corpus.sh [cpu|fpu|saverestore|integration]   # default cpu
+SIM=verilator ./run_corpus.sh fpu                   # ~100x faster than iverilog
+CDEFS="-DLAST_TEST_INDEX=9" ./run_corpus.sh         # 10-row smoke (~2 min)
 ```
 
 Needs iverilog (a from-source build in `~/.local` works: gperf, then
@@ -34,12 +35,14 @@ the core location; `ORACLE` the capture to score against.
   Mac capture's) come out as the scorer's `layout` class; anything
   REAL is the core diverging from Quadra 800 silicon.
 
-Simulation speed under iverilog is ~50k cycles/s: the 10-row smoke is
-minutes, the full corpus a few hours. Verilator would cut that 20-100x
-(the TB avoids hierarchical references for exactly that reason) — worth
-doing before pointing the fpu/integration corpora at the core.
+Engines: iverilog (~50k cycles/s) and Verilator --binary (~700k
+cycles/s; the TB avoids hierarchical references so both compile it).
+Results so far vs the Quadra 800 silicon captures: cpu 10-row smoke
+0 REAL, saverestore 8/8 identical, **fpu 270/270 with 0 REAL diffs —
+the core's FPSP-style FPU traps exactly where 040-lite silicon traps**.
+The mmu suite additionally needs the walker port wired to the TB RAM —
+wire it when the others are clean.
 
-The suites beyond cpu need nothing new conceptually: fpu/integration/
-saverestore payloads are the same Makefile pattern (link the other
-bench mains), and mmu additionally needs the walker port wired to the
-TB RAM. Wire them up when the cpu corpus is clean.
+The GUI simulation (ImGui + SDL2, like the other cores) lives in
+/verilator at the repo root; this directory stays the batch
+corpus-scoring path.
