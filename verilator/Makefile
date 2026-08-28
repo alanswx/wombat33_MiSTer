@@ -43,6 +43,7 @@ V_SRC = \
 	$(RTL)/wombat_bus32.sv \
 	$(RTL)/iosb.sv \
 	$(RTL)/via6522.sv \
+	$(RTL)/dafb.sv \
 	$(AP)/ap040_core.v \
 	$(AP)/ap040_bus_timeout.v \
 	$(AP)/ap040_regfile.v \

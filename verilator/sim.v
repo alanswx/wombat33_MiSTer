@@ -56,52 +56,10 @@ module emu
 	output        debug_berr,      // machine bus-error pulse
 	output        debug_overlay,
 	output        debug_cpu_fault,
-	output        debug_cpu_halted
+	output        debug_cpu_halted,
+	output [15:0] debug_sr,
+	output [31:0] debug_a7
 );
-
-//----------------------------------------------------------------------------
-// Template pattern core: VGA timing/frame pacing until DAFB exists
-//----------------------------------------------------------------------------
-wire HBlank, HSync, VBlank, VSync;
-wire ce_pix;
-wire hvcnt_atzero;
-wire [7:0] video;
-
-reg reset_core = 1;
-always @(posedge clk_sys) begin
-	if (reset) reset_core <= 1;
-	else if (hvcnt_atzero) reset_core <= 0;
-end
-
-mycore mycore
-(
-	.clk(clk_sys),
-	.reset(reset_core),
-
-	.pal(sim_status[2]),
-	.scandouble(1'b0),
-
-	.ce_pix(ce_pix),
-	.hvcnt_atzero(hvcnt_atzero),
-
-	.HBlank(HBlank),
-	.HSync(HSync),
-	.VBlank(VBlank),
-	.VSync(VSync),
-
-	.video(video)
-);
-
-wire [1:0] col = sim_status[4:3];
-
-assign CE_PIXEL = ce_pix;
-assign VGA_HS = HSync;
-assign VGA_VS = VSync;
-assign VGA_HB = HBlank;
-assign VGA_VB = VBlank;
-assign VGA_G  = (!col || col == 2) ? video : 8'd0;
-assign VGA_R  = (!col || col == 1) ? video : 8'd0;
-assign VGA_B  = (!col || col == 3) ? video : 8'd0;
 
 assign AUDIO_L = 16'd0;
 assign AUDIO_R = 16'd0;
@@ -122,6 +80,9 @@ wire  [1:0] mem_memsel;
 reg  [31:0] mem_rdata;
 reg         mem_ack;
 
+wire [21:2] vid_addr;
+reg  [31:0] vid_rdata;
+
 wire [255:0] m_debug_status;
 wire [127:0] m_debug_status2;
 
@@ -139,6 +100,17 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.mem_rdata(mem_rdata),
 	.mem_ack(mem_ack),
 
+	.vid_addr(vid_addr),
+	.vid_rdata(vid_rdata),
+	.VGA_R(VGA_R),
+	.VGA_G(VGA_G),
+	.VGA_B(VGA_B),
+	.VGA_HS(VGA_HS),
+	.VGA_VS(VGA_VS),
+	.VGA_HB(VGA_HB),
+	.VGA_VB(VGA_VB),
+	.CE_PIXEL(CE_PIXEL),
+
 	.dbg_berr(debug_berr),
 	.dbg_berr_addr(debug_data_addr),
 	.dbg_overlay(debug_overlay),
@@ -150,6 +122,8 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 
 assign debug_pc          = m_debug_status[31:0];
 assign debug_opcode      = m_debug_status[63:48];
+assign debug_sr          = m_debug_status[47:32];
+assign debug_a7          = m_debug_status[95:64];
 assign debug_fetch_valid = ~reset;
 
 //----------------------------------------------------------------------------
@@ -170,6 +144,9 @@ end
 wire [RAM_ADDR_BITS-3:0] ram_idx  = mem_addr[RAM_ADDR_BITS-1:2];
 wire [17:0]              rom_idx  = mem_addr[19:2];
 wire [17:0]              vram_idx = mem_addr[19:2];
+
+// DAFB scanout port: registered read, 1-cycle latency
+always @(posedge clk_sys) vid_rdata <= vram[vid_addr[19:2]];
 
 always @(posedge clk_sys) begin
 	mem_ack <= 0;

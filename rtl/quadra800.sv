@@ -41,6 +41,18 @@ module quadra800
 	input      [31:0] mem_rdata,
 	input             mem_ack,
 
+	// video: DAFB scanout (VRAM fetch port + VGA)
+	output     [21:2] vid_addr,
+	input      [31:0] vid_rdata,
+	output      [7:0] VGA_R,
+	output      [7:0] VGA_G,
+	output      [7:0] VGA_B,
+	output            VGA_HS,
+	output            VGA_VS,
+	output            VGA_HB,
+	output            VGA_VB,
+	output            CE_PIXEL,
+
 	// debug
 	output            dbg_berr,
 	output     [31:0] dbg_berr_addr,
@@ -156,6 +168,8 @@ reg  [31:0] iosb_wdata;
 wire [31:0] iosb_rdata;
 wire        iosb_ack;
 
+wire dafb_vbl;
+
 iosb iosb (
 	.clk(clk),
 	.nreset(nreset),
@@ -169,7 +183,7 @@ iosb iosb (
 	.rdata(iosb_rdata),
 	.ack(iosb_ack),
 
-	.vbl_irq(1'b0),
+	.vbl_irq(dafb_vbl),
 	.scsi_irq(1'b0),
 	.scsi_drq(1'b0),
 	.asc_irq(1'b0),
@@ -179,12 +193,49 @@ iosb iosb (
 );
 
 //----------------------------------------------------------------------------
+// DAFB — registers at $F9800000, scanout from VRAM
+//----------------------------------------------------------------------------
+reg         dafb_sel;
+reg         dafb_write;
+reg   [9:2] dafb_addr;
+reg  [31:0] dafb_wdata;
+wire [31:0] dafb_rdata;
+wire        dafb_ack;
+
+dafb dafb (
+	.clk(clk),
+	.nreset(nreset),
+	.ce(ce),
+
+	.sel(dafb_sel),
+	.write(dafb_write),
+	.addr(dafb_addr),
+	.wdata(dafb_wdata),
+	.rdata(dafb_rdata),
+	.ack(dafb_ack),
+
+	.vbl_irq(dafb_vbl),
+
+	.vid_addr(vid_addr),
+	.vid_rdata(vid_rdata),
+
+	.vga_r(VGA_R),
+	.vga_g(VGA_G),
+	.vga_b(VGA_B),
+	.vga_hs(VGA_HS),
+	.vga_vs(VGA_VS),
+	.vga_hb(VGA_HB),
+	.vga_vb(VGA_VB),
+	.ce_pixel(CE_PIXEL)
+);
+
+//----------------------------------------------------------------------------
 // Beat service: arbitrate CPU vs table walker, decode, dispatch
 //----------------------------------------------------------------------------
 reg        overlay;
 
 // decode of a beat address; the walker sees the same physical map
-function [2:0] decode;                        // 0 ram,1 rom,2 vram,3 iosb,4 berr
+function [2:0] decode;               // 0 ram,1 rom,2 vram,3 iosb,4 berr,5 dafb
 	input [31:2] a;
 	begin
 		if (a[31:28] == 4'h4)              decode = 3'd1;
@@ -192,13 +243,15 @@ function [2:0] decode;                        // 0 ram,1 rom,2 vram,3 iosb,4 ber
 		else if (a[31:30] == 2'b00)
 			decode = (a[29:2] < (28'd1 << (RAM_ADDR_BITS-2))) ? 3'd0 : 3'd4;
 		else if (a[31:21] == 11'b1111_1001_000) decode = 3'd2;  // $F900xxxx-$F91Fxxxx
+		else if (a[31:10] == 22'b1111_1001_1000_0000_0000_00) decode = 3'd5;
 		else if (a[31:28] == 4'h5)         decode = 3'd3;
 		else                               decode = 3'd4;
 	end
 endfunction
 
-localparam S_IDLE = 2'd0, S_MEM = 2'd1, S_IOSB = 2'd2, S_BERR = 2'd3;
-reg  [1:0] svc;
+localparam S_IDLE = 3'd0, S_MEM = 3'd1, S_IOSB = 3'd2, S_BERR = 3'd3,
+           S_DAFB = 3'd4;
+reg  [2:0] svc;
 reg        svc_walker;                        // owner of the beat in service
 reg [31:2] svc_addr;
 
@@ -233,6 +286,10 @@ always @(posedge clk) begin
 		iosb_addr    <= 0;
 		iosb_be      <= 0;
 		iosb_wdata   <= 0;
+		dafb_sel     <= 0;
+		dafb_write   <= 0;
+		dafb_addr    <= 0;
+		dafb_wdata   <= 0;
 	end
 	else if (ce) begin
 		walker_ack  <= 0;
@@ -275,6 +332,13 @@ always @(posedge clk) begin
 					iosb_wdata <= walker_pend ? walker_wdat : b_wdata;
 					svc        <= S_IOSB;
 				end
+				3'd5: begin
+					dafb_sel   <= 1;
+					dafb_write <= wr;
+					dafb_addr  <= a[9:2];
+					dafb_wdata <= walker_pend ? walker_wdat : b_wdata;
+					svc        <= S_DAFB;
+				end
 				default: svc <= S_BERR;
 				endcase
 			end
@@ -300,6 +364,18 @@ always @(posedge clk) begin
 			else begin
 				b_ack   <= 1;
 				b_rdata <= iosb_rdata;
+			end
+			svc <= S_IDLE;
+		end
+		S_DAFB: if (dafb_ack) begin
+			dafb_sel <= 0;
+			if (svc_walker) begin
+				walker_ack  <= 1;
+				walker_data <= dafb_rdata;
+			end
+			else begin
+				b_ack   <= 1;
+				b_rdata <= dafb_rdata;
 			end
 			svc <= S_IDLE;
 		end
