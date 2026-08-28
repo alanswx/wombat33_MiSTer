@@ -86,7 +86,8 @@ DRVQEL_OFF_DQREFNUM   = 8
 
 startup:
     move.w  #0x2700, %sr
-    move.l  #0x00010000, %sp
+    | Keep the ROM's SP: $10000 sat on the ROM boot heap and smashed the
+    | SCSI Manager's write-path glue just below it (finding 21).
 
     | --- Make the DAFB aperture transparently translated (MUST be first) ---
     | The ROM hands the boot block a machine with the 68040 MMU ENABLED

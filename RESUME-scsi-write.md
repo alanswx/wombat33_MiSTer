@@ -1,4 +1,4 @@
-# Resume prompt — SCSI `_Write` on the Quadra 800 bench: shim shipped, awaiting hardware
+# Resume prompt — SCSI `_Write`: root cause found and fixed, awaiting the confirming hardware run
 
 Paste this whole file as the opening message of a new session.
 
@@ -6,98 +6,72 @@ Paste this whole file as the opening message of a new session.
 
 ## Where it stands (2026-08-27, end of session)
 
-`SingleStepTests` boots a Quadra 800 from an HFS boot block, runs the
-722-row 68040 corpus, and writes `/Results.jsonl` back over SCSI.
-Everything works on the physical machine except the SCSI `_Write`,
-which dies at the first 16 KB flush (~test 58) with Sad Mac
-`0000000F 0000000A` = died pre-System, System Error ID 10 = **vector 11,
-F-line** — raised while the ROM's own vector table is active (the
-bench brackets `_Write` with `use_os_vbr()`).
+The hardware-only SCSI `_Write` failure (Sad Mac `0F/000A` at the first
+16 KB flush, ~test 58) is **root-caused and fixed**. Read
+`SingleStepTests/test-blockers.md` findings **20 and 21**.
 
-Read `SingleStepTests/test-blockers.md` **finding 20** first. Summary:
+- The F-line shim (finding 20) turned the Sad Mac into a readable
+  paint. First hardware boot: `run=58 ok=58 trap=0`, then
+  `FLINE OP+PC: FFFF 0000FF44` — a format-2 (unimplemented-FP-shaped)
+  vector 11 with the stacked PC in **low RAM**.
+- `$FF44` is ROM-boot-heap territory: the SCSI Manager 4.3 keeps its
+  write-path RAM glue just below `$10000` — and the boot block's first
+  act was `move.l #$10000,%sp`. Its own calls smashed that glue on
+  every boot; the first `_Write` then executed the corpse. Hardware
+  died (glue ~$BC below the stack top), MAME/QEMU survived (theirs
+  sits ~$B38 below — never reached). `_Read` doesn't use the
+  structure, which is why only writes failed. (Finding 21.)
+- **Fix:** boot stubs no longer touch SP (the ROM's stack is valid);
+  the payload stack moved `$100000` → `$80000` (top of our own 256 KB
+  read window). Stacks only on RAM we own.
 
-- Traced the write path at instruction level (QEMU `-d in_asm`; log
-  position = first-execution order = phase). The write path runs ROM
-  `_BlockMove`, whose 68040 form uses `MOVE16` bursts plus a cache
-  epilogue: `PTESTR`+`MOVEC MMUSR`+`CPUSHL` loop (<`$C00` bytes) or
-  `CPUSHA BC` (bigger), and ~1000 blocks of `$408Dxxxx` SCSI Manager
-  code `_Read` never touches.
-- **But** the ROM's own boot/mount phase (which the machine survives
-  every run) already executes `move16`, `ptestr`, `cpushl` and
-  `pflusha` — so the real CPU handles all of those, and finding 11's
-  "PFLUSHA F-lines on real silicon" blame is doubtful. The killer is
-  write-only: an op in a hardware-only Turbo SCSI branch emulators
-  don't steer into, an FPU instruction (no FPSP is loaded pre-System),
-  or garbage execution after a pseudo-DMA recovery failure.
-- The previously-proposed fix (`restore_os_traps()` + letting IRQs in)
-  is ruled out: vectors 32..63 are dormant under the OS VBR, and the
-  ROM masks/lowers IPL itself. IPL changes regressed twice.
+## What to expect from the next hardware boot
 
-## What shipped: the F-line shim
+Boot `quadra800-cpu` from the 2026-08-27c set (or `dist/`):
 
-`preboot/common/runtime/fline_shim.s` (+ `fline_shim_report.c`),
-installed by all three bench mains right after `install_vbr()`. It
-builds a private forwarding vector table and repoints `orig_vbr` at it
-(so `use_os_vbr()` activates it during I/O brackets); vector 11 goes to
-the thunk, every other vector forwards through the LIVE low-mem slot at
-exception time. The live table at 0 is never written: patching `$2C` in
-place made MAME SysError `dsFSErr` (`0F/1B`) at the 8th flush — ROM
-OS-trap code reads that slot as data (finding 20). Thunk behavior:
+| Screen | Meaning |
+|---|---|
+| `ALL TESTS DONE`, `ioResult=0000`, no shim line | **the expected outcome** — extract `/Results.jsonl`, diff (see below), close the campaign loop |
+| `ALL TESTS DONE` + `shim=N op=…` | writes worked and the shim also had to emulate/skip something — note op/pc, still extract + diff |
+| `FLINE OP+PC…` halt | a NEW fault; the screen now also paints `FV=`(frame fmt/vec) `FR=` `EA=`, `M-:`/`M+:` instruction bytes around PC, and `RA:` return addresses — one photo identifies it completely |
+| Sad Mac | decode via `docs/quadra800-rom-notes.md` (`0F`/ID, ID = vector−1 or a software SysError code) |
 
-- `MOVE16 (A0)+,(A1)+` → emulated (4 longs, regs +16)
-- CINV/CPUSH `$F4xx`, PFLUSH/PTEST `$F5xx` → skipped (PC += 2); safe
-  in composition — a skipped PTESTR's stale MMUSR only feeds CPUSHLs
-  that are skipped too
-- anything else → **paints `FLINE OP+PC: xxxx xxxxxxxx` at row 40 and
-  halts with the screen alive** (no Sad Mac)
-- every hit counted; the CPU bench paints
-  `shim=NNNNNNNN op=XXXX pc=XXXXXXXX` at row 40 on the DONE screen
+Extract + diff:
 
-Dormant under MAME/QEMU (they execute the full ISA — that is why no
-emulator reproduces the failure).
+```sh
+rb-cli get IMG@1 /Results.jsonl results.jsonl
+# strip NUL padding, drop trap_state rows, add "initial": {} per row, then:
+SingleStepTests/gen/cpu_diff_corpus.py SingleStepTests/results/cpu/mame_baseline_2026-06-12.json results.bridged.jsonl
+```
 
-## Next hardware run decides it — outcome matrix
-
-Boot the new CPU disk on the Quadra:
-
-| Screen | Meaning | Next step |
-|---|---|---|
-| `ALL TESTS DONE`, no shim line | writes just worked | extract + diff, done |
-| `ALL TESTS DONE`, `shim=N op=F6xx/F4xx/F5xx` | shim emulated/skipped the culprit | root cause named; done |
-| `FLINE OP+PC: xxxx xxxxxxxx` halt | un-emulatable op named | op `F2xx` + PC in ROM → FPU op, machine likely has no working FPU: decide emulate-vs-avoid. PC in RAM/garbage → control-flow corruption in the pseudo-DMA path: chase with BOOT_WRITE_TEST |
-| Sad Mac with ID ≠ `0A` | F-line was secondary; new primary surfaced | decode ID (`docs/quadra800-rom-notes.md`), rerun |
-
-Companion diagnostic: `BOOT_WRITE_TEST` (`--defsym BOOT_WRITE_TEST=1`
-boot block, commit e565717) runs one `_Write` from the pristine boot
-environment — no payload, no shim — separating "the write path is
-broken everywhere" from "the payload environment matters".
+Yardstick (MAME-bench vs MAME baseline): 717 written / 696 comparable /
+**667 match**; the 29 divergences are known corpus-portability
+artifacts (finding 13). A QEMU-bench run scores 610/692 — that's
+QEMU-vs-MAME 68040 divergence, not a bench bug.
 
 ## Build / verify
 
 ```sh
 export RETRO68=$HOME/repos/Retro68-build/toolchain
 cd SingleStepTests/preboot/supervisor_bench
-# hardware image (no DTT0):
-make clean && make cpu && ./build_cpu_hda.sh ~/testdisk.hda /tmp/out.hda
+# hardware images (no DTT0):
+make clean && make cpu fpu mmu
+./build_cpu_hda.sh ~/testdisk.hda dist/quadra800-cpu.hda   # + _dsk / fpu / mmu variants
 # emulator regression first (MANDATORY before handing over a disk):
-make cpu EXTRA_ASFLAGS="--defsym BOOT_SET_DTT0=1"   # then build hda, chdman, run MAME
-# MAME needs -seconds_to_run 400 for the full corpus (150 only reaches ~test 460)
+make clean && make cpu EXTRA_ASFLAGS="--defsym BOOT_SET_DTT0=1"
+# MAME needs -seconds_to_run 400 for the full CPU corpus (150 reaches only ~test 460);
+# -str auto-saves a final screenshot; -debugger none silently disables -debugscript.
 ```
-
-MAME/QEMU must reach `ALL TESTS DONE`, `ioResult=0000`, **no shim
-line** (shim must stay dormant), and the extracted `/Results.jsonl`
-must diff clean against `results/cpu/mame_baseline_2026-06-12.json`
-(717 written / 696 comparable / 667 match / 29 known corpus-portability
-divergences).
 
 ## Dead ends — do not repeat
 
 - Raw `CPUSHA`/`PFLUSHA` in our own code (use `_HwPriv` `$A198` sel 1).
 - `DTT0` in the boot block on hardware (emulator-only; `BOOT_SET_DTT0`).
-- Lowering IPL across `_Write` (regressed MAME and hardware).
-- Removing the `use_os_vbr` bracket or the cache flush (regress MAME).
+- Lowering IPL across `_Write`; removing the VBR bracket or the flush.
 - `restore_os_traps()` around `_Write` (no-op: wrong table).
-- Patching vector 11 at `$2C` in place (ROM reads it as data -> `0F/1B`).
+- Patching vector 11 at `$2C` in place (ROM reads it as data → `0F/1B`).
+- Boot-block or payload stacks below `$10000` / at `$100000` — the ROM
+  boot heap lives there (finding 21).
 
 ## Working style
 

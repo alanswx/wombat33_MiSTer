@@ -35,7 +35,7 @@ HANDOFF_ADDR = 0x00050000
     .global _payload_start
 _payload_start:
     move.w  #0x2700, %sr
-    move.l  #0x00100000, %sp              | 1 MB high — plenty of stack room
+    move.l  #0x00080000, %sp              | top of our 256 KB read window: only RAM we own (finding 21)
 
     | --- Zero .bss (MUST precede the handoff load, which lives in .bss) ---
     | .bss is NOLOAD, so C statics start as whatever the boot block's 256 KB

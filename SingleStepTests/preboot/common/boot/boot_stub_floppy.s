@@ -93,7 +93,8 @@ startup:
     | code/payload, above low-mem globals and the boot-block load
     | area). The ROM-provided SP may not be safe to push onto at
     | bbEntry time on some ROMs/Snow combos.
-    move.l  #0x00010000, %sp
+    | Keep the ROM's SP: $10000 sat on the ROM boot heap and smashed the
+    | SCSI Manager's write-path glue just below it (finding 21).
 
     | --- Make the DAFB aperture transparently translated (MUST be first) ---
     | The ROM hands the boot block a machine with the 68040 MMU ENABLED

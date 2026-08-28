@@ -157,7 +157,8 @@ PAYLOAD_CKSUM_BYTES   = 0x1E000         | 122880 bytes
 | it into silent payload corruption.
 |
 | The real fix is $00080000 (the first byte past the 256 KB read
-| window, far below the payload's $00100000 stack). It is NOT the
+| window, right where the payload's $00080000 stack now tops out;
+| the handoff longword at $80000 itself stays untouched). It is NOT the
 | default because the address is duplicated in seven places — every
 | bench's payload_entry*.s reads it as a hard-coded literal — and a
 | boot block and payload that disagree hand the bench a garbage
@@ -199,7 +200,8 @@ SCRNROW               = 0x00000106
 
 startup:
     move.w  #0x2700, %sr
-    move.l  #0x00010000, %sp
+    | Keep the ROM's SP: $10000 sat on the ROM boot heap and smashed the
+    | SCSI Manager's write-path glue just below it (finding 21).
 
     | --- Make the DAFB aperture transparently translated (MUST be first) ---
     | The ROM hands the boot block a machine with the 68040 MMU ENABLED

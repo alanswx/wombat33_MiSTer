@@ -154,6 +154,12 @@ fline_thunk:
     movea.l 18(%sp), %a0
 .Lunknown:
     | Un-emulatable: paint the evidence and halt with the screen alive.
+    | Args: (op, pc, fmt/vec word, frame address) — computed pre-push.
+    move.w  22(%sp), %d1
+    andi.l  #0xFFFF, %d1
+    lea     16(%sp), %a1
+    move.l  %a1, -(%sp)
+    move.l  %d1, -(%sp)
     move.l  %a0, -(%sp)
     moveq   #0, %d1
     move.w  %d0, %d1

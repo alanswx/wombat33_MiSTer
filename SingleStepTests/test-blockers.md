@@ -556,6 +556,55 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     QEMU-vs-MAME 68040 divergence measurement, not a bench bug; the
     MAME-bench yardstick stays 667/696.
 
+21. **Hardware verdict via the shim, and the real root cause: the boot
+    block's stack sat on the ROM boot heap and smashed the SCSI
+    Manager's write-path glue. FIXED (2026-08-27).**
+
+    First hardware boot of the `-27b` shim disk: all 58 tests to the
+    first flush pass (`run=58 ok=58 trap=0`), then instead of the Sad
+    Mac the shim paints **`FLINE OP+PC: FFFF 0000FF44`** and halts with
+    the screen alive. Decode: `FFFF` is the thunk's sentinel for a
+    non-format-0 frame — on a 68040 a vector-11 frame is format 0
+    (F-line, PC = the instruction) or format 2 ("unimplemented FP",
+    PC = the NEXT instruction) — and `$FF44` is **low RAM**, in the
+    region where the ROM boot heap keeps the SCSI Manager 4.3 RAM glue
+    (QEMU builds an XPT trampoline at `$F4C8`: `jsr` into the driver,
+    return through `[jIODone]` at `$8FC`; QEMU RAM dump `$8000..$18000`
+    contains no legitimate FPU code, so a valid-but-unimplemented FP
+    *pattern* there means garbage being executed).
+
+    The mechanism: the boot block's first act was
+    `move.l #$10000,%sp`, and the write-path glue lives just below
+    $10000 — on this hardware ~`$BC` below the stack top, on MAME/QEMU
+    ~`$B38` below. Every call the boot block makes (paints, the `_Read`
+    nesting) scribbles frames down from $10000; on hardware that
+    *guarantees* the glue is dead by the time the payload runs, while
+    the emulators' allocation sits just deep enough to survive. `_Read`
+    never calls this structure (boots fine everywhere); the first
+    `_Write` jumps into the smashed bytes → they decode as an
+    unimplemented-FP pattern → vector 11 → previously the ROM's Sad Mac
+    `0F/000A`, now the shim's readable paint. Every prior signature
+    fits at once: hardware-only, write-only, first-flush timing, the
+    F-line ID, and the IPL/VBR/cache dead ends.
+
+    **Fix: park stacks only on RAM we own.** All three boot stubs no
+    longer touch SP at all — the ROM enters the boot block with a valid
+    stack, and a real System boot block runs far deeper code on it than
+    we do. The payload stack moves from `$100000` (unowned no-man's
+    land) to `$80000`, the top of the payload's own 256 KB read window
+    (grows down into the dead read slack; the planned `HANDOFF_ADDR`
+    byte at exactly `$80000` stays untouched since the first
+    predecrement lands at `$7FFFC`). `bbsim` keeps feeding its own
+    `$10000` as the stand-in for the ROM SP.
+
+    The shim stays in the payloads: it converted this bug from a Sad
+    Mac plus emulator goose-chase into one photograph, it still covers
+    any real 040 instruction gap, and its unknown path now paints the
+    frame format/vector word, the format-2 effective address, the
+    instruction bytes around the stacked PC, and up to three
+    code-looking return addresses scanned off the exception frame — so
+    the next unknown fault identifies itself completely in one boot.
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local

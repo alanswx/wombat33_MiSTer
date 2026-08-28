@@ -96,7 +96,7 @@ int main(int argc, char **argv)
     m68k_set_cpu_type(M68K_CPU_TYPE_68040);
     m68k_pulse_reset();
     m68k_set_reg(M68K_REG_PC, base + 2);
-    m68k_set_reg(M68K_REG_SP, 0x00010000);
+    m68k_set_reg(M68K_REG_SP, 0x00010000);  /* stands in for the ROM SP the block now inherits (finding 21) */
 
     /* Single-step so we can stop EXACTLY at the JMP into the payload —
      * the payload's first act is to wipe the screen, which would erase
