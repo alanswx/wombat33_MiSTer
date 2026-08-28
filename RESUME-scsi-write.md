@@ -1,143 +1,147 @@
-# Resume prompt — hardware campaign in flight (2026-08-28, latest)
-
-**Run order with the user:** (1) saverestore — DONE, results reported
-saved (not yet copied back for analysis); (2) cpu-fpu integration
-(disk C=FD355319) — the tail past row ~972 is emulator-uncheckable and
-hardware-first; (3) **mmu-full** (`dist/quadra800-mmu-full.hda`,
-C=6CE9E20C, payload byte-identical to the QEMU-green harness) — expect
-ran=24 skipped=0, two FAULT rows at vec 2, PTEST MMUSR values are
-hardware adjudications. Analyze MMU results with
-`gen/mmu_live_check.py results/mmu/mame_baseline_2026-06-12.json <dev.jsonl>`
-(labels the two known oracle-artifact classes; QEMU reference scores
-49 match / 7 artifact / 0 real). Then: fold all hardware results into
-findings, refresh the full -28b bundle set on current defaults, and
-compare the supervisor-page + ATC rows against QEMU (MAME has no ATC).
-
----
-
-# Bisection RESOLVED: the 68020 CACR relic (finding 25)
-
-**2026-08-28, later:** the srtest-27c-writepath disk (verbatim 017acee
-write code) ALSO failed on hardware — correctly exonerating the sliced
-writer and HANDOFF_ADDR=$80000, both of which stay as defaults. The
-real culprit was `cpu_fpu_bench_main.c`'s Mac II-era `flush_icache()`:
-`MOVEC #$09,CACR`, which on the 68040 DISABLES both caches without
-pushing dirty data — every cached global (handoff refnum/drive, writer
-ctx) then reads back as raw-RAM zeros on real silicon, and `_Write`
-goes to refnum 0 with a polite `noErr`. Emulators model no caches, so
-they never showed it. Fixed to the `_HwPriv` ROM call (finding 16's
-rule); fresh disks with diag rows are with the user
-(saverestore C=691ED990, cpu-fpu C=FD355319). If those write on
-hardware, the integration campaign is unblocked end to end; next up is
-hardware runs of `make mmu_full` (finding 24) and the -28b bundle
-refresh of everything on the current defaults.
-
----
-
-# Superseded: hardware write-path bisection in flight (2026-08-28 evening)
-
-**LIVE ISSUE:** the new integration/MMU-full builds' SCSI writes fail on
-the real Quadra with `ioResult=0000` and rn=0000/dr=0000/base=00000000
-painted (writer saw all-zero context) while the SAME images run and
-write perfectly under QEMU. Two write-relevant deltas exist vs the
-hardware-proven 017acee (-27c) state: HANDOFF_ADDR $50000->$80000 and
-the sliced-chunk jsonl writer. Bisection disks are with the user:
-`dist/quadra800-srtest-27c-writepath.hda` (BOTH reverted, C=BC01A78F,
-should write; then run `cpufpu-27c-writepath`, C=8ECF22F9) plus
-single-variable controls `srtest-handoff50000` (C=A40063CB) and
-`srtest-oldwriter` (C=05F86D28). All paint rn=/dr=/base= + ioResult on
-the DONE screen. Every payload entry + boot stub now honors
-`--defsym HANDOFF_ADDR=` (guarded defaults). Whichever variable the
-bisection convicts: make its -27c value the default again and record
-why $80000 (or the slicer) breaks real hardware — note the all-zeros
-anomaly includes `base` (payload .data loaded from disk!), which no
-handoff theory alone explains; suspect the diag values themselves or a
-partial/incoherent payload load, and compare the painted C against the
-expected value per disk.
-
----
-
-# Previous state — SCSI `_Write`: root cause found and fixed, awaiting the confirming hardware run
+# Resume prompt — build the all-in-one bench disk; finish analysis + bundles
 
 Paste this whole file as the opening message of a new session.
 
 ---
 
-## Where it stands (2026-08-27, end of session)
+## Where the campaign stands (2026-08-28, end of session)
 
-The hardware-only SCSI `_Write` failure (Sad Mac `0F/000A` at the first
-16 KB flush, ~test 58) is **root-caused and fixed**. Read
-`SingleStepTests/test-blockers.md` findings **20 and 21**.
+**Every bench has completed on the real Quadra 800 with results
+captured and committed.** CPU (722), FPU (270), MMU-safe (24),
+MMU-full (24, live translation), CPU+FPU integration (1328 — first
+machine ever to run the corpus tail), FSAVE/FRESTORE (8/8). Raw
+captures: `SingleStepTests/results/{cpu,fpu,mmu,cpu_fpu}/hardware*2026-08-28*.jsonl`.
+Read `SingleStepTests/test-blockers.md` findings **20–26** for the
+full trail. Silicon adjudications on record: undefined CCR bits +
+RTM (f22), FSGL*/FINT classification + AEXC/FPIAR/NaN-init MAME gaps
+(f22), ROM hands off with TTRs programmed (f22), PFLUSH(An) executes
+(f22), FDBcc golden inversion fixed + validated 80/80 by hardware
+(f26), FPIAR keeps low 16 bits of an FMOVE.L write (f26), silicon
+holds stale ATC entries — MAME's no-ATC model is wrong (f26), MMUSR
+ground truth `$58001/$58005` (f26), MOVES user-fc does not trip
+S-pages (f26).
 
-- The F-line shim (finding 20) turned the Sad Mac into a readable
-  paint. First hardware boot: `run=58 ok=58 trap=0`, then
-  `FLINE OP+PC: FFFF 0000FF44` — a format-2 (unimplemented-FP-shaped)
-  vector 11 with the stacked PC in **low RAM**.
-- `$FF44` is ROM-boot-heap territory: the SCSI Manager 4.3 keeps its
-  write-path RAM glue just below `$10000` — and the boot block's first
-  act was `move.l #$10000,%sp`. Its own calls smashed that glue on
-  every boot; the first `_Write` then executed the corpse. Hardware
-  died (glue ~$BC below the stack top), MAME/QEMU survived (theirs
-  sits ~$B38 below — never reached). `_Read` doesn't use the
-  structure, which is why only writes failed. (Finding 21.)
-- **Fix:** boot stubs no longer touch SP (the ROM's stack is valid);
-  the payload stack moved `$100000` → `$80000` (top of our own 256 KB
-  read window). Stacks only on RAM we own.
+**Effective integration scorecard vs corrected goldens: 1136/1328
+pass; 176 FINT/FINTRZ vector-11 traps (expected 040 behavior); 16
+FPIAR rows (silicon ground truth).**
 
-## What to expect from the next hardware boot
+## PRIMARY TASK: one disk that runs EVERYTHING (no more swapping)
 
-Boot `quadra800-cpu` from the 2026-08-27c set (or `dist/`):
+Build a chained all-in-one `.hda`. Design already worked out — follow
+it, it keeps every hardware-validated payload essentially byte-intact:
 
-| Screen | Meaning |
-|---|---|
-| `ALL TESTS DONE`, `ioResult=0000`, no shim line | **the expected outcome** — extract `/Results.jsonl`, diff (see below), close the campaign loop |
-| `ALL TESTS DONE` + `shim=N op=…` | writes worked and the shim also had to emulate/skip something — note op/pc, still extract + diff |
-| `FLINE OP+PC…` halt | a NEW fault; the screen now also paints `FV=`(frame fmt/vec) `FR=` `EA=`, `M-:`/`M+:` instruction bytes around PC, and `RA:` return addresses — one photo identifies it completely |
-| Sad Mac | decode via `docs/quadra800-rom-notes.md` (`0F`/ID, ID = vector−1 or a software SysError code) |
+- **Chain-loader, not a mega-payload.** The suites' payloads sum to
+  ~315 KB of text+rodata, past the 256 KB read window — do NOT grow
+  the window. Instead: one disk carries all payloads at known
+  partition offsets; each payload, at its DONE point (replacing the
+  final infinite hang), jumps to a small chain stub that `_Read`s the
+  next payload over `$40000` and JMPs to it — the boot block's own
+  load step, repeated. Cache-flush both sides of that `_Read` via
+  `_HwPriv` sel 1 (finding 7; NEVER raw CPUSHA — findings 16/25).
+  The chain stub must live OUTSIDE the read window it overwrites
+  (e.g. copied to a slot just below `$80000`, or above it in the
+  region the stack never reaches) — it cannot run from `$4xxxx`
+  while `_Read` replaces `$4xxxx`.
+- **Per-payload patch markers**: each payload already carries
+  `RJSNLTAG` (results base). Add `NEXTPAYL` (partition offset + length
+  of the next payload; zero = last suite, hang with a grand-total
+  screen). The build script computes cumulative results offsets so all
+  suites append into ONE `/Results.jsonl` with per-suite regions.
+- **Results file: preallocate 1 MB** (user approved growing past
+  409600). Totals ≈ cpu 205K + fpu 136K + integration 157K + sr 1K +
+  mmu-full 25K ≈ 525 KB. Keep `g_results_max_bytes` per suite sized to
+  its own region so an overrun cannot cross into the next suite's.
+  The all-in-one is `.hda`-only; per-suite floppies stay as they are.
+- **Suite ORDER matters for emulator validation:** cpu → fpu →
+  saverestore → mmu-full → **integration LAST**, because both
+  emulators die in the integration tail (MAME fatal on FDBcc class,
+  QEMU core-dump ~row 972 — finding 23). QEMU (the oracle: MAME can't
+  host mmu-full either, finding 24) then validates the whole chain
+  through suite 4 plus integration rows 1–972; the tail is
+  hardware-only, as already established.
+- **What carries across chains for free:** handoff at `$80000`
+  survives (each entry re-reads it; chain stub must not clobber it);
+  each payload re-zeroes its own `.bss` and reinstalls VBR + fline
+  shim; the MMU payload keeps its `recovery_mmu.o` linking; every
+  bench already restores machine state (MMU regs incl. TTRs) before
+  its final flush.
+- Validate: QEMU full chain (expect clean DONE screens per suite, one
+  combined results file, then the known tail crash in suite 5 with
+  rows 1–972 flushed); extract and check per-suite row counts match
+  the singles. Then build the hardware flavor (`make clean`, no
+  `BOOT_SET_DTT0` — and remember `EXTRA_ASFLAGS` is not a make
+  dependency: always `make clean` when switching flavors, finding 23).
+  Compute the `C` checksum (host rotating-sum over the PAYLCKSZ
+  window; the C row covers payload#1 only — fine) and per-suite
+  expected screens for the README.
 
-Extract + diff:
+## Remaining analysis / updates (in rough priority)
 
-```sh
-rb-cli get IMG@1 /Results.jsonl results.jsonl
-# strip NUL padding, drop trap_state rows, add "initial": {} per row, then:
-SingleStepTests/gen/cpu_diff_corpus.py SingleStepTests/results/cpu/mame_baseline_2026-06-12.json results.bridged.jsonl
-```
+1. **Prebuilt refresh**: full bundle set on the current tree (all six
+   suites + all-in-one + bootwritetest probe), new `C` table,
+   SHA256SUMS, README section; mark the `-28` integration bundles
+   superseded (they carry the CACR relic and inverted FDBcc goldens).
+2. **MMU diff-tool contract rework** (finding 22): `mmu_diff_corpus.py`
+   scores 0/14 for *every* environment (harness-state expectations).
+   Give it the finding-13 treatment: separate environment fields from
+   CPU behavior; `gen/mmu_live_check.py` (new, working) is the model —
+   fold the safe rows into it or fix mmu_diff to match.
+3. **CPU corpus portability debt** (finding 13): the 29 known rows
+   (absolute `$1800/$1820`, A6-into-Dn, MOVEC harness state) — decide:
+   re-express A6-relative or mark platform-local and exclude.
+4. **FPU polish**: per-row FPSR clear in the bench so AEXC doesn't
+   stick (cleaner rows; MAME's missing AEXC accrual already recorded);
+   optionally a small FPIAR probe suite to pin down the low-16
+   behavior (word vs long paths, FMOVEM variant).
+5. **Docs sweep**: finding 11's leftover "PFLUSHA F-lines on silicon"
+   attribution is disproven (f20/f22 TTR adjudication explains the
+   emulator behavior; what killed the DTT0-era boot block remains
+   formally unresolved — low priority).
+6. Then the actual point of it all: **wombat33 RTL bring-up against
+   the captured oracle set** (`results/*2026-08-28*` + the corrected
+   corpora are the ground truth; `cpu_fpu/cpu_fpu_tests.v` and
+   `sim_main.cpp` exist as the Verilator-side start).
 
-Yardstick (MAME-bench vs MAME baseline): 717 written / 696 comparable /
-**667 match**; the 29 divergences are known corpus-portability
-artifacts (finding 13). A QEMU-bench run scores 610/692 — that's
-QEMU-vs-MAME 68040 divergence, not a bench bug.
+## Know-how (hard-won — do not relearn)
 
-## Build / verify
+- Emulator roles: **QEMU git-master (`~/nextstep-test/qemu-src/build`)
+  is the oracle** for MMU/FPU-shaped work; MAME `macqd800` is fine for
+  the CPU corpus only (no ATC, no FPIAR, no AEXC, fatal on FDBcc
+  class, unhandled-PFLUSHA storms). MAME needs `-seconds_to_run 400`
+  for the CPU corpus; `-str` auto-saves a final screenshot;
+  `-debugger none` silently disables `-debugscript` (use the default
+  debugger; `wpset/bpset` + `logerror` works). QEMU: `-d int,cpu`
+  dumps registers per exception; QMP `pmemsave`/`screendump` for
+  post-mortems.
+- Device results files: strip NULs; CPU-corpus rows need the bridge
+  (drop `trap_state` rows, add `"initial": {}`) before
+  `cpu_diff_corpus.py`; MAME-bench yardstick 667/696, QEMU-bench
+  610/692 (cross-emulator divergence, not a bug).
+- Cache rule (findings 16/25): every cache op via `_HwPriv` sel 1
+  (`moveq #1,d0; $A198`). Grep any newly imported code for
+  `MOVEC`/`CACR` before first hardware run — the 68020 idiom disables
+  both 040 caches.
+- Memory ownership (findings 21/24): stacks and buffers only on RAM we
+  own; boot block inherits the ROM SP; payload SP `$80000`;
+  `HANDOFF_ADDR $80000` (guarded, `--defsym`-overridable everywhere);
+  `.bss` growth must never cross a fixed-address slot.
+- Writes: batches slice to ≤16 KB driver requests (a pre-System
+  `_Write` >16 KB Enqueues through uninitialized low-mem, finding 24);
+  the fline shim's forwarding table stays (never patch `$2C` in place,
+  finding 20).
+- Working style: in-line comments one line or less; rationale to
+  test-blockers.md/commits; commit to `main`, never push; ALWAYS run a
+  candidate through an emulator before handing over a disk; corpus
+  files (`gen/*_tests.h`, goldens) only change with a stated reason.
+
+## Build quick-reference
 
 ```sh
 export RETRO68=$HOME/repos/Retro68-build/toolchain
 cd SingleStepTests/preboot/supervisor_bench
-# hardware images (no DTT0):
-make clean && make cpu fpu mmu
-./build_cpu_hda.sh ~/testdisk.hda dist/quadra800-cpu.hda   # + _dsk / fpu / mmu variants
-# emulator regression first (MANDATORY before handing over a disk):
-make clean && make cpu EXTRA_ASFLAGS="--defsym BOOT_SET_DTT0=1"
-# ALWAYS make clean (or rm build/boot_stub_patch.*) when switching between
-# hardware and emulator flavors: flags are not make dependencies, and the
-# build_*_hda.sh scripts re-run make WITHOUT your EXTRA_ASFLAGS.
-# MAME needs -seconds_to_run 400 for the full CPU corpus (150 reaches only ~test 460);
-# -str auto-saves a final screenshot; -debugger none silently disables -debugscript.
+make clean && make cpu fpu mmu mmu_full cpu_fpu cpu_fpu_save_restore   # hardware flavor
+# emulator flavor: append EXTRA_ASFLAGS="--defsym BOOT_SET_DTT0=1" (make clean first!)
+./build_cpu_hda.sh ~/testdisk.hda dist/quadra800-cpu.hda               # per-suite hda builders
+MMU_PAYLOAD=build/payload_mmu_full_scsi.bin ./build_mmu_hda.sh ~/testdisk.hda dist/quadra800-mmu-full.hda
+python3 gen/mmu_live_check.py results/mmu/mame_baseline_2026-06-12.json <device.jsonl>   # from SingleStepTests/
 ```
-
-## Dead ends — do not repeat
-
-- Raw `CPUSHA`/`PFLUSHA` in our own code (use `_HwPriv` `$A198` sel 1).
-- `DTT0` in the boot block on hardware (emulator-only; `BOOT_SET_DTT0`).
-- Lowering IPL across `_Write`; removing the VBR bracket or the flush.
-- `restore_os_traps()` around `_Write` (no-op: wrong table).
-- Patching vector 11 at `$2C` in place (ROM reads it as data → `0F/1B`).
-- Boot-block or payload stacks below `$10000` / at `$100000` — the ROM
-  boot heap lives there (finding 21).
-
-## Working style
-
-- In-line code comments: one line or less; rationale to
-  `test-blockers.md` / commit messages.
-- Commit to `main`, never push, no branches.
-- Always run a candidate through MAME before handing the user a disk.
