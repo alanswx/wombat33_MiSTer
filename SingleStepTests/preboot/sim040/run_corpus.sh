@@ -79,4 +79,5 @@ open(sys.argv[2], "wb").write(b"\n".join(rows) + (b"\n" if rows else b""))
 print(f"{len(rows)} result rows")
 PY
 
-python3 ../../gen/score_vs_oracle.py "$SUITE" "$ORACLE" "$WORK/results_$SUITE.jsonl"
+# --flat-env: this is the bare flat-RAM TB (finding 32); machine runs score strictly
+python3 ../../gen/score_vs_oracle.py "$SUITE" "$ORACLE" "$WORK/results_$SUITE.jsonl" --flat-env

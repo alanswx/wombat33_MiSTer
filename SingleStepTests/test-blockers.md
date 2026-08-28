@@ -1072,6 +1072,26 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     The 10-row smoke and every other suite (fpu/saverestore/integration/
     mmu) remain 0 REAL, so this does not retract finding 30's scores —
     it does block calling the cpu suite RTL-complete.
+    UPDATE: a 0..430 run with `CDEFS="-DLAST_TEST_INDEX=430"` (which
+    forces the payload rebuild) completed in 151M cycles and sailed past
+    the row both full runs hung on — the prime suspect is now stale
+    hand-off-era build products (the full reruns reused them; CDEFS
+    evicts them).  A forced-rebuild full 722 run adjudicates.
+
+32. **cpu corpus env-read rows vs the flat-RAM TB: the `envread` class
+    (2026-08-28).** Scoring the 0..430 RTL run against the silicon
+    capture surfaced 11 diffs on 7 rows, all environment reads a bare
+    flat-RAM TB cannot reproduce: `MOVE.L (xxx).W=$1820,D1` and the
+    memory-indirect/postindexed family read Mac low-memory globals
+    (silicon returned $40809BE6 — a ROM pointer that lives at $1820 on
+    a real Quadra; the TB returns 0 and correctly sets Z), and
+    `MOVEC.L VBR/CACR,D0` read platform state.  The RTL behaved
+    correctly for its environment.  score_vs_oracle.py grows a
+    `--flat-env` flag (passed only by the bare-TB runner
+    run_corpus.sh) classifying exactly those seven names as `envread`;
+    the machine acceptance scoring does NOT pass the flag — on the
+    full machine (real ROM + low memory) these rows compare strictly.
+    With the flag: 427 rows, 0 REAL diffs.
 
 
 ### Offline verification harness (new)

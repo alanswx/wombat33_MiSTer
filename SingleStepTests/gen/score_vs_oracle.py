@@ -32,6 +32,12 @@ Every mismatch is classified; only REAL diffs fail (exit 1):
             CPU behavior (differs across platforms by construction)
   env       mmu: a non-targeted MMU register differs (platform
             handoff state, finding 22)
+  envread   cpu, only under --flat-env (bare flat-RAM TB runs): rows
+            that read oracle-environment state a flat TB cannot have --
+            Mac low-memory globals via abs.W/memory-indirect modes, and
+            MOVEC of VBR/CACR (finding 32). The machine acceptance run
+            (real ROM + low memory) never passes --flat-env: there these
+            rows compare strictly.
   reloc     mmu: table-window descriptor address bytes / the MMUSR PA
             field point at the run's own relocated tables (finding 24);
             descriptor FLAG bytes still compare strictly
@@ -45,6 +51,22 @@ import sys
 PAYLOAD_LO, PAYLOAD_HI = 0x40000, 0x80000
 FSGL_SUFFIX = " [040-unimpl->vec11]"
 FPSR_AEXC = 0xF8
+
+# cpu rows whose results depend on oracle-environment memory/registers a
+# bare flat-RAM TB cannot reproduce (finding 32); active under --flat-env
+ENVREAD_ROWS = (
+    "MOVEC.L VBR,D0",
+    "MOVEC.L CACR,D0",
+    "MOVE.L ([bd.W,A6]),D1",
+    "MOVE.L ([bd.W,A6],D0.L*2,od.W),D1",
+    "MOVE.L ([bd.W,A6,D0.L*2],od.W),D1",
+    "MOVE.L ([bd.L,A6],D0.L*4,od.L),D1",
+    "MOVE.L (xxx).W=$1820,D1",
+)
+
+
+def envread_row(name):
+    return any(name.startswith(p) for p in ENVREAD_ROWS)
 
 # vec-4/vec-8-style CCR undefined classes: (name regex, undefined mask,
 # condition on the oracle ccr for the mask to apply, or None)
@@ -204,6 +226,10 @@ def score_cpu(oracle, cand, args, t):
         print("payload layout deltas: " + ", ".join(f"{d:+#x}" for d in sorted(delta)))
     for o, c in pairs:
         n = o["name"]
+        if args.flat_env and envread_row(n):
+            # the whole row is oracle-environment-driven (finding 32)
+            t.cls("envread", f"{n}: flat-TB environment row")
+            continue
         if o.get("vec", 0) != c.get("vec", 0):
             t.fail(f"{n} vec: oracle {o.get('vec')} candidate {c.get('vec')}")
             continue
@@ -401,6 +427,7 @@ def main():
     ap.add_argument("candidate")
     ap.add_argument("--ccr-policy", choices=("arch", "silicon"), default="arch")
     ap.add_argument("--mask-aexc", action="store_true")
+    ap.add_argument("--flat-env", action="store_true")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
     t = Tally(args.verbose)
