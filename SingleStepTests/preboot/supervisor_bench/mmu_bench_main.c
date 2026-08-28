@@ -48,6 +48,7 @@ extern u32 g_results_offset;
 extern u32 g_results_max_bytes;
 
 extern void install_vbr(void);
+extern void install_fline_shim(void) __attribute__((weak));  /* see bench_main.c */
 extern int  invoke_test_with_recovery(u8 *entry);   /* 0 = OK, !=0 = vector */
 extern void paint_string(u32 row, u32 col_byte, const char *s, u32 max_chars);
 extern void display_wipe(u32 rows);
@@ -170,6 +171,7 @@ void bench_main(void) {
     char buf[16];
 
     install_vbr();
+    if (&install_fline_shim) install_fline_shim();
     mmu_save(&saved);
 
     g_ctx.refnum = g_handoff_refnum; g_ctx.drive = g_handoff_drive;

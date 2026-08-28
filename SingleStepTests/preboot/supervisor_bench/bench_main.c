@@ -22,6 +22,14 @@ extern u32  g_results_max_bytes;  /* compile-time constant */
 extern void install_vbr(void);
 extern int invoke_test_with_recovery(u8 *entry);   /* 0 = OK, !=0 = vector */
 
+/* fline_shim.s — emulates/skips 040 ops the ROM's _Write path runs but
+ * this machine F-lines on (test-blockers 20). Weak: not every payload
+ * links it, and it must install after install_vbr captured orig_vbr. */
+extern void install_fline_shim(void) __attribute__((weak));
+extern u32 g_shim_count   __attribute__((weak));
+extern u32 g_shim_last_op __attribute__((weak));
+extern u32 g_shim_last_pc __attribute__((weak));
+
 /* Scratch buffers */
 static Snapshot init_snap;
 static Snapshot final_snap;
@@ -256,6 +264,7 @@ void bench_main(void)
     JwCtx wctx;
 
     install_vbr();
+    if (&install_fline_shim) install_fline_shim();
 
     wctx.refnum      = g_handoff_refnum;
     wctx.drive       = g_handoff_drive;
@@ -338,6 +347,16 @@ void bench_main(void)
     format_hex32(buf, (u32)(u16)w->last_err);
     paint_string(28, 4, "ioResult=", 9);
     paint_string(28, 13, buf + 4, 4);
+
+    /* How often the F-line shim fired names the op the writes needed. */
+    if (&g_shim_count && g_shim_count) {
+        paint_string(40, 4, "shim=", 5);
+        format_hex32(buf, g_shim_count);   paint_string(40, 9, buf, 8);
+        paint_string(40, 19, "op=", 3);
+        format_hex32(buf, g_shim_last_op); paint_string(40, 22, buf + 4, 4);
+        paint_string(40, 28, "pc=", 3);
+        format_hex32(buf, g_shim_last_pc); paint_string(40, 31, buf, 8);
+    }
     paint_string(52, 4, "Power off and extract /Results.jsonl", 40);
 
     /* If we booted from a floppy (drive 1 = internal, 2 = external),

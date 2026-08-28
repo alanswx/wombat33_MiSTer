@@ -29,6 +29,7 @@ g_resume_sp:    .long 0
 g_resume_pc:    .long 0
 g_last_vector:  .long 0     | set by recovery_stub before jumping back
 g_tc_disable:   .long 0     | retained slot (68040 disables TC via MOVEC)
+    .global orig_vbr        | fline_shim.s patches vector 11 of this table
 orig_vbr:       .long 0     | the OS's VBR at install_vbr time
 g_vbr_ready:    .word 0     | nonzero once vbr_table is populated
 

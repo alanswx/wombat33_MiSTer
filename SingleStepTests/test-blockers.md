@@ -463,6 +463,99 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     the transfer is not the same as marking the page uncacheable, and the
     note is explicit that Apple does the latter.
 
+20. **What the `_Write` path actually executes, and the F-line shim
+    (2026-08-27).** Instruction-level trace of the write under QEMU
+    (`-d in_asm` logs each translated block once, in first-execution
+    order, so log position = phase), plus a full read of the ROM's
+    `_BlockMove` at `$40884400`:
+
+    - `_BlockMove` on a 68040 (`CPUFlag $12F == 4`): copies > 12 bytes
+      with source and destination in the same 16-byte phase go through a
+      **`MOVE16 (A0)+,(A1)+`** burst loop (`$40884482/90/96` — the only
+      three MOVE16s in the decoded ROM). Then **every** such BlockMove
+      runs a cache epilogue at `$408870AA`: rounded length ≥ `$C00` →
+      **`CPUSHA BC`** (`$408870D8`); smaller → mask IRQs, **`MOVEC TC`,
+      `PTESTR (A1)`, `MOVEC MMUSR`** to translate the destination, then a
+      **`CPUSHL BC,(A1)`** per-line loop (`$40887126`), per page. (The
+      recursive-descent disassembly fused `$F569 $4E7A` into a bogus
+      `frestore`; QEMU's decoder shows the real `ptestr`+`movec`.)
+    - The first `_Write` first-executes ~1000 blocks of `$408Dxxxx`
+      SCSI Manager code the read path never touches, re-runs the
+      BlockMove epilogue, and later `CPUSHA BC` (`$40885032`).
+    - **Phase correlation kills the instruction-gap theory for the
+      BlockMove family:** the boot block only starts at log line ~53100,
+      and `move16` (~43970), `ptestr`/`cpushl` (~41250) and the ROM's own
+      `pflusha` (`$40803F80`, `$408815A2`, ~8500-10850) all first-execute
+      during the **ROM's own boot/mount phase** — which the physical
+      machine survives on every run. So the real CPU executes MOVE16,
+      PTEST, CPUSH and PFLUSH fine, and finding 11's "PFLUSHA F-lines on
+      real silicon" attribution is doubtful (something else in that DTT0
+      block killed it; unresolved). The write-path F-line must come from
+      something write-only: an op in the un-decoded SCSI write machinery
+      (a hardware-only Turbo SCSI branch the emulators don't steer into),
+      an FPU instruction (this machine's FPU has never been exercised
+      pre-System; transcendentals without an FPSP → vector 11), or
+      garbage execution after a pseudo-DMA recovery failure.
+    - Also ruled out: the resume-file lead of `restore_os_traps()` + IPL.
+      `use_os_vbr()` swaps the whole VBR to the ROM's table, so our
+      vectors 32..63 are dormant during the bracket, nothing of ours
+      pokes the ROM's live table, and the epilogue masks/lowers IPL
+      itself (`ORI #$700,SR` / driver-internal).
+
+    **Detour that produced its own finding: vector 11's low-mem slot is
+    read as DATA by ROM trap code — never patch it in place.** The
+    first shim patched `$2C` directly (the ROM's VBR is 0; measured via
+    a breakpoint on the installer). MAME then deterministically died at
+    the **8th** flush with Sad Mac `0F/0000001B` — DSErrCode `$1B` =
+    27 = `dsFSErr`, stored not by the exception dispatcher but by a
+    `_SysError` call reached from `$40809A26`, inside the OS-trap
+    dispatch machinery — with the thunk itself **never entered**
+    (breakpoint on it: zero hits). A control build with the shim linked
+    but the vector untouched completes all 717 rows, so the 4-byte
+    write at `$2C` alone is what kills the write path. Some ROM
+    OS-trap/FS code compares or consumes that slot as data.
+
+    **Fix/instrument shipped: `common/runtime/fline_shim.s` (v2,
+    forwarding table).** `install_fline_shim()` (called by all three
+    bench mains right after `install_vbr()`) builds a private 256-entry
+    table and repoints recovery.s's `orig_vbr` at it, so
+    `use_os_vbr()` activates it during every I/O bracket; the live
+    table at 0 is never modified. Entry 11 → the thunk; every other
+    entry → a 6-byte stub (`move.l (N*4).w,-(sp); rts`) that jumps
+    through the **live** low-mem slot at exception time, so runtime
+    vector patching by the ROM/driver (e.g. pseudo-DMA bus-error
+    handlers, completion IRQs) keeps working mid-transfer. Installs
+    only if the captured VBR is 0 (both emulators measure 0); else it
+    leaves the machine alone. The thunk: emulates `MOVE16 (A0)+,(A1)+`
+    as four longs (both addresses forced 16-aligned, both registers
+    +16); skips CINV/CPUSH (`$F4xx`) and PFLUSH/PTEST (`$F5xx`) by
+    advancing the stacked PC (safe in composition: a skipped PTESTR
+    leaves MMUSR stale, but the CPUSHLs that would consume it are
+    skipped too); counts every hit in `g_shim_count`/`g_shim_last_op`/
+    `g_shim_last_pc`, which the CPU bench paints on the DONE screen;
+    and for anything else — FPU ops, non-format-0 frames, garbage —
+    **paints `FLINE OP+PC: xxxx xxxxxxxx` at row 40 and halts with the
+    screen alive** instead of letting the ROM Sad Mac. Dormant under
+    MAME/QEMU (their 68040 executes everything; the stubs forward
+    identically), verified: MAME completes the corpus and the QEMU
+    diff report is byte-identical to the pre-shim build's. Every
+    hardware outcome now identifies the culprit: a completed run's
+    shim line names the emulated/skipped op; a painted halt names the
+    un-emulatable one; PC in ROM vs RAM separates an instruction gap
+    from control-flow corruption.
+
+    Bookkeeping from the debug loop: MAME needs `-seconds_to_run 400`
+    for the full corpus (140 was folklore; ~150 emulated seconds only
+    reaches test ~460), and `-seconds_to_run` auto-saves a final
+    screenshot under `snap/macqd800/` — no Lua needed for post-mortem
+    screens. `-debugger none` silently disables `-debugscript`; run
+    the default debugger to get breakpoints headless. Device
+    `/Results.jsonl` rows need bridging before `cpu_diff_corpus.py`
+    (strip NUL padding, drop `trap_state` rows, add `"initial": {}`).
+    QEMU-bench vs MAME-baseline legitimately scores 610/692 — a
+    QEMU-vs-MAME 68040 divergence measurement, not a bench bug; the
+    MAME-bench yardstick stays 667/696.
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local

@@ -80,6 +80,10 @@ $(BUILD)/eject.o: $(COMMON_RUNTIME)/eject.c $(COMMON_RUNTIME)/eject.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 $(BUILD)/recovery.o: $(COMMON_RUNTIME)/recovery.s | $(BUILD)
 	$(AS) $(ASFLAGS) -o $@ $<
+$(BUILD)/fline_shim.o: $(COMMON_RUNTIME)/fline_shim.s | $(BUILD)
+	$(AS) $(ASFLAGS) -o $@ $<
+$(BUILD)/fline_shim_report.o: $(COMMON_RUNTIME)/fline_shim_report.c | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
 $(BUILD)/exception_handlers.o: $(COMMON_RUNTIME)/exception_handlers.s | $(BUILD)
 	$(AS) $(ASFLAGS) -o $@ $<
 
@@ -109,7 +113,9 @@ FPU_SCSI_OBJS := $(BUILD)/payload_entry_cpu.o \
                  $(BUILD)/freestanding.o \
                  $(BUILD)/eject.o \
                  $(BUILD)/font_ascii.o \
-                 $(BUILD)/recovery.o
+                 $(BUILD)/recovery.o \
+                 $(BUILD)/fline_shim.o \
+                 $(BUILD)/fline_shim_report.o
 $(BUILD)/payload_fpu_scsi.elf: $(FPU_SCSI_OBJS) $(PAYLOAD_LD)
 	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(FPU_SCSI_OBJS)
 
@@ -210,7 +216,9 @@ CPU_SCSI_OBJS := $(BUILD)/payload_entry_cpu.o \
                  $(BUILD)/freestanding.o \
                  $(BUILD)/eject.o \
                  $(BUILD)/font_ascii.o \
-                 $(BUILD)/recovery.o
+                 $(BUILD)/recovery.o \
+                 $(BUILD)/fline_shim.o \
+                 $(BUILD)/fline_shim_report.o
 $(BUILD)/payload_cpu_scsi.elf: $(CPU_SCSI_OBJS) $(PAYLOAD_LD)
 	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(CPU_SCSI_OBJS)
 
@@ -222,7 +230,9 @@ CPU_SCSI_AUTO_OBJS := $(BUILD)/payload_entry_cpu.o \
                       $(BUILD)/freestanding.o \
                       $(BUILD)/eject.o \
                       $(BUILD)/font_ascii_auto.o \
-                      $(BUILD)/recovery.o
+                      $(BUILD)/recovery.o \
+                 $(BUILD)/fline_shim.o \
+                 $(BUILD)/fline_shim_report.o
 $(BUILD)/payload_cpu_scsi_auto.elf: $(CPU_SCSI_AUTO_OBJS) $(PAYLOAD_LD)
 	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(CPU_SCSI_AUTO_OBJS)
 
@@ -232,7 +242,9 @@ MMU_BASE_OBJS := $(BUILD)/payload_entry_cpu.o \
                   $(BUILD)/jsonl_writer.o \
                   $(BUILD)/freestanding.o \
                   $(BUILD)/eject.o \
-                  $(BUILD)/recovery_mmu.o
+                  $(BUILD)/recovery_mmu.o \
+                 $(BUILD)/fline_shim.o \
+                 $(BUILD)/fline_shim_report.o
 $(BUILD)/payload_mmu_scsi.elf: $(MMU_BASE_OBJS) $(BUILD)/mmu_bench_main.o $(BUILD)/font_ascii.o $(PAYLOAD_LD)
 	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(MMU_BASE_OBJS) $(BUILD)/mmu_bench_main.o $(BUILD)/font_ascii.o
 $(BUILD)/payload_mmu_scsi_auto.elf: $(MMU_BASE_OBJS) $(BUILD)/mmu_bench_main.o $(BUILD)/font_ascii_auto.o $(PAYLOAD_LD)
@@ -249,7 +261,9 @@ CPU_SCSI_8BPP_OBJS := $(BUILD)/payload_entry_cpu_8bpp.o \
                       $(BUILD)/freestanding.o \
                       $(BUILD)/eject.o \
                       $(BUILD)/font_ascii_8bpp.o \
-                      $(BUILD)/recovery.o
+                      $(BUILD)/recovery.o \
+                 $(BUILD)/fline_shim.o \
+                 $(BUILD)/fline_shim_report.o
 $(BUILD)/payload_cpu_scsi_8bpp.elf: $(CPU_SCSI_8BPP_OBJS) $(PAYLOAD_LD)
 	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(CPU_SCSI_8BPP_OBJS)
 
