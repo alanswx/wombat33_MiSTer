@@ -41,6 +41,58 @@ Run it to **"ALL TESTS DONE"**, power off, pull `/Results.jsonl`, and diff:
 # fpu: per row, vec 11 = an unimplemented op correctly trapped; vec 0 = executed
 ```
 
+## 2026-08-27b bundles — the SCSI `_Write` F-line shim
+
+**Boot these for the write investigation.** The one thing the `-27`
+CPU bundle cannot do on the real machine — write `/Results.jsonl` (Sad
+Mac `0000000F 0000000A` at the first 16 KB flush, ~test 58) — is what
+this build addresses. The payload now carries an F-line safety net for
+the OS-side write path; full analysis in `../test-blockers.md`
+**finding 20**, next-step matrix in `../../RESUME-scsi-write.md`.
+
+| Bundle | Contents |
+|---|---|
+| `quadra800-cpu-2026-08-27b.tgz` | CPU bench `.hda` + `.dsk`, F-line shim in the payload |
+| `quadra800-cpu-bootwritetest-diag-2026-08-27b.tgz` | boot-block-only `_Write` probe (no payload runs, no shim) |
+
+What the shim does during each `_Write` bracket (only there — tests
+still run under the bench's own recovery table):
+
+- `MOVE16 (A0)+,(A1)+` → emulated; CINV/CPUSH (`$F4xx`) and
+  PFLUSH/PTEST (`$F5xx`) → skipped. These are what the ROM's 68040
+  `_BlockMove` and its cache epilogue execute on the write path.
+- anything else → paints **`FLINE OP+PC: xxxx xxxxxxxx`** at row 40
+  and **halts with the screen alive** — photograph that line; it names
+  the exact instruction and address that used to Sad Mac.
+- every hit is counted; a completed run paints
+  `shim=NNNNNNNN op=XXXX pc=XXXXXXXX` on the DONE screen. **A DONE
+  screen with no shim line means the write worked with the shim never
+  firing.**
+
+The live vector table at 0 is never modified (patching `$2C` in place
+trips a ROM data-read of that slot → SysError `0F/1B`; finding 20).
+The bracket instead runs under a private table that forwards every
+other vector through the live low-mem slots at exception time.
+
+The `bootwritetest` image is the environment discriminator: it runs
+one 512-byte `_Write` from the boot block itself — ROM vectors, no
+payload, no shim — after the usual five lines. **7 lines painted** =
+`_Write` returned, row 76 holds its `ioResult`; **6 lines** = it hung
+inside `_Write`; **Sad Mac** = same crash even in the pristine boot
+environment (the write path is broken independent of the bench).
+The write is the payload's own first sector rewritten in place, so
+the disk is unchanged.
+
+Regression state: MAME `macqd800` runs this exact payload to
+`ALL TESTS DONE`, `ioResult=0000`, no shim line, and the extracted
+results diff **667/696 match** against the baseline — identical to the
+pre-shim build. QEMU's diff report is byte-identical pre/post shim.
+Neither emulator can reproduce the hardware failure (their 68040
+executes every suspect instruction); they only prove no regression.
+
+Expected `C` line for both `-27b` images: **`678854F7`**
+(window `0x1F200`; both flavors share the payload byte-for-byte).
+
 ## 2026-08-27 bundles — FULL rebuild (boot block **and** payload)
 
 **Boot these.** Two things are new. First, unlike the 2026-08-26
