@@ -1,4 +1,4 @@
-# Resume prompt — all-in-one disk BUILT + QEMU-green; next: hardware run + analysis
+# Resume prompt — all-in-one disk HARDWARE-VALIDATED; next: analysis + RTL bring-up
 
 Paste this whole file as the opening message of a new session.
 
@@ -24,32 +24,30 @@ Chain lessons on record (finding 27): finding 24 bites `_Read` too
 `FSAVE/FRESTORE (A0)` rows scribble the `$80000` handoff — the entry
 re-plants it from its entry-time copy before every hop.
 
+**HARDWARE-VALIDATED 2026-08-28 (finding 27 close-out):** one boot ran
+all five suites; splits in `results/allinone/`. saverestore + mmu-full
+byte-identical to the singles; cpu/fpu differ only by constant layout
+shifts (+340/+300 on recorded addresses); integration 1328/1328 with
+the corrected FDBcc goldens 51/51 and the adjudicated 176 vec-11 + 16
+FPIAR fails. Chain `_Read` under the ROM table proven on silicon.
+
 ## NEXT TASKS (in order)
 
-1. **Hardware run of `dist/quadra800-allinone.hda`** (user + Quadra).
-   Expect the per-suite DONE screens in sequence, final DONE after
-   integration, `C = 862D7F48` stable across boots. Extract
-   `/Results.jsonl`, run `gen/split_allinone_results.py` with the
-   manifest, compare per-suite rows to the 2026-08-28 singles. The one
-   silicon-only unknown: chain `_Read` under the ROM vector table at
-   bench time — a hop Sad-Maccing `0F/000A` = finding 20's F-line
-   class; fallback design: bracket the chain read with a forwarding
-   table (fline shim style) copied out of the read window.
-2. **MMU diff-tool contract rework** (finding 22): `mmu_diff_corpus.py`
+1. **MMU diff-tool contract rework** (finding 22): `mmu_diff_corpus.py`
    scores 0/14 everywhere (harness-state expectations). Fold the safe
    rows into `gen/mmu_live_check.py` (the working model) or fix
    mmu_diff to match (finding-13 treatment: split environment fields
    from CPU behavior).
-3. **CPU corpus portability debt** (finding 13): 29 rows (absolute
+2. **CPU corpus portability debt** (finding 13): 29 rows (absolute
    `$1800/$1820`, A6-into-Dn, MOVEC harness state) — re-express
    A6-relative or mark platform-local and exclude.
-4. **FPU polish**: per-row FPSR clear so AEXC doesn't stick; optional
+3. **FPU polish**: per-row FPSR clear so AEXC doesn't stick; optional
    FPIAR probe suite (word vs long paths, FMOVEM variant) to pin the
    low-16 behavior (finding 26).
-5. **Docs sweep**: finding 11's "PFLUSHA F-lines on silicon"
+4. **Docs sweep**: finding 11's "PFLUSHA F-lines on silicon"
    attribution is disproven (f20/f22); what killed the DTT0-era boot
    block stays formally unresolved — low priority.
-6. Then the point of it all: **wombat33 RTL bring-up against the
+5. Then the point of it all: **wombat33 RTL bring-up against the
    captured oracle set** (`results/*2026-08-28*` + corrected corpora;
    `cpu_fpu/cpu_fpu_tests.v` + `sim_main.cpp` are the Verilator start).
 

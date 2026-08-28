@@ -907,6 +907,24 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     `-28` integration bundles are marked superseded (CACR relic +
     inverted FDBcc goldens).
 
+    **HARDWARE-VALIDATED same day.** One boot of
+    `quadra800-allinone.hda` on the real Quadra 800 captured all five
+    suites into the one results file (split copies:
+    `results/allinone/*_hardware_quadra800_2026-08-28.jsonl`):
+    cpu 717 + fpu 270 + saverestore 8 + mmu-full 25 + **integration
+    1328/1328**. Versus the single-suite hardware captures:
+    saverestore and mmu-full byte-identical; cpu rows differ ONLY by a
+    constant +340 on recorded payload addresses and fpu by +300 on
+    FPIAR (the chain code shifted the layout; zero vec/ccr changes —
+    the fpu name diffs are the retired `[040-unimpl->vec11]` FSGL*
+    labels in the old capture). Integration self-scores 1136/1328 with
+    the 51 corrected-golden FDBcc rows now **51/51 pass** — this file
+    is the first hardware capture against the corrected corpus — and
+    the 192 fails decompose exactly as adjudicated: 176 FINT/FINTRZ
+    vector-11 traps + 16 FPIAR low-16 rows. The silicon-only unknown
+    is closed: the chain `_Read` under the ROM vector table at bench
+    time works on hardware (all four hops, no F-line).
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local
