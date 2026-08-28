@@ -46,6 +46,9 @@ cpu:         $(BUILD)/boot_stub_patch.bin $(BUILD)/payload_cpu_scsi.bin
 # the corpus) read back vector 11 while the hardware subset returns a
 # result. Same patchable boot stub as the CPU bench.
 fpu:         $(BUILD)/boot_stub_patch.bin $(BUILD)/payload_fpu_scsi.bin
+cpu_fpu:     $(BUILD)/boot_stub_patch.bin $(BUILD)/payload_cpu_fpu_scsi.bin
+cpu_fpu_save_restore:  $(BUILD)/boot_stub_patch.bin $(BUILD)/payload_cpu_fpu_save_restore_scsi.bin
+.PHONY: cpu_fpu cpu_fpu_save_restore
 # MMU bench (gen/mmu_tests.h + mmu_bench_main.c): supervisor-mode
 # 68030 MMU correctness tests for the Macintosh LC II / IIvi.
 #   mmu       — hw-safe rows only (translation never enabled)
@@ -104,6 +107,10 @@ $(BUILD)/bench_main.o: bench_main.c | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 $(BUILD)/fpu_bench_main.o: fpu_bench_main.c ../../gen/fpu_tests.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
+$(BUILD)/cpu_fpu_bench_main.o: cpu_fpu_bench_main.c ../../macos_bench/cpu_fpu_tests.h | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+$(BUILD)/cpu_fpu_save_restore_bench_main.o: cpu_fpu_bench_main.c ../../macos_bench/save_restore_tests.h | $(BUILD)
+	$(CC) $(CFLAGS) -DCPU_FPU_CORPUS_HEADER='"../../macos_bench/save_restore_tests.h"' -c -o $@ $<
 
 # ---------- FPU bench payload ----------
 FPU_SCSI_OBJS := $(BUILD)/payload_entry_cpu.o \
@@ -118,6 +125,21 @@ FPU_SCSI_OBJS := $(BUILD)/payload_entry_cpu.o \
                  $(BUILD)/fline_shim_report.o
 $(BUILD)/payload_fpu_scsi.elf: $(FPU_SCSI_OBJS) $(PAYLOAD_LD)
 	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(FPU_SCSI_OBJS)
+
+# ---------- CPU+FPU integration payloads (full corpus + FSAVE/FRESTORE) ----------
+CPU_FPU_COMMON_OBJS := $(BUILD)/payload_entry_cpu.o \
+                 $(BUILD)/variant_cpu_scsi.o \
+                 $(BUILD)/jsonl_writer.o \
+                 $(BUILD)/freestanding.o \
+                 $(BUILD)/eject.o \
+                 $(BUILD)/font_ascii.o \
+                 $(BUILD)/recovery.o \
+                 $(BUILD)/fline_shim.o \
+                 $(BUILD)/fline_shim_report.o
+$(BUILD)/payload_cpu_fpu_scsi.elf: $(CPU_FPU_COMMON_OBJS) $(BUILD)/cpu_fpu_bench_main.o $(PAYLOAD_LD)
+	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(CPU_FPU_COMMON_OBJS) $(BUILD)/cpu_fpu_bench_main.o
+$(BUILD)/payload_cpu_fpu_save_restore_scsi.elf: $(CPU_FPU_COMMON_OBJS) $(BUILD)/cpu_fpu_save_restore_bench_main.o $(PAYLOAD_LD)
+	$(LD) $(LDFLAGS) -T $(PAYLOAD_LD) -o $@ $(CPU_FPU_COMMON_OBJS) $(BUILD)/cpu_fpu_save_restore_bench_main.o
 
 # ---------- MMU bench objects ----------
 # recovery with the translation-off guard at recovery_core entry.

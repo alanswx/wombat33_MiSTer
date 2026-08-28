@@ -52,6 +52,7 @@ extern u32  g_results_max_bytes;
 
 /* recovery.s — VBR + longjmp-style exception escape. */
 extern void install_vbr(void);
+extern void install_fline_shim(void) __attribute__((weak));  /* see bench_main.c */
 extern int invoke_test_with_recovery(u8 *entry);   /* 0 = OK, !=0 = vector */
 
 /* Provided by display_1bpp.c (font_ascii.o). */
@@ -192,6 +193,7 @@ void bench_main(void) {
     JsonlWriter *w = &g_jw;
 
     install_vbr();
+    if (&install_fline_shim) install_fline_shim();
 
     g_jw_ctx.refnum      = g_handoff_refnum;
     g_jw_ctx.drive       = g_handoff_drive;

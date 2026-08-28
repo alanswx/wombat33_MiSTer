@@ -41,6 +41,31 @@ Run it to **"ALL TESTS DONE"**, power off, pull `/Results.jsonl`, and diff:
 # fpu: per row, vec 11 = an unimplemented op correctly trapped; vec 0 = executed
 ```
 
+## 2026-08-28 bundles — CPU+FPU integration bench
+
+The Mac II-lineage CPU+FPU integration suite, finally wired into the
+Quadra build (`../test-blockers.md` finding 23). Rows are self-scoring
+on-device: each JSONL line carries `expected`/`actual`/`pass`/`vec`, so
+no external baseline is needed to read a run.
+
+| Bundle | Contents | expected `C` |
+|---|---|---|
+| `quadra800-cpu-fpu-2026-08-28.tgz` | 1328-row CPU+FPU integration corpus, `.hda` + `.dsk` | `CE2ED223` |
+| `quadra800-cpu-fpu-saverestore-diag-2026-08-28.tgz` | 8-row FSAVE/FRESTORE state-frame set, `.hda` | `379A169A` |
+
+Emulator regression: 972/972 rows pass identically on MAME and QEMU,
+8/8 on the FSAVE/FRESTORE set — then **both emulators die on the
+corpus tail** (MAME fatal-aborts on the FDBcc/FScc/FTRAPcc conditional
+class, QEMU dumps core nearby). Real 68040 silicon implements those in
+hardware, so the Quadra is expected to run the full 1328 and will be
+the first machine to score the tail. Some rows also contain
+040-unimplemented FP ops that trap vector 11 on silicon — the `vec`
+column records it; that is data, not failure.
+
+The prior hardware-campaign results (2026-08-28, from the `-27c` set)
+live in `../results/{cpu,fpu,mmu}/hardware_quadra800_2026-08-28.jsonl`
+with the adjudications in finding 22.
+
 ## 2026-08-27c bundles — the write bug is root-caused and FIXED
 
 **Boot these.** The `-27b` CPU disk did its diagnostic job on hardware:

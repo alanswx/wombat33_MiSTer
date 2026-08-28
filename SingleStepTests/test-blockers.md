@@ -678,6 +678,38 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     (`MMU_RECOVERY`). The corpus data and the MAME baseline for those
     rows already exist — only the runner is missing.
 
+23. **CPU+FPU integration bench wired into the Quadra build, and the
+    emulator ceiling it exposed (2026-08-28).** The Mac II-lineage
+    integration bench (`cpu_fpu_bench_main.c`, 1328-row
+    `macos_bench/cpu_fpu_tests.h`, 8-row FSAVE/FRESTORE sub-corpus)
+    was source-complete but had no Makefile link target on the Quadra
+    tree — that is the whole reason it never shipped. Now built as
+    `make cpu_fpu` / `make cpu_fpu_save_restore` (shim installed like
+    the other benches; `build_cpu_fpu_dsk.sh` had a stale `rb-cli new`
+    syntax, fixed). Rows are self-scoring on-device
+    (`expected`/`actual`/`pass`/`vec` per line).
+
+    Emulator regression: **972/972 rows pass on MAME and QEMU
+    byte-alike, and 8/8 FSAVE/FRESTORE** — then both emulators die on
+    the corpus tail, each in its own way: **MAME fatal-aborts the
+    whole emulator** (`M68kFPU: unimplemented main op 1 with mode 1`,
+    the FDBcc/FScc/FTRAPcc conditional class) and **QEMU dumps core**
+    in the same region. Real 68040 silicon implements FScc/FDBcc/
+    FTRAPcc in hardware (M68040UM), so the tail is expected to run on
+    the Quadra — the machine will be the first to ever score those
+    rows. Same epistemic shape as the SCSI-write bug: the emulators
+    validate the machinery and the first 972 rows; the tail is
+    hardware-first territory. A fatal MAME abort mid-run still leaves
+    all flushed batches on the CHD (the extraction pipeline works on
+    partial runs).
+
+    Build-system footgun recorded twice today: `EXTRA_ASFLAGS` is not
+    a make dependency and the `build_*_hda.sh` scripts re-run `make`
+    without it — always `make clean` (or `rm build/boot_stub_patch.*`)
+    when switching hardware↔emulator flavors, or the disk silently
+    carries the wrong boot block (a hardware stub under MAME shows the
+    ROM boot-scanner screen: the finding-11 low-memory wipe).
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local

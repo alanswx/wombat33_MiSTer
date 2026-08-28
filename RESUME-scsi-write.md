@@ -59,6 +59,9 @@ make clean && make cpu fpu mmu
 ./build_cpu_hda.sh ~/testdisk.hda dist/quadra800-cpu.hda   # + _dsk / fpu / mmu variants
 # emulator regression first (MANDATORY before handing over a disk):
 make clean && make cpu EXTRA_ASFLAGS="--defsym BOOT_SET_DTT0=1"
+# ALWAYS make clean (or rm build/boot_stub_patch.*) when switching between
+# hardware and emulator flavors: flags are not make dependencies, and the
+# build_*_hda.sh scripts re-run make WITHOUT your EXTRA_ASFLAGS.
 # MAME needs -seconds_to_run 400 for the full CPU corpus (150 reaches only ~test 460);
 # -str auto-saves a final screenshot; -debugger none silently disables -debugscript.
 ```
