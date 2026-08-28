@@ -47,7 +47,7 @@
 // ------------------
 int  initialReset = 48;
 bool run_enable = 1;
-int  batchSize = 150000;
+int  batchSize = 500000;
 bool single_step = 0;
 bool multi_step = 0;
 int  multi_step_amount = 1024;
@@ -297,8 +297,9 @@ int main(int argc, char** argv, char** env) {
 	}
 
 	// The interactive GUI must not fill the disk behind the user's back:
-	// the trace file starts enabled only for headless runs.
-	gui_trace_file = headless;
+	// the trace file starts enabled only for headless runs — unless a
+	// debug window was explicitly requested on the command line.
+	gui_trace_file = headless || trace_after != 0;
 	if (!cpu_trace_disabled) {
 		cpu_trace_file = fopen(cpu_trace_filename, "w");
 		if (!cpu_trace_file) { cpu_trace_disabled = true; }
@@ -483,6 +484,7 @@ int main(int argc, char** argv, char** env) {
 			break;
 		}
 
+		if (Verilated::gotFinish()) run_enable = 0;
 		if (run_enable)
 			for (int step = 0; step < batchSize; step++) verilate();
 		else {
