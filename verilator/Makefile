@@ -24,6 +24,12 @@ ifeq ($(UNAME_S), Linux)
 	CXXFLAGS += `sdl2-config --cflags` -Iimgui
 	CFLAGS = $(CXXFLAGS)
 endif
+ifeq ($(UNAME_S), Darwin)
+	# homebrew: SDL2, plus lz4/zstd/zlib for verilator >=5.05x FST writer
+	LIBS += -framework OpenGL `sdl2-config --libs` -L/opt/homebrew/lib -llz4 -lzstd -lz
+	CXXFLAGS += `sdl2-config --cflags` -I/opt/homebrew/include -Iimgui -DGL_SILENCE_DEPRECATION
+	CFLAGS = $(CXXFLAGS)
+endif
 
 CFLAGS += -Iimgui
 LDFLAGS = $(LIBS)
@@ -78,7 +84,7 @@ quadra800.rom.hex: ../releases/quadra800.rom
 
 $(VOUT): $(V_SRC) $(C_SRC) Makefile
 	$V -cc $(V_OPT) -LDFLAGS "$(LDFLAGS)" -exe --trace --Mdir ./obj_dir \
-		$(V_DEFINE) $(V_INC) $(TOP) -CFLAGS $(CFLAGS) $(V_SRC) $(C_SRC)
+		$(V_DEFINE) $(V_INC) $(TOP) -CFLAGS "$(CFLAGS)" $(V_SRC) $(C_SRC)
 	@touch $(VOUT)
 
 $(EXE): $(VOUT)
