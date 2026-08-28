@@ -64,6 +64,7 @@ int  stop_at_frame = -1;
 vluint64_t max_cycles = 0;      // --max-cycles N: stop after N clk edges (0 = off)
 vluint64_t trace_after = 0;     // --trace-after N: suppress the cpu trace before cycle N
 uint32_t stop_pc_lo = 1, stop_pc_hi = 0;   // --stop-at-pc lo,hi: exit when pc_i enters range
+bool pc_was_in_stop = false;               // edge detector for the stop range
 
 // CPU instruction trace (MacLC cpu_trace pattern, adapted to AP68040's
 // pc_i register: one entry per instruction dispatch, extension words read
@@ -141,11 +142,16 @@ int verilate() {
 				if (!cpu_trace_disabled && main_time >= trace_after) cpu_trace_step();
 				uint32_t hpc = SIMEMU->__PVT__machine__DOT__cpu__DOT__core__DOT__pc_i;
 				if (pc_hist_enable) pc_hist[hpc >> 8]++;
-				if (hpc >= stop_pc_lo && hpc <= stop_pc_hi) {
+				// edge-triggered: fire on entering the range, so RUN can
+				// resume through it without an instant re-stop
+				bool pc_in_stop = (hpc >= stop_pc_lo && hpc <= stop_pc_hi);
+				if (pc_in_stop && !pc_was_in_stop) {
 					printf("[STOP] pc=%08X at cycle %llu\n", hpc,
 					       (unsigned long long)main_time);
+					fflush(stdout);
 					Verilated::gotFinish(true);
 				}
+				pc_was_in_stop = pc_in_stop;
 				if (main_time >= next_heartbeat) {
 					next_heartbeat += heartbeat_every;
 					printf("[HB] cycle=%llu pc=%08X instr=%ld a3=%08X d7=%08X\n",
@@ -484,7 +490,11 @@ int main(int argc, char** argv, char** env) {
 			break;
 		}
 
-		if (Verilated::gotFinish()) run_enable = 0;
+		// a [STOP] latches gotFinish and pauses; re-checking RUN clears it
+		if (Verilated::gotFinish()) {
+			if (run_enable) Verilated::gotFinish(false);
+			else run_enable = 0;
+		}
 		if (run_enable)
 			for (int step = 0; step < batchSize; step++) verilate();
 		else {
