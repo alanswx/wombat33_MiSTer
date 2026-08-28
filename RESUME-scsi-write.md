@@ -51,9 +51,20 @@ PFLUSHA attribution corrected in test-blockers + boot_stub_scsi.s).
 a FPIAR probe suite (word-vs-long write paths) and a per-row-FPSR-clear
 FPU re-capture — neither blocks RTL bring-up.
 
+**RTL CAMPAIGN STARTED (finding 30, 2026-08-28):** AP68040
+(rtl/ap68040 submodule) scores **0 REAL diffs on every suite** vs the
+silicon captures — saverestore 8/8, fpu 270/270, integration 1328/1328
+(incl. the emulator-fatal tail + FPIAR low-16), mmu 24/24 (stale ATC,
+MMUSR ground truth). Harness: preboot/sim040 (tb_corpus.v + Verilator;
+SIM=verilator ./run_corpus.sh <suite>); results/ap68040/. Repo now
+carries the MiSTer template scaffold (wombat33.sv etc., GPL-3), the
+GUI Verilator sim at /verilator (MacLC-style ImGui framework), and the
+Amiga40 ADF set. releases/quadra800.rom staged, user commits it.
+
 ## NEXT TASK
 
-**wombat33 RTL bring-up against the captured oracle set.**
+**Machine bring-up — start new sessions from `RESUME-machine-bringup.md`**
+(this file stays as the oracle-campaign record). Ground truth reminder:
 `results/*2026-08-28*` (+ `results/allinone/`) are ground truth;
 `cpu_fpu/cpu_fpu_tests.v` + `sim_main.cpp` are the Verilator start.
 Score every RTL run with:
