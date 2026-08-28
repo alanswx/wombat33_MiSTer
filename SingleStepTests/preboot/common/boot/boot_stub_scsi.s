@@ -380,6 +380,35 @@ startup:
     moveq   #16, %d0                      | solid block
     bsr.w   draw_glyph_d0
 
+.ifdef BOOT_WRITE_TEST
+    | Diagnostic: does _Write work in the boot block's environment, where
+    | _Read demonstrably does? Writes 512 bytes of the payload back over
+    | itself at the same offset, so the disk content is unchanged.
+    | Paints 'W' + ioResult at row 64, then halts. No payload is entered.
+    | Row 64 marker '6' is painted BEFORE the trap, so the screen tells us
+    | whether we even reached the write: 6 lines = hung inside _Write,
+    | 7 lines = it returned and row 76 holds ioResult, gray = never booted.
+    AT      64, 4
+    moveq   #6, %d0
+    bsr.w   draw_glyph_d0
+
+    lea     pb(%pc), %a0
+    move.l  #PAYLOAD_LOAD_ADDR, PB_OFF_IOBUFFER(%a0)
+    move.l  #512, PB_OFF_IOREQCOUNT(%a0)
+    move.l  payload_offset_value(%pc), PB_OFF_IOPOSOFFSET(%a0)
+    .word   0xA003                        | _Write
+    move.w  PB_OFF_IORESULT(%a0), %d7
+
+    AT      76, 4
+    moveq   #7, %d0
+    bsr.w   draw_glyph_d0
+    GAP
+    move.w  %d7, %d5
+    ext.l   %d5
+    bsr.w   hex8
+1:  bra.s   1b
+.endif
+
     jmp     PAYLOAD_LOAD_ADDR.l
 
 fail_noref:
