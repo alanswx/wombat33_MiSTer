@@ -374,7 +374,9 @@ void bench_main(void)
         paint_string(76, 20, buf + 4, 4);
     }
 
-    for (;;) { asm volatile (""); }
+    /* Return to the entry shim: it paints DONE and either hangs (per-
+     * suite disks) or chains to the next payload (all-in-one disk). */
+    return;
 
 #if 0
     /* === legacy single-test display below, kept for reference === */

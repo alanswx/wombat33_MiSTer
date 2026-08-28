@@ -1,70 +1,90 @@
 # Prebuilt Quadra 800 supervisor-mode bench disks
 
-Bootable disk images of the three 68040 benches, ready to run on a real
-Macintosh Quadra 800 (or any 68040 Mac). Each disk boots straight into
-the bench (no System needed) via the HFS boot block; the bench takes over
-in supervisor mode, runs its corpus, paints progress on the built-in DAFB
-display, and writes results to **`/Results.jsonl`** on the same disk.
+Bootable disk images of the 68040 benches, ready to run on a real
+Macintosh Quadra 800. Each disk boots straight into the bench (no System
+needed) via the HFS boot block; the bench runs in supervisor mode, paints
+progress on the built-in DAFB display, and writes results to
+**`/Results.jsonl`** on the same disk.
 
 **REQUIREMENT: set the display to 640×480, 256 colors** (8 bpp — the
-Quadra 800 boot default). The bench paints the DAFB at 8 bpp; a different
-colour depth garbles the text. See `../../../prebuilt/README.md`.
+Quadra 800 boot default). See `../../../prebuilt/README.md`.
 
 | Disk | Bench | Corpus |
 |---|---|---|
+| `quadra800-allinone.hda` | **all five suites, chained** | cpu → fpu → saverestore → mmu-full → integration, one results file |
 | `quadra800-cpu.{hda,dsk}` | 68040 integer CPU | 722 rows (full ISA + 040 discriminators) |
-| `quadra800-fpu.{hda,dsk}` | 68040 FPU | 270 rows; hardware subset executes, unimplemented ops trap (vector 11) |
-| `quadra800-mmu.{hda,dsk}` | 68040 MMU | 24 rows; register-mask + PFLUSH run, live/fault rows skipped (see note) |
+| `quadra800-fpu.{hda,dsk}` | 68040 FPU | 270 rows; 040-lite subset executes, unimplemented ops trap (vector 11) |
+| `quadra800-mmu.{hda,dsk}` | 68040 MMU, hw-safe rows | register-mask + PFLUSH rows |
+| `quadra800-mmu-full.hda` | 68040 MMU, all rows | 24 rows incl. live translation + deliberate faults |
+| `quadra800-cpu-fpu.{hda,dsk}` | CPU+FPU integration | 1328 rows, self-scoring; the tail runs only on silicon |
+| `quadra800-cpu-fpu-saverestore.hda` | FSAVE/FRESTORE | 8 state-frame rows |
 
 - **`.hda`** — SCSI hard-disk image (APM + Apple_HFS). Write to a
   BlueSCSI / SCSI2SD / real SCSI disk, or attach in an emulator.
-- **`.dsk`** — 800 K HFS floppy image. Write with Disk Copy / a Greaseweazle
-  / `dd` to a real 800K floppy, or mount in an emulator.
+- **`.dsk`** — 1.44 MB HFS floppy image.
 
-## Running on hardware
+All hardware-flavor: the boot stub does NOT set `BOOT_SET_DTT0` (that
+block crashed the real boot; emulators need it — rebuild with
+`EXTRA_ASFLAGS="--defsym BOOT_SET_DTT0=1"` after `make clean`, finding 23).
 
-1. Boot the Quadra 800 from the disk (hold the SCSI ID's boot order, or
-   insert the floppy). It boots directly into the bench — you'll see a
-   black screen with white text: a header, the current test index/name,
-   and a running `run= / ok= / trap=` tally.
-2. Let it run to **"ALL TESTS DONE - writing results..."** /
-   **"Power off and extract /Results.jsonl"**.
-3. Power off, move the disk to a modern machine, and pull
-   `/Results.jsonl`.
-4. Diff against the MAME baseline:
-   ```sh
-   SingleStepTests/gen/cpu_diff_corpus.py \
-     SingleStepTests/results/cpu/mame_baseline_2026-06-12.json /path/to/Results.jsonl
-   # fpu: compare the taken vector per row (vec 11 = unimplemented op trapped)
-   # mmu: SingleStepTests/gen/mmu_diff_corpus.py results/mmu/mame_baseline_*.json Results.jsonl
-   ```
+## Boot screen + expected `C`
 
-## Validation status (2026-06-13)
+The boot block paints `A` (BootDrive), `D` (driver refnum), `E` (`_Read`
+ioResult), `C` (payload checksum), `3` (jumping). `C` must match the
+table below on EVERY boot; a differing or unstable value means the
+payload was corrupted in transit (findings 7/16).
 
-Boot-tested in MAME `macqd800` (real Quadra 800 ROM): all three disks
-boot on the 68040, the payload runs, and the **built-in DAFB 1 bpp
-display paints** (`ScrnBase=$F9001000`, the DAFB VRAM window). The bench
-reads the row stride from the ROM's `ScrnRow`/`ScrnBase` globals at
-runtime, so it adapts to whatever resolution the Quadra is set to.
+| Image | expected `C` |
+|---|---|
+| `quadra800-allinone.hda` | `862D7F48` |
+| `quadra800-cpu.hda` / `.dsk` | `BBBAB3E8` / `FD9DAB49` |
+| `quadra800-fpu.hda` / `.dsk` | `D7B33439` / `1FB33427` |
+| `quadra800-mmu.hda` / `.dsk` | `3B2760E6` / `EA840339` |
+| `quadra800-mmu-full.hda` | `20472FDB` |
+| `quadra800-cpu-fpu.hda` / `.dsk` | `6104B2AD` / `61041CED` |
+| `quadra800-cpu-fpu-saverestore.hda` | `E55EE0AE` |
 
-> **MAME caveat:** MAME's 68040 SCSI write-back doesn't persist
-> `/Results.jsonl` (a known emulator limitation — the disk boots and the
-> bench runs, but results read back empty under MAME). On **real
-> hardware** the raw-sector `_Write` path persists results — that's how
-> the predecessor Mac II / IIvi benches collected their JSONL. The screen
-> tally is your live confirmation either way.
+Recompute after any rebuild: `python3 ../../../gen/boot_cksum.py <image>`.
 
-## Notes
+## The all-in-one disk
 
-- **MMU bench:** the register-characterization + PFLUSH rows run; the
-  live-translation and fault rows are emitted `skipped:"live-reloc-todo"`
-  pending the private-identity-page-table relocation (port from
-  `../mmu_bench_main.c.68030-reference`). See `../../../test-blockers.md`.
-- **FPU bench:** assumes MC68040-lite + no FPSP — transcendentals are
-  expected to trap (vector 11). If your core embeds a full 68882 FPU,
-  those rows will execute instead; that's the discriminator.
-- Rebuild any image with `./build_<bench>_<hda|dsk>.sh` from the parent
-  directory (needs `rb-cli`, `jq`, and `~/testdisk.hda` for the .hda
-  template).
-- These images are ~21 MB each (mostly-empty SCSI template); they gzip to
-  ~1 MB if you want to archive them.
+Runs every suite in sequence with no image swapping: at each suite's
+DONE the entry shim jumps to a chain stub at `$7C000` that `_Read`s the
+next payload over `$40000` (≤16 KB slices, `_HwPriv` sel 1 cache flushes
+both sides) and re-enters it. All suites append into ONE 1 MB
+`/Results.jsonl` at fixed regions; `quadra800-allinone.hda.manifest.json`
+records the layout. Suite order puts integration LAST (emulators die in
+its tail — finding 23; silicon runs it).
+
+Expected screens, in order: CPU bench → ALL TESTS DONE → FPU bench →
+ALL FPU TESTS DONE → integration runner (8 saverestore rows) → MMU
+bench → MMU BENCH DONE → integration runner (1328 rows) → final DONE
+and hang. Each DONE screen is replaced by the next suite's wipe within
+a second or two; only the last one persists.
+
+Extraction:
+```sh
+rb-cli get quadra800-allinone.hda@1 /Results.jsonl results.bin
+python3 ../../../gen/split_allinone_results.py \
+    quadra800-allinone.hda.manifest.json results.bin outdir/
+```
+
+QEMU-validated end to end (suites 1–4 complete + integration rows 1–972,
+the known emulator ceiling); per-suite row counts and MMU observables
+identical to the single-suite runs.
+
+## Per-suite runs
+
+1. Boot, let the bench run to its DONE screen (the entry paints `DONE`
+   at the bottom and hangs).
+2. Power off, pull `/Results.jsonl` (strip NULs).
+3. CPU rows diff against `../../../results/cpu/mame_baseline_2026-06-12.json`
+   via `gen/cpu_diff_corpus.py` (bridge: drop `trap_state` rows, add
+   `"initial": {}`); FPU/MMU/integration rows are self-describing —
+   the 2026-08-28 hardware captures in `../../../results/` are the
+   silicon ground truth to compare against.
+
+Older diagnostic images in this directory (`*-nowrite*`, `*-srtest-*`,
+`*-bootwritetest*`, `*-27c-writepath*`) are superseded bisection
+artifacts from the write-path campaign (findings 19–25); keep for
+archaeology, do not boot expecting current behavior.

@@ -88,8 +88,119 @@ _payload_start:
     moveq   #3, %d0
     bsr.w   draw_string_n_d0
 
+    | --- Chain to the next suite if the build script patched one in ---
+    move.l  g_next_offset, %d0
+    beq.w   .hang
+
+    move.w  #0x2700, %sr
+    | VBR back to the ROM table at 0: the _Read below replaces this whole
+    | payload — including its vector table — while the trap executes.
+    suba.l  %a0, %a0
+    .short  0x4E7B, 0x8801                | movec a0,vbr
+    | Re-plant the handoff from the copy taken at entry: corpus rows may
+    | scribble $80000 (the saverestore FSAVE/FRESTORE (A0) rows do).
+    move.w  g_handoff_refnum, %d1
+    move.w  %d1, HANDOFF_ADDR.l
+    move.w  g_handoff_drive, %d1
+    move.w  %d1, (HANDOFF_ADDR+2).l
+    | Stage the stub's parameters, then copy stub+params to CHAIN_ADDR:
+    | the stub cannot run from $4xxxx while _Read overwrites $4xxxx.
+    move.l  %d0, chain_next_off
+    move.l  g_next_length, %d0
+    move.l  %d0, chain_next_len
+    lea     chain_stub, %a0
+    lea     chain_stub_end, %a1
+    movea.l #CHAIN_ADDR, %a2
+1:  move.l  (%a0)+, (%a2)+
+    cmp.l   %a1, %a0
+    blo.s   1b
+    move.l  #0x00080000, %sp              | fresh stack; handoff at $80000 stays
+    moveq   #1, %d0                       | _HwPriv sel 1: push + invalidate both
+    .word   0xA198                        | caches so the jump fetches the stub
+    nop
+    movea.l #CHAIN_ADDR, %a2
+    jmp     (%a2)
+
 .hang:
 1:  bra.s   1b
+
+| --------------------------------------------------------------------
+| Chain stub — runs at CHAIN_ADDR (position-independent; data refs are
+| PC-relative). Repeats the boot block's own load step: _Read the next
+| payload over $40000 under the ROM VBR at SR $2700, _HwPriv-flush both
+| sides, JMP $40000. CHAIN_ADDR sits below the $80000 stack top yet
+| above any payload's read extent (build script asserts <= $3C000).
+| --------------------------------------------------------------------
+CHAIN_ADDR          = 0x0007C000
+PAYLOAD_LOAD_ADDR   = 0x00040000
+PB_OFF_IORESULT     = 16
+PB_OFF_IOVREFNUM    = 22
+PB_OFF_IOREFNUM     = 24
+PB_OFF_IOBUFFER     = 32
+PB_OFF_IOREQCOUNT   = 36
+PB_OFF_IOPOSMODE    = 44
+PB_OFF_IOPOSOFFSET  = 46
+PB_SIZE             = 80
+
+    .align 4
+chain_stub:
+    | Slice the load into <=16 KB driver requests: a single pre-System
+    | request above 16 KB hits the ROM Device Manager's queued path
+    | through garbage low memory (finding 24 — and it bites reads too:
+    | the boot block's one 256 KB _Read only survives in the boot-time
+    | environment). d3-d7 are preserved across the traps.
+    move.l  chain_next_off(%pc), %d4      | disk offset cursor
+    move.l  #PAYLOAD_LOAD_ADDR, %d5       | RAM cursor
+    move.l  chain_next_len(%pc), %d3      | bytes remaining
+
+    moveq   #1, %d0                       | flush before the transfer
+    .word   0xA198                        | _HwPriv FlushInstructionCache
+    nop
+
+.next_chunk:
+    tst.l   %d3
+    ble.s   .load_done
+    move.l  #16384, %d6
+    cmp.l   %d6, %d3
+    bge.s   1f
+    move.l  %d3, %d6                      | final partial chunk
+1:  lea     chain_pb(%pc), %a0
+    moveq   #(PB_SIZE/4)-1, %d0
+2:  clr.l   (%a0)+
+    dbra    %d0, 2b
+    lea     chain_pb(%pc), %a0
+    move.w  HANDOFF_ADDR.l, %d0           | refnum (boot block's handoff)
+    move.w  %d0, PB_OFF_IOREFNUM(%a0)
+    move.w  (HANDOFF_ADDR+2).l, %d0       | drive
+    move.w  %d0, PB_OFF_IOVREFNUM(%a0)
+    move.l  %d5, PB_OFF_IOBUFFER(%a0)
+    move.l  %d6, PB_OFF_IOREQCOUNT(%a0)
+    move.w  #1, PB_OFF_IOPOSMODE(%a0)     | fsFromStart
+    move.l  %d4, PB_OFF_IOPOSOFFSET(%a0)
+    .word   0xA002                        | _Read
+    lea     chain_pb(%pc), %a0
+    move.w  PB_OFF_IORESULT(%a0), %d7
+    tst.w   %d7                           | read failed: hang after DONE with
+    bne.s   .chain_dead                   | no next banner = chain _Read error
+    add.l   %d6, %d4
+    add.l   %d6, %d5
+    sub.l   %d6, %d3
+    bra.s   .next_chunk
+
+.load_done:
+    moveq   #1, %d0                       | flush after, so the JMP fetches
+    .word   0xA198                        | the bytes that actually arrived
+    nop
+    jmp     PAYLOAD_LOAD_ADDR.l
+.chain_dead:
+    bra.s   .chain_dead
+
+    .align 4
+chain_next_off: .long 0                   | filled from g_next_offset pre-copy
+chain_next_len: .long 0
+chain_pb:       .space PB_SIZE
+    .align 4
+chain_stub_end:
 
 | --------------------------------------------------------------------
 | Globals exported to C

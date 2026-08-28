@@ -41,7 +41,68 @@ Run it to **"ALL TESTS DONE"**, power off, pull `/Results.jsonl`, and diff:
 # fpu: per row, vec 11 = an unimplemented op correctly trapped; vec 0 = executed
 ```
 
+## 2026-08-28b bundles — the full set on one tree, plus the all-in-one chain disk
+
+**Boot these.** Every suite rebuilt from one tree carrying every hardware
+fix on record (CACR relic out, corrected FDBcc goldens, sliced writer,
+`HANDOFF_ADDR=$80000`), plus the new **all-in-one disk** that runs every
+suite in sequence with no image swapping. Supersedes the `2026-08-28`
+integration bundles below (those carry the CACR relic and the inverted
+FDBcc goldens) and every earlier per-suite set.
+
+| Bundle (`2026-08-28b`) | Corpus | expected `C` |
+|---|---|---|
+| `quadra800-allinone-2026-08-28b.tgz` | **all five suites chained**: cpu → fpu → saverestore → mmu-full → integration | `862D7F48` |
+| `quadra800-cpu-2026-08-28b.tgz` | 68040 integer CPU, 722 rows | `BBBAB3E8` (dsk `FD9DAB49`) |
+| `quadra800-fpu-2026-08-28b.tgz` | 68040 FPU, 270 rows | `D7B33439` (dsk `1FB33427`) |
+| `quadra800-mmu-2026-08-28b.tgz` | MMU hw-safe rows | `3B2760E6` (dsk `EA840339`) |
+| `quadra800-mmu-full-2026-08-28b.tgz` | MMU all 24 rows, live translation | `20472FDB` |
+| `quadra800-cpu-fpu-2026-08-28b.tgz` | CPU+FPU integration, 1328 rows | `6104B2AD` (dsk `61041CED`) |
+| `quadra800-cpu-fpu-saverestore-2026-08-28b.tgz` | FSAVE/FRESTORE, 8 rows | `E55EE0AE` |
+
+Recompute any `C` with `../gen/boot_cksum.py <image>` — it reads the
+image's own patched markers.
+
+### The all-in-one chain disk
+
+One `.hda`, five payloads at known partition offsets, one pre-allocated
+1 MB `/Results.jsonl` with a fixed region per suite. Each payload ends by
+jumping to a small stub above the read window that `_Read`s the next
+payload over `$40000` (sliced into ≤16 KB driver requests, caches flushed
+via `_HwPriv` sel 1 on both sides) and re-enters it — the boot block's own
+load step, repeated. Integration runs LAST because both emulators die in
+its corpus tail (finding 23); on hardware it runs to completion.
+
+To read a finished (or partial) run:
+```sh
+rb-cli get disk.hda@1 /Results.jsonl results.bin
+../gen/split_allinone_results.py quadra800-allinone.hda.manifest.json results.bin outdir/
+```
+The manifest ships in the bundle; the splitter carves the per-suite
+regions, strips NULs, and reports row counts.
+
+QEMU (git-master q800, the MMU/FPU oracle) validated the chain end to
+end: cpu 717 + fpu 270 + saverestore 8 + mmu-full 25 rows — counts and
+mmu observables identical to the single-suite runs (mmu: 49 match /
+7 known-artifact / 0 real diffs) — then integration rows 1–972 flushed
+before QEMU's known tail crash. The tail remains hardware territory, as
+on the singles. One hardware-only unknown remains flagged: the chain's
+`_Read` runs under the ROM vector table at bench time, a path silicon has
+only proven at boot time — if a hop Sad-Macs `0F/000A` on the real
+machine, that's the F-line-in-`_Read` signature (finding 20's class) and
+the fallback is a forwarding table around the chain read.
+
+Behavior changes shared by every 28b image: the bench mains now RETURN to
+the entry shim (which paints `DONE` at row 56 and hangs, or chains on the
+all-in-one), and the entry re-plants the `$80000` handoff before a chain
+hop because the saverestore corpus's `FSAVE/FRESTORE (A0)` rows scribble
+that address — per-suite disks are behaviorally identical to the
+hardware-validated 28/27c builds apart from the extra `DONE` glyphs.
+
 ## 2026-08-28 bundles — CPU+FPU integration bench
+
+**Superseded by the 2026-08-28b bundles above** — these builds carry the
+68020 CACR relic (finding 25) and the inverted FDBcc goldens (finding 26).
 
 The Mac II-lineage CPU+FPU integration suite, finally wired into the
 Quadra build (`../test-blockers.md` finding 23). Rows are self-scoring

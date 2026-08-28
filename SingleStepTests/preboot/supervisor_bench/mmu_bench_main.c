@@ -452,7 +452,8 @@ void bench_main(void) {
 
     if (g_handoff_drive == 1 || g_handoff_drive == 2)
         eject_floppy(g_handoff_drive);
-    for (;;) { asm volatile (""); }
+    /* Return to the entry shim: it paints DONE and either hangs (per-
+     * suite disks) or chains to the next payload (all-in-one disk). */
 }
 
 /* tiny decimal formatter (kept local so we don't pull in bench_main.c). */

@@ -858,6 +858,55 @@ an on-chip FPU. Lineage: 68020 → 68030 → **68040**. Master plan:
     hardware with results captured**: CPU, FPU, MMU-safe, MMU-full,
     CPU+FPU integration, FSAVE/FRESTORE.
 
+27. **The all-in-one chain disk — five suites, one boot, QEMU-green
+    (2026-08-28).** `build_allinone_hda.sh` packages cpu → fpu →
+    saverestore → mmu-full → integration on one `.hda` (integration
+    LAST: the emulator-fatal tail, finding 23). Each payload's DONE
+    now RETURNS from `bench_main` to the entry shim (the four mains'
+    final `for(;;)` became `return`), which paints `DONE` and either
+    hangs (per-suite disks, `NEXTPAYL` zero) or jumps to a chain stub
+    copied to `$7C000` — above every payload's read extent, below the
+    `$80000` stack — that re-runs the boot block's load step: VBR to
+    the ROM table at 0, `_Read` the next payload over `$40000`,
+    `_HwPriv` sel 1 flush both sides, JMP. All suites append into one
+    1 MB `/Results.jsonl` at fixed per-suite regions (`RJSNLTAG` now
+    patched with per-suite offset AND `max_bytes`, each region sized
+    to hold a full zero-padded final batch); the sidecar
+    `.manifest.json` + `gen/split_allinone_results.py` extract them.
+    `gen/boot_cksum.py` reproduces the boot `C` row from any image's
+    own markers (build-script lesson: compute AFTER patching — the
+    NEXTPAYL/RJSNLTAG longs sit inside the checksum window).
+
+    Two chain-only landmines found by QEMU on the way:
+    - **Finding 24 bites `_Read` too**: the first chain build issued
+      one 35 KB `_Read` and died in the ROM Enqueue at `$40809948`,
+      `ea=$FFFFFFFF` — the exact finding-24 signature. The boot
+      block's single 256 KB `_Read` survives only in the boot-time
+      environment; at bench time every request must be ≤16 KB. The
+      chain stub slices like the writer does.
+    - **The saverestore corpus scribbles the handoff**: its
+      `FSAVE/FRESTORE (A0)` rows do `movea.l #$80000,a0` and write
+      frames (one row `clr.l (a0)`) right over the handoff slot. The
+      suite's own flush survives (writer ctx cached in `.bss` at
+      start), but the next hop read garbage refnum → a boot-fill unit
+      table entry → the same Enqueue Sad Mac. The entry now re-plants
+      the handoff from its own entry-time copy before every hop.
+      Corpus untouched (hardware ground truth, finding 26).
+
+    QEMU (git master, the oracle) runs the whole chain: cpu 717 +
+    fpu 270 + saverestore 8 + mmu-full 25 rows — counts equal to the
+    single-suite hardware captures, mmu observables 49 match /
+    7 known-artifact / 0 real diffs — then integration rows 1–972
+    flush before the known tail core-dump ends the run. Hardware
+    validation of the chain is pending; the one silicon-only unknown
+    is `_Read` under the ROM vector table at bench time (boot-proven
+    only) — a hop Sad-Maccing `0F/000A` would be finding 20's F-line
+    class, fallback: bracket the chain read with a forwarding table.
+    Prebuilts refreshed as the `2026-08-28b` bundle set (all six
+    per-suite disks + all-in-one, new `C` table, SHA256SUMS); the
+    `-28` integration bundles are marked superseded (CACR relic +
+    inverted FDBcc goldens).
+
 ### Offline verification harness (new)
 
 Findings 7-9 were validated without hardware and without MAME (the local
