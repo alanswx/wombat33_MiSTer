@@ -255,7 +255,6 @@ function [16:0] vram_map(input [16:0] w);  // window word -> storage word
 	vram_map = (w >= 17'd78848) ? (w - VRAM_FOLD) : w;
 endfunction
 
-reg [31:0] vram [0:VRAM_WORDS-1];
 reg [31:0] vram_qa;
 reg        vram_ph;                        // port-A phase: 0 capture, 1 deliver
 
@@ -263,19 +262,36 @@ wire         mem_is_ram  = (mem_memsel == 2'd0);
 wire         mem_is_rom  = (mem_memsel == 2'd1);
 wire         mem_is_vram = !mem_is_ram && !mem_is_rom;
 wire [16:0]  va_addr     = vram_map(mem_addr[18:2]);
+wire [16:0]  vb_addr     = vram_map(vid_addr[18:2]);
 wire         va_we       = mem_req && mem_is_vram && mem_write && !vram_ph;
 
-always @(posedge clk_sys) begin
-	if (va_we) begin
-		if (mem_be[3]) vram[va_addr][31:24] <= mem_wdata[31:24];
-		if (mem_be[2]) vram[va_addr][23:16] <= mem_wdata[23:16];
-		if (mem_be[1]) vram[va_addr][15:8]  <= mem_wdata[15:8];
-		if (mem_be[0]) vram[va_addr][7:0]   <= mem_wdata[7:0];
-	end
-	vram_qa <= vram[va_addr];
+// Storage is one byte-wide array per lane rather than one 32-bit array
+// with byte enables: mem_be becomes each lane's write enable, so nothing
+// rests on Quartus inferring byte enables on a true-dual-port M10K, and a
+// x8 two-read-port array is the simplest shape a block can take.
+// no_rw_check is accurate here — port A throws its read away on a write
+// cycle (vram_ph delivers on the FOLLOWING cycle), so the
+// read-during-write value is a genuine don't-care.  Without these
+// attributes Quartus honors the implied "old data" same-port
+// read-during-write in logic cells, and 2.5 Mbit of registers is what
+// turns Analysis & Synthesis into an all-day run that never finishes.
+(* ramstyle = "M10K, no_rw_check" *) reg [7:0] vram0 [0:VRAM_WORDS-1];
+(* ramstyle = "M10K, no_rw_check" *) reg [7:0] vram1 [0:VRAM_WORDS-1];
+(* ramstyle = "M10K, no_rw_check" *) reg [7:0] vram2 [0:VRAM_WORDS-1];
+(* ramstyle = "M10K, no_rw_check" *) reg [7:0] vram3 [0:VRAM_WORDS-1];
+
+always @(posedge clk_sys) begin            // port A: CPU beats
+	if (va_we && mem_be[0]) vram0[va_addr] <= mem_wdata[7:0];
+	if (va_we && mem_be[1]) vram1[va_addr] <= mem_wdata[15:8];
+	if (va_we && mem_be[2]) vram2[va_addr] <= mem_wdata[23:16];
+	if (va_we && mem_be[3]) vram3[va_addr] <= mem_wdata[31:24];
+	vram_qa <= {vram3[va_addr], vram2[va_addr],
+	            vram1[va_addr], vram0[va_addr]};
 end
 
-always @(posedge clk_sys) vid_rdata <= vram[vram_map(vid_addr[18:2])];
+always @(posedge clk_sys)                  // port B: DAFB scanout
+	vid_rdata <= {vram3[vb_addr], vram2[vb_addr],
+	              vram1[vb_addr], vram0[vb_addr]};
 
 //////////////////////////////////////////////////////////////////
 // DDR3 bridge — RAM + ROM regions, plus the boot.rom upload path.
