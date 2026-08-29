@@ -82,6 +82,15 @@ all: $(EXE) quadra800.rom.hex
 quadra800.rom.hex: ../releases/quadra800.rom
 	xxd -p -c4 $< > $@
 
+# sim-only fast-boot ROM: NOP the RAM-test warm gate at file offset
+# $47344 (docs/quadra800-ram-test.md) so the ~1.5G-cycle pattern test
+# is skipped; run with +rom=quadra800-fastboot.rom.hex
+fastboot: quadra800-fastboot.rom.hex
+quadra800-fastboot.rom.hex: ../releases/quadra800.rom ../docs/tools/make-fastboot-rom.sh
+	sh ../docs/tools/make-fastboot-rom.sh $< .fastboot.tmp.rom
+	xxd -p -c4 .fastboot.tmp.rom > $@
+	rm .fastboot.tmp.rom
+
 $(VOUT): $(V_SRC) $(C_SRC) Makefile
 	$V -cc $(V_OPT) -LDFLAGS "$(LDFLAGS)" -exe --trace --Mdir ./obj_dir \
 		$(V_DEFINE) $(V_INC) $(TOP) -CFLAGS "$(CFLAGS)" $(V_SRC) $(C_SRC)
