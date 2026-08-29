@@ -17,7 +17,42 @@ through `6d79e0c` (never pushed).  Environment quirks live in the
   there, never write.  Its own path on Windows is
   `C:\Temp\mistercore\wombat33_MiSTer`.
 
-## STATUS 2026-08-29 (later) — IT FITS.  Timing is the open item.
+## STATUS 2026-08-29 (final) — FITS AND CLOSES TIMING.  Ready for hardware.
+
+The 11:31 compile with the reverted qsf (`b48ac82`) is clean on every
+axis.  **Nothing is outstanding for the DE10-Nano build.**
+
+```
+Fitter Status               : Successful
+Logic utilization (in ALMs) : 34,069 / 41,910 ( 81 % )
+Total registers             : 28,663
+Total RAM Blocks            : 413 / 553 ( 75 % )
+Total DSP Blocks            : 45 / 112 ( 40 % )
+wombat33.rbf                : 4,256,376 bytes
+Setup / Hold / Recovery / Removal / MPW : TNS 0.000 on EVERY clock
+Core clock Fmax             : 34.29 MHz  (vs the 33.0 MHz constraint)
+```
+
+The qsf revert alone fixed the timing failure, and by a wide margin: the
+core clock went **−0.947 ns → +1.138 ns** (a 2.085 ns swing, Fmax 32.0 →
+34.29), and the HDMI clock closed too (−0.494 → +0.441).  Area cost of
+going back to speed mode was trivial — +315 ALMs, still 81%.  So the
+`exc_fmt` path below is no longer critical; it was AREA-mode logic
+merging that pushed it over, not the structure alone.
+
+All eight conversions still map as intended (M10K, verified in the new
+Fitter RAM Summary): four `asc_bank`, `ncr_sbuf`, `rtc` pram,
+`ctag_ram`, `atc_ram`.
+
+Still worth doing, but no longer blocking:
+
+- The `exc_fmt` mux (analysis below) remains a 55-level path with only
+  1.1 ns of margin — the tightest thing in the design and the first
+  thing to bite if the core grows.  The upstream fix is still the right
+  one for the apolkosnik thread.
+- 2 REAL cpu diffs in the gate remain the AP68040 memory-indirect gap.
+
+## Earlier 2026-08-29 — the fit succeeded, timing was the open item
 
 The compile succeeded: **33,754 / 41,910 ALMs (81%)**, 416/553 RAM blocks,
 27,961 registers (was 62,729), `wombat33.rbf` produced.  The Fitter RAM
