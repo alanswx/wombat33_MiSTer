@@ -35,7 +35,6 @@ assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
 
 assign VGA_SL = 0;
 assign VGA_F1 = 0;
@@ -132,11 +131,13 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1), .VDNUM(1), .BLKSZ(2)) hps_io
 ///////////////////////   CLOCKS   ///////////////////////////////
 
 wire clk_sys;
+wire clk_ram;                              // 99 MHz = 3x clk_sys, SDRAM domain
 wire pll_locked;
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
+	.outclk_1(clk_ram),
 	.outclk_0(clk_sys),                    // 33.000000 MHz machine clock — the
 	                                       // real Quadra 800 rate, and the exact
 	                                       // base every time-anchored divider
@@ -244,6 +245,129 @@ assign VGA_DE = ~(m_hblank | m_vblank);
 
 assign LED_USER = ioctl_download | sd_rd[0] | sd_wr[0];
 assign LED_DISK = {1'b1, sd_rd[0] | sd_wr[0]};
+
+//////////////////////////////////////////////////////////////////
+// SDRAM — the machine's RAM.  ROM stays in DDR3 (it is uploaded once
+// through the ioctl path and read rarely enough that latency is free).
+//
+// The MiSTer module is a 16-bit part, so one 32-bit machine beat is two
+// consecutive 16-bit accesses.  The controller (Sorgelig's, from
+// NeoGeo_MiSTer) runs at 99 MHz — three times clk_sys, from the same PLL —
+// and derives SDRAM_CLK itself with an altddio_out, so no phase-shifted
+// clock is needed here.
+//
+// Byte lanes: the machine's convention is big-endian, mem_be[3] selecting
+// mem_wdata[31:24] = the byte at offset 0 (see the VRAM lane comment).  So
+// the first SDRAM word carries wdata[31:16] and the second wdata[15:0],
+// with bs[1] driving the high half of each.  Nothing else reads this
+// memory, so the in-chip order only has to agree with itself.
+//////////////////////////////////////////////////////////////////
+
+wire        sdr_ready;
+wire [15:0] sdr_dout;
+reg         sdr_refresh = 0;
+reg  [9:0]  sdr_refcnt  = 0;
+
+// 8192 refreshes / 64 ms = one every 7.8 us = 772 cycles at 99 MHz
+always @(posedge clk_ram) begin
+	sdr_refcnt <= sdr_refcnt + 1'b1;
+	if (sdr_refcnt == 10'd771) begin
+		sdr_refcnt  <= 0;
+		sdr_refresh <= ~sdr_refresh;
+	end
+end
+
+// ---- clk_sys side: hand one beat over, wait for the ack toggle ----------
+reg         sdr_req_tgl = 0;
+reg         sdr_ack_seen = 0;
+reg  [1:0]  sdr_ack_sync = 0;
+reg         sdr_busy_s  = 0;
+reg  [26:2] sdr_addr;
+reg  [31:0] sdr_wdata;
+reg  [3:0]  sdr_be;
+reg         sdr_we;
+wire        sdr_ack_tgl;
+wire [31:0] sdr_rdata;
+
+// ---- clk_ram side: two 16-bit accesses per beat ------------------------
+reg         sdr_req_seen = 0;
+reg  [1:0]  sdr_req_sync = 0;
+reg         sdr_busy_r = 0;
+reg         sdr_acc = 0;             // 0 = high half, 1 = low half
+reg         sdr_ready_d = 0;
+reg  [31:0] sdr_hold;
+
+assign sdr_rdata  = sdr_hold;
+assign sdr_ack_tgl = sdr_ack_r;
+reg         sdr_ack_r = 0;
+
+// rd/wr are held for the whole access: the controller may still be walking
+// back to its idle state when a request arrives, and it samples the request
+// only there.  Completion is the RISING edge of ready — ready sits low
+// before the very first access and through the ~122 us power-up sequence,
+// so waiting on the edge cannot false-trigger or deadlock.
+wire sdr_rd = sdr_busy_r && !sdr_we;
+wire sdr_wr = sdr_busy_r &&  sdr_we;
+
+always @(posedge clk_ram) begin
+	sdr_req_sync <= {sdr_req_sync[0], sdr_req_tgl};
+	sdr_ready_d  <= sdr_ready;
+
+	if (!sdr_busy_r) begin
+		if (sdr_req_sync[1] != sdr_req_seen) begin
+			sdr_req_seen <= sdr_req_sync[1];
+			sdr_acc      <= 0;
+			sdr_busy_r   <= 1;
+		end
+	end
+	else if (sdr_ready && !sdr_ready_d) begin
+		if (!sdr_acc) begin
+			sdr_hold[31:16] <= sdr_dout;
+			sdr_acc         <= 1;          // address advances with it
+		end
+		else begin
+			sdr_hold[15:0] <= sdr_dout;
+			sdr_busy_r     <= 0;
+			sdr_ack_r      <= ~sdr_ack_r;
+		end
+	end
+end
+
+sdram sdram
+(
+	.init      (~pll_locked),
+	.clk       (clk_ram),
+	.SDRAM_EN  (1'b1),
+
+	.SDRAM_DQ  (SDRAM_DQ),
+	.SDRAM_A   (SDRAM_A),
+	.SDRAM_DQML(SDRAM_DQML),
+	.SDRAM_DQMH(SDRAM_DQMH),
+	.SDRAM_BA  (SDRAM_BA),
+	.SDRAM_nCS (SDRAM_nCS),
+	.SDRAM_nWE (SDRAM_nWE),
+	.SDRAM_nRAS(SDRAM_nRAS),
+	.SDRAM_nCAS(SDRAM_nCAS),
+	.SDRAM_CKE (SDRAM_CKE),
+	.SDRAM_CLK (SDRAM_CLK),
+
+	.sel       (1'b1),
+	.addr      ({sdr_addr, sdr_acc}),      // word address; acc picks the half
+	.dout      (sdr_dout),
+	.din       (sdr_acc ? sdr_wdata[15:0] : sdr_wdata[31:16]),
+	.wr        (sdr_wr),
+	.bs        (sdr_acc ? sdr_be[1:0] : sdr_be[3:2]),
+	.rd        (sdr_rd),
+	.ready     (sdr_ready),
+	.refresh   (sdr_refresh),
+
+	.cpsel     (1'b0),
+	.cpaddr    (26'd0),
+	.cpdin     (16'd0),
+	.cprd      (),
+	.cpreq     (1'b0),
+	.cpbusy    ()
+);
 
 //////////////////////////////////////////////////////////////////
 // VRAM — on-chip, true dual port: CPU beats on port A (2-cycle
@@ -414,29 +538,39 @@ always @(posedge clk_sys) begin
 			ioctl_pend     <= 0;
 			ioctl_wait     <= 0;
 		end
-		else if (mem_req && !mem_ack && (mem_is_ram || mem_is_rom)) begin
-			if (mem_write && mem_is_rom) begin
+		else if (mem_req && !mem_ack && mem_is_rom) begin
+			if (mem_write) begin
 				mem_ack <= 1;              // djMEMC discards ROM writes
 			end
-			else if (mem_write) begin
-				ddram_addr     <= DDR_RAM_BASE | {5'd0, mem_addr[26:3]};
-				ddram_din      <= {2{mem_wdata}};
-				ddram_be       <= mem_addr[2] ? {mem_be, 4'b0000}
-				                              : {4'b0000, mem_be};
-				ddram_burstcnt <= 8'd1;
-				ddram_we       <= 1;
-				mem_ack        <= 1;       // posted; ordering held by !we gate
-			end
 			else begin
-				ddram_addr     <= mem_is_rom
-				                  ? (DDR_ROM_BASE | {12'd0, mem_addr[19:3]})
-				                  : (DDR_RAM_BASE | {5'd0,  mem_addr[26:3]});
+				ddram_addr     <= DDR_ROM_BASE | {12'd0, mem_addr[19:3]};
 				ddram_burstcnt <= 8'd1;
 				ddram_rd       <= 1;
 				ddr_rd_hi      <= mem_addr[2];
 				ddr_wait_data  <= 1;
 			end
 		end
+		// RAM beats go to SDRAM: hand the request across with a toggle and
+		// wait for the matching ack toggle back.  Writes are NOT posted here
+		// (unlike the old DDR3 path) — the controller has no write queue, so
+		// the beat completes when the second half has actually been issued.
+		else if (mem_req && !mem_ack && mem_is_ram && !sdr_busy_s) begin
+			sdr_addr    <= mem_addr[26:2];
+			sdr_wdata   <= mem_wdata;
+			sdr_be      <= mem_be;
+			sdr_we      <= mem_write;
+			sdr_req_tgl <= ~sdr_req_tgl;
+			sdr_busy_s  <= 1;
+		end
+	end
+
+	// SDRAM beat completion
+	sdr_ack_sync <= {sdr_ack_sync[0], sdr_ack_tgl};
+	if (sdr_busy_s && (sdr_ack_sync[1] != sdr_ack_seen)) begin
+		sdr_ack_seen <= sdr_ack_sync[1];
+		sdr_busy_s   <= 0;
+		mem_rdata    <= sdr_rdata;
+		mem_ack      <= 1;
 	end
 
 	if (reset && !ioctl_download) begin

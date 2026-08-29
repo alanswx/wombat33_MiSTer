@@ -287,6 +287,16 @@ reg        overlay;
 // 48 MB option was tried and hangs the ROM in a 3-instruction loop at
 // $408A022A: on real hardware 48 MB is two unequal banks, and sizing it
 // needs the bank decode this stub does not implement.
+// Powers of two only.  48 MB was hardcoded and RE-MEASURED on the SDRAM
+// branch: the ROM still hangs in a 3-instruction loop at $408A0230 with
+// d7=$11 and no bus error, exactly as it did on DDR3 — so the backing store
+// is NOT what rejects it.  The cause is this decode: RAM is one flat linear
+// range and the djMEMC bank registers (iosb's djmemc_regs) are stored but
+// never acted on.  Before the ROM remaps them, djMEMC banks appear at fixed
+// strides and are sized individually; a flat map only matches what the ROM
+// computes when the total is a single power-of-two bank.  Making 48 MB (and
+// 20/24/36/40/72) work means implementing that bank decode — worth doing,
+// but it is a feature, not a constant.
 wire [29:2] ram_limit = (ram_cfg == 2'd0) ? 28'h0800000 :   // 32 MB
                         (ram_cfg == 2'd1) ? 28'h1000000 :   // 64 MB
                                             28'h2000000;    // 128 MB

@@ -13,3 +13,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/asc_wavetable.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ncr53c96.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/adb.sv
 set_global_assignment -name VERILOG_FILE rtl/dpram.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
