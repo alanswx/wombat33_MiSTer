@@ -81,7 +81,13 @@ module emu
 localparam RAM_ADDR_BITS = 25;                 // 32 MB (a target config; 48 MB later)
 localparam RAM_WORDS  = 1 << (RAM_ADDR_BITS-2);
 localparam ROM_WORDS  = 262144;                // 1 MB
-localparam VRAM_WORDS = 262144;                // 1 MB
+// VRAM mirrors wombat33.sv exactly: 308 KB backed, with the 204 KB fold
+// that makes the unbacked 308K..512K window alias downward.  It used to be
+// a flat 1 MB with no fold, so the fold had NEVER executed in sim and
+// hardware-only video corruption was invisible here (RESUME-disk-gate.md
+// carried this as a standing warning).
+localparam VRAM_WORDS = 78848;                 // 308 KB
+localparam [16:0] VRAM_FOLD = 17'd52224;       // 204 KB, in words
 
 wire        mem_req, mem_write;
 wire [31:2] mem_addr;
@@ -174,10 +180,15 @@ end
 
 wire [RAM_ADDR_BITS-3:0] ram_idx  = mem_addr[RAM_ADDR_BITS-1:2];
 wire [17:0]              rom_idx  = mem_addr[19:2];
-wire [17:0]              vram_idx = mem_addr[19:2];
+
+function [16:0] vram_map(input [16:0] w);      // window word -> storage word
+	vram_map = (w >= 17'd78848) ? (w - VRAM_FOLD) : w;
+endfunction
+
+wire [16:0]              vram_idx = vram_map(mem_addr[18:2]);
 
 // DAFB scanout port: registered read, 1-cycle latency
-always @(posedge clk_sys) vid_rdata <= vram[vid_addr[19:2]];
+always @(posedge clk_sys) vid_rdata <= vram[vram_map(vid_addr[18:2])];
 
 always @(posedge clk_sys) begin
 	mem_ack <= 0;

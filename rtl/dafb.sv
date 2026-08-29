@@ -110,6 +110,13 @@ always @(posedge clk) begin
 			case (blk)
 			2'd0: begin                                   // DAFB
 				if (write) begin
+`ifdef VERILATOR
+					// bring-up tap: what the ROM/driver actually programs.
+					// The 308 KB VRAM only covers 480 rows if stride <= 640.
+					if (rsel <= 6'h04)
+						$display("[DAFB] reg %02h <= %03h  (fb_base=%06h stride=%0d mode=%0d)",
+						         {rsel, 2'b00}, wdata[11:0], fb_base, stride, mode);
+`endif
 					case (rsel)
 					6'h00: fb_base[20:9] <= wdata[11:0];
 					6'h01: fb_base[8:5]  <= wdata[3:0];
