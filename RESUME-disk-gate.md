@@ -3,7 +3,7 @@
 Paste this file as the opening message of a new session.  Supersedes
 `RESUME-machine-bringup.md` Problem 4 (that doc's Problems 1–3 remain
 the record for the Sad Mac / SCSI-scan / fastboot work).  Repo on
-`main` through `ea7a4e1` (never pushed).  Environment quirks live in
+`main` through `21f37d6` (never pushed).  Environment quirks live in
 the `laptop-sim-environment` memory note.  Binding rules unchanged:
 ONE Vemu at a time, always the GUI (launch with the Bash sandbox
 disabled), commit to main, bench disks run as copies,
@@ -67,12 +67,12 @@ payload `_Read` noErr → cpu suite executing → **first results write
 reached** (that's where fixes 3 and 4 landed).  Still to verify:
 
 - Results actually land at lba 1398+ (`dd if=gate.hda bs=512
-  skip=1398 count=8 | strings`).  **Open question:** in the pre-fix
-  runs the streamed sectors read back as ZEROS — if post-fix results
-  are still zeros there is a data-integrity bug in the PIO-write →
-  sbuf → blkdevice pump chain (suspect: the drain refilling sbuf
-  while the 256-call pump reads it after the early io_ack — see
-  sim_blkdevice.cpp write pump vs ncr53c96 flush/drain interplay).
+  skip=1398 count=8 | strings`).  The zeros puzzle is SOLVED
+  (`21f37d6`): `commandArgsPlusMatch` returns "" (never NULL) when
+  the plusarg is absent, so the `!ptr` guard in sim_blkdevice.cpp
+  discarded EVERY disk write the sim has ever done.  Post-fix runs
+  should show jsonl text at 1398; if not, reopen the sbuf/pump
+  interplay theory.
 - Suites chain (5 of them, manifest in the extract; expected
   `C=862D7F48` on the boot row), then score:
   `gen/score_vs_oracle.py` per suite, NO `--flat-env`.
