@@ -112,6 +112,65 @@ SimVideo video(800, 600, 0);
 float vga_scale = 1.0f;
 SimInput input(12, console);
 
+// ---- ADB mouse from clicks on the VGA image -------------------------------
+// A click (or drag) on the VGA output picks a target pixel; each GUI frame
+// one MiSTer-format ps2_mouse packet nudges the pointer toward it.  The ADB
+// mouse is relative, so the loop is closed against the Mac's own idea of the
+// pointer — the RawMouse low-memory global at $82C ({v,h} words) — which
+// self-corrects for clamped or overwritten deltas.  Before the System is up
+// nobody maintains RawMouse, so a target that makes no progress is dropped
+// after a few dozen packets instead of being chased forever.
+static bool     mouse_btn_down   = false;   // hovered-image button state
+static bool     mouse_btn_sent   = false;   // last button state delivered
+static bool     mouse_btn_dirty  = false;
+static int      mouse_warp_x     = -1;      // target in Mac pixels (-1 = idle)
+static int      mouse_warp_y     = -1;
+static uint32_t mouse_strobe     = 0;       // ps2_mouse[24] toggle
+static uint32_t mouse_last_raw   = 0xFFFFFFFF;
+static int      mouse_stalled    = 0;
+
+static void adb_mouse_update() {
+	if (mouse_warp_x < 0 && !mouse_btn_dirty) return;
+
+	int dx = 0, dy = 0;
+	if (mouse_warp_x >= 0) {
+		// RawMouse at $082C: bytes {v.hi v.lo h.hi h.lo} = one big-endian
+		// RAM word, v in [31:16], h in [15:0]
+		uint32_t raw = SIMEMU->ram[0x082C >> 2];
+		int v = (int)(raw >> 16), h = (int)(raw & 0xFFFF);
+		if (h > 2047 || v > 2047) {              // boot fill / no cursor yet
+			mouse_warp_x = mouse_warp_y = -1;
+		}
+		else {
+			dx = mouse_warp_x - h;
+			dy = mouse_warp_y - v;
+			if (dx == 0 && dy == 0) {
+				mouse_warp_x = mouse_warp_y = -1;    // arrived
+			}
+			else if (raw == mouse_last_raw && ++mouse_stalled > 48) {
+				mouse_warp_x = mouse_warp_y = -1;    // nobody is listening
+				mouse_stalled = 0;
+			}
+			if (raw != mouse_last_raw) mouse_stalled = 0;
+			mouse_last_raw = raw;
+		}
+	}
+	if (mouse_warp_x < 0 && !mouse_btn_dirty) return;
+
+	// one packet: clamp to the ADB event range so nothing is distorted
+	if (dx > 63) dx = 63; else if (dx < -63) dx = -63;
+	if (dy > 63) dy = 63; else if (dy < -63) dy = -63;
+	int py = -dy;                                // PS/2 y is up-positive
+	mouse_strobe ^= 1;
+	VERTOPINTERN->ps2_mouse =
+		(mouse_strobe << 24) |
+		((py & 0xFF) << 16) | ((dx & 0xFF) << 8) |
+		((py < 0) ? 0x20 : 0) | ((dx < 0) ? 0x10 : 0) |
+		(mouse_btn_down ? 0x01 : 0);
+	mouse_btn_sent = mouse_btn_down;
+	mouse_btn_dirty = false;
+}
+
 static void save_screenshot(int frame) {
 	char filename[64];
 	snprintf(filename, sizeof(filename), "screenshot_f%d.png", frame);
@@ -142,12 +201,61 @@ int verilate() {
 				if (!cpu_trace_disabled && main_time >= trace_after) cpu_trace_step();
 				uint32_t hpc = SIMEMU->__PVT__machine__DOT__cpu__DOT__core__DOT__pc_i;
 				if (pc_hist_enable) pc_hist[hpc >> 8]++;
+				{
+					// RAM write watchpoints: DrvQHdr + the DrvQEl at $B94E
+					static const uint32_t watch_addr[] =
+						{ 0x308, 0x30C, 0xB948, 0xB94C, 0xB950, 0xB954, 0xB958, 0xB95C };
+					static uint32_t watch_prev[8];
+					static bool watch_init = false;
+					for (int w = 0; w < 8; w++) {
+						uint32_t cur = SIMEMU->ram[watch_addr[w] >> 2];
+						if (watch_init && cur != watch_prev[w]) {
+							printf("[WATCH] %05X: %08X -> %08X pc=%08X cycle=%llu\n",
+							       watch_addr[w], watch_prev[w], cur, hpc,
+							       (unsigned long long)main_time);
+							fflush(stdout);
+						}
+						watch_prev[w] = cur;
+					}
+					watch_init = true;
+				}
 				// edge-triggered: fire on entering the range, so RUN can
 				// resume through it without an instant re-stop
 				bool pc_in_stop = (hpc >= stop_pc_lo && hpc <= stop_pc_hi);
 				if (pc_in_stop && !pc_was_in_stop) {
 					printf("[STOP] pc=%08X at cycle %llu\n", hpc,
 					       (unsigned long long)main_time);
+					for (int r = 0; r < 8; r++)
+						printf("[STOP] d%d=%08X a%d=%08X\n", r,
+						       SIMEMU->__PVT__machine__DOT__cpu__DOT__core__DOT__regfile__DOT__dreg[r], r,
+						       SIMEMU->__PVT__machine__DOT__cpu__DOT__core__DOT__regfile__DOT__areg[r]);
+					printf("[STOP] DSErrCode($AF0)=%04X\n",
+					       SIMEMU->ram[0x0AF0 >> 2] >> 16);
+					{
+						// dump the Drive Queue (DrvQHdr $308): big-endian
+						// words packed {b0b1,b2b3} per 32-bit RAM word
+						auto r16 = [](uint32_t a) -> uint32_t {
+							uint32_t w = SIMEMU->ram[a >> 2];
+							return (a & 2) ? (w & 0xFFFF) : (w >> 16);
+						};
+						auto r32 = [&](uint32_t a) -> uint32_t {
+							return (r16(a) << 16) | r16(a + 2);
+						};
+						uint32_t qh = r32(0x30A);
+						printf("[STOP] DrvQHdr qFlags=%04X qHead=%08X qTail=%08X\n",
+						       r16(0x308), qh, r32(0x30E));
+						for (int n = 0; n < 8 && qh; n++) {
+							if (qh >= (32u << 20) || (qh & 1)) {
+								printf("[STOP]  node %08X outside RAM\n", qh);
+								break;
+							}
+							printf("[STOP]  DrvQEl@%08X qLink=%08X qType=%04X"
+							       " dQDrive=%04X dQRefNum=%04X dQFSID=%04X\n",
+							       qh, r32(qh), r16(qh + 4), r16(qh + 6),
+							       r16(qh + 8), r16(qh + 10));
+							qh = r32(qh);
+						}
+					}
 					fflush(stdout);
 					if (cpu_trace_file) fflush(cpu_trace_file);
 					run_enable = 0;              // park the RUN checkbox
@@ -470,8 +578,30 @@ int main(int argc, char** argv, char** env) {
 			ImGui::Image(video.texture_id,
 				ImVec2(video.output_width * vga_scale,
 				       video.output_height * vga_scale));
+			// clicks/drags on the image drive the ADB mouse: the click
+			// point becomes the warp target; button state rides along
+			if (ImGui::IsItemHovered()) {
+				bool down = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+				if (down || ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+					ImVec2 rmin = ImGui::GetItemRectMin();
+					ImVec2 mp = ImGui::GetMousePos();
+					mouse_warp_x = (int)((mp.x - rmin.x) / vga_scale);
+					mouse_warp_y = (int)((mp.y - rmin.y) / vga_scale);
+					mouse_stalled = 0;
+				}
+				if (down != mouse_btn_sent) {
+					mouse_btn_down = down;
+					mouse_btn_dirty = true;
+				}
+			}
+			else if (mouse_btn_sent) {
+				// pointer left the image with the button down: release it
+				mouse_btn_down = false;
+				mouse_btn_dirty = true;
+			}
 			ImGui::End();
 
+			adb_mouse_update();
 			video.UpdateTexture();
 		}
 
