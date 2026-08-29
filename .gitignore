@@ -16,3 +16,5 @@ SingleStepTests/preboot/supervisor_bench/dist/*.hda
 SingleStepTests/preboot/supervisor_bench/dist/*.dsk
 verilator/cpu_trace.log
 verilator/quadra800.rom.hex
+verilator/quadra800-fastboot.rom.hex
+verilator/.fastboot.tmp.rom
