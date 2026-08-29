@@ -365,8 +365,12 @@ wire sel_via2   = in_low && (addr[19:13] == 7'b0000001);
 wire sel_regs   = in_low && (addr[19:13] == 7'b0001100);
 wire sel_djmemc = in_low && (addr[19:13] == 7'b0000111);   // $E000-$FFFF
 wire sel_asc    = in_low && (addr[19:12] == 8'h14);
-wire sel_scsi   = in_low && (addr[19:8] == 12'h100);   // 53C96 regs, 16-byte strides
-wire sel_sdma   = in_low && (addr[19:8] == 12'h101);   // Turbo SCSI pseudo-DMA
+// I/O space repeats every $40000 (dev note: $50040000-$53FFFFFF are images),
+// so bits 19:18 are don't-care here.  The ROM uses the +$40000 image of the
+// PDMA window as its 32-bit bulk port ($50F50100) and the base image for
+// word/byte accesses — both must decode.
+wire sel_scsi   = in_low && (addr[17:8] == 10'h100);   // 53C96 regs, 16-byte strides
+wire sel_sdma   = in_low && (addr[17:8] == 10'h101);   // Turbo SCSI pseudo-DMA
 wire sel_id     = (addr[27:16] == 12'hFFF);
 wire [3:0] rsel = addr[12:9];
 
@@ -443,7 +447,7 @@ wire [7:0] wbyte = be[3] ? wdata[31:24] :
 
 localparam A_IDLE = 2'd0, A_VIA = 2'd1, A_CAPTURE = 2'd2, A_SDMA = 2'd3;
 reg [1:0] astate;
-reg       sdma_word2;              // 16-bit pseudo-DMA beat (else 32-bit)
+reg [3:0] sdma_be;                 // byte lanes of the pseudo-DMA beat
 
 always @(posedge clk) begin
 	if (!nreset) begin
@@ -461,7 +465,7 @@ always @(posedge clk) begin
 		for (int j = 0; j < 32; j = j + 1) iosb_regs[j] <= 16'd0;
 		iosb_regs[0] <= 16'd1;               // IOSB_CONFIG: BCLK 33 MHz (QEMU)
 		sdma_rd <= 0; sdma_wr <= 0; sdma_left <= 0;
-		sdma_shift <= 0; sdma_wbyte <= 0; sdma_word2 <= 0;
+		sdma_shift <= 0; sdma_wbyte <= 0; sdma_be <= 0;
 	end
 	else if (ce) begin
 		ack <= 0;
@@ -527,13 +531,23 @@ always @(posedge clk) begin
 				else if (sel_scsi) rdata <= {4{ncr_rdata}};  // scsi_strobe fires
 				else if (sel_sdma) begin
 					// pseudo-DMA beat: hold off the ack until the chip has
-					// moved every byte (the real IOSB holds /DTACK on !DRQ;
-					// a wedged transfer ends in the CPU watchdog's berr)
+					// moved every byte (the real IOSB holds /DTACK on !DRQ
+					// and bus-errors a wedged transfer; no timeout modeled
+					// yet).  Long = 4 bytes, word = 2, byte = 1; write data
+					// is left-aligned so the first SCSI byte is always the
+					// highest enabled lane (MAME dma16_swap order).
 					ack        <= 0;
-					sdma_word2 <= !(be == 4'b1111);
-					sdma_left  <= (be == 4'b1111) ? 3'd4 : 3'd2;
-					sdma_shift <= wdata;
-					sdma_wbyte <= wdata[31:24];
+					sdma_be    <= be;
+					sdma_left  <= (be == 4'b1111) ? 3'd4 :
+					              (be == 4'b1100 || be == 4'b0011) ? 3'd2 : 3'd1;
+					sdma_shift <= (be == 4'b1111 || be == 4'b1100 || be == 4'b1000) ? wdata :
+					              (be == 4'b0100) ? {wdata[23:0], 8'h0} :
+					              (be == 4'b0011 || be == 4'b0010) ? {wdata[15:0], 16'h0} :
+					                                                 {wdata[7:0], 24'h0};
+					sdma_wbyte <= (be == 4'b1111 || be == 4'b1100 || be == 4'b1000) ? wdata[31:24] :
+					              (be == 4'b0100) ? wdata[23:16] :
+					              (be == 4'b0011 || be == 4'b0010) ? wdata[15:8] :
+					                                                 wdata[7:0];
 					sdma_rd    <= ~write;
 					sdma_wr    <= write;
 					astate     <= A_SDMA;
@@ -558,8 +572,10 @@ always @(posedge clk) begin
 				sdma_rd <= 0;
 				sdma_wr <= 0;
 				ack     <= 1;
-				rdata   <= sdma_word2 ? {sdma_shift[7:0], sdma_rbyte, 16'h0}
-				                      : {sdma_shift[23:0], sdma_rbyte};
+				rdata   <= (sdma_be == 4'b1111) ? {sdma_shift[23:0], sdma_rbyte} :
+				           (sdma_be == 4'b1100) ? {sdma_shift[7:0], sdma_rbyte, 16'h0} :
+				           (sdma_be == 4'b0011) ? {16'h0, sdma_shift[7:0], sdma_rbyte} :
+				                                  {4{sdma_rbyte}};
 				astate  <= A_IDLE;
 			end
 			else begin
