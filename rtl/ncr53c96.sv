@@ -331,15 +331,37 @@ ncr_sbuf sbuf
 	.we_e   (we_e),
 	.q_e    (q_e),
 	.addr_s (sd_buff_addr),
-	.din_s  (sd_buff_dout),
+	.din_s  (plat_din_s),
 	.we_s   (sd_buff_wr),
 	.q_s    (q_s)
 );
 
+// Platform byte packing for the 16-bit HPS sector buffer.  sbuf is kept
+// big-endian internally (disk byte 0 in the HIGH half) because that is
+// what sbuf_byte, set_byte and the synth sequencer all assume, so the
+// swap happens here at the boundary:
+//
+//   * the real MiSTer HPS packs WIDE words LITTLE-endian: disk byte 0
+//     arrives in sd_buff_dout[7:0].
+//   * verilator/sim/sim_blkdevice.cpp packs them BIG-endian: it does
+//     `(byte1 << 8) | byte2`, putting disk byte 0 in [15:8].
+//
+// Getting this wrong swaps every byte PAIR on the disk, so the driver
+// descriptor's 'ER' signature reads as 'RE' and no volume is bootable —
+// invisible in sim, fatal on hardware.  MacLC_MiSTer hit exactly this and
+// confirmed the packing with a JTAG probe (rtl/scsi.v, "HPS sector-buffer
+// byte order"); this mirrors their resolution.
+`ifdef VERILATOR
+wire [15:0] plat_din_s = sd_buff_dout;
+assign sd_buff_din = q_s;
+`else
+wire [15:0] plat_din_s = {sd_buff_dout[7:0], sd_buff_dout[15:8]};
+assign sd_buff_din = {q_s[7:0], q_s[15:8]};
+`endif
+
 // platform readback (write flush): hps_io and the sim both sample a
 // held address many cycles after driving it, so the registered read is
-// transparent to them
-assign sd_buff_din = q_s;
+// transparent to them.  The lane mapping is applied above.
 
 reg  [7:0] eq_addr;                // address q_e currently reflects
 reg        eq_wr;
