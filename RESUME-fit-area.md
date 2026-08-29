@@ -17,6 +17,68 @@ through `6d79e0c` (never pushed).  Environment quirks live in the
   there, never write.  Its own path on Windows is
   `C:\Temp\mistercore\wombat33_MiSTer`.
 
+## STATUS 2026-08-29 (later) — IT FITS.  Timing is the open item.
+
+The compile succeeded: **33,754 / 41,910 ALMs (81%)**, 416/553 RAM blocks,
+27,961 registers (was 62,729), `wombat33.rbf` produced.  The Fitter RAM
+Summary confirms every conversion mapped: `ctag_ram`, `atc_ram`, the four
+`asc_bank`s and `ncr_sbuf` as *M10K block / True Dual Port*, and the
+`rtc3430042` pram as *M10K block / Simple Dual Port* (inferred).  The PLL
+retune landed exactly as designed — divide 5, multiply 66, output ÷20 =
+30.303 ns = **33.0 MHz**.
+
+**Setup fails on the core clock: −0.947 ns, Fmax 32.0 MHz.**  All 20 worst
+paths are ONE endpoint and one cause, entirely upstream:
+
+```
+from ap040_core|ir[6] / ir[7]   (instruction register)
+  -> Equal208~0                  (an instruction decode compare)
+  -> exc_fmt[2]~44 ... ~565      (a ~200-term cascade)
+to   ap040_core|exc_fmt[0]
+55 logic levels; data delay 30.994 ns = 19.338 routing (62%) + 11.656 cell
+```
+
+This is the `exc` task at `ap040_core.v:1488`: ~15 call sites scattered
+through the decoder each pass a literal 4-bit `fmt`, so Quartus builds a
+giant decode-wide mux into one register.  It is the same structure the
+cache author warned about ("the whole 47-level exception-format mux").
+
+Notes on it:
+
+- **Not caused by this campaign.**  The path is wholly inside
+  `ap040_core`, untouched here, and the RAM work *reduced* congestion by
+  44% of ALMs.  It was failing before; the fitter simply never got far
+  enough to report it.
+- **Correctness exposure is real but narrow.**  `exc_fmt` is consumed
+  only at `ap040_core.v:1688` (frame size) and 2794-2801 (frame build),
+  i.e. while pushing an exception frame.  A bad capture means a wrong
+  stack-frame format — and classic MacOS takes A-line traps constantly.
+  Most call sites do write the common `fmt = 0`.
+- It is a **slow 1100 mV 100 °C** corner violation of 3.1%; typical
+  silicon at room temperature has more margin, which is likely why the
+  bench has behaved.  It is not sign-off clean.
+
+Order of attack:
+
+1. **The qsf revert (`b48ac82`, already committed).**  The area knobs from
+   `fcd213d` were a hedge for a design that was over capacity; the RAM
+   conversions made them unnecessary, and AREA mode explicitly merges
+   logic and deepens chains.  Only 3.1% is needed, and 62% of the delay is
+   routing.  Rebuild with it before anything else.
+2. If it still misses: `PLACEMENT_EFFORT_MULTIPLIER 4.0` +
+   `ROUTER_EFFORT_MULTIPLIER 4.0` in the qsf (costs compile time), and/or
+   a `SEED` sweep (currently 1).
+3. The real fix is upstream and belongs in the apolkosnik thread:
+   `exc_fmt` need not be computed in the decode cycle at all — nothing
+   reads it until the S_EXC states several cycles later, so it can be
+   registered a cycle later or derived from `exc_vec` in the exception
+   FSM, collapsing the mux out of the critical path.
+
+Re-run `quartus_sta -t docs/tools/report-timing.tcl` after any build for
+path detail (the compile's own `.sta.rpt` has slack but no paths).  Raise
+its `-npaths` if the next tier of endpoints is wanted — at 20 the list was
+still entirely `exc_fmt[0]`, so the second-worst endpoint is unknown.
+
 ## STATUS 2026-08-29 — all four items DONE, awaiting the Quartus compile
 
 All four conversions are implemented, committed, and regression-clean:
