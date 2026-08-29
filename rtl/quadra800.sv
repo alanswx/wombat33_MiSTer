@@ -44,6 +44,7 @@ module quadra800
 	// video: DAFB scanout (VRAM fetch port + VGA)
 	output     [21:2] vid_addr,
 	input      [31:0] vid_rdata,
+	output     [13:0] vid_stride,
 	output      [7:0] VGA_R,
 	output      [7:0] VGA_G,
 	output      [7:0] VGA_B,
@@ -254,6 +255,7 @@ dafb dafb (
 
 	.vid_addr(vid_addr),
 	.vid_rdata(vid_rdata),
+	.vid_stride(vid_stride),
 
 	.vga_r(VGA_R),
 	.vga_g(VGA_G),

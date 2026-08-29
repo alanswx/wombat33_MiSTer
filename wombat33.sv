@@ -8,11 +8,11 @@
 //     the machine's bus FSM already tolerates wait states and the 68040
 //     caches absorb the latency.  ROM writes are acked and discarded
 //     (djMEMC behavior), which also write-protects the ROM region.
-//   - VRAM is on-chip BRAM, 308 KB physical (640x480@8bpp + headroom
-//     for the driver's framebuffer base offset — MacIIvi precedent)
-//     advertised as 512 KB via window aliasing + a fold — see the VRAM
-//     section — because the DAFB scanout expects registered 1-cycle
-//     reads.  Still the main BRAM consumer (~2.5 Mbit).
+//   - VRAM is on-chip BRAM, 320 KB physical, advertised as 512 KB: the
+//     driver's 1024-byte row pitch is compacted to the 640 bytes each
+//     row can actually show, so every row of every depth is backed
+//     exactly once — see the VRAM section.  The DAFB scanout expects
+//     registered 1-cycle reads.  Still the main BRAM consumer.
 //   - The ROM uploads as boot.rom (ioctl index 0) into the DDR3 ROM
 //     region; the machine is held in reset until it lands.
 //   - The SCSI disk is hps_io block device 0 (mount a .hda in the OSD);
@@ -168,6 +168,7 @@ reg         mem_ack;
 
 wire [21:2] vid_addr;
 reg  [31:0] vid_rdata;
+wire [13:0] vid_stride;
 
 wire [255:0] m_debug_status;
 wire [127:0] m_debug_status2;
@@ -190,6 +191,7 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 
 	.vid_addr(vid_addr),
 	.vid_rdata(vid_rdata),
+	.vid_stride(vid_stride),
 	.VGA_R(VGA_R),
 	.VGA_G(VGA_G),
 	.VGA_B(VGA_B),
@@ -237,26 +239,53 @@ assign LED_DISK = {1'b1, sd_rd[0] | sd_wr[0]};
 // handshake: capture, then deliver), DAFB scanout on port B with the
 // registered 1-cycle read the machine expects.
 //
-// Physical storage is 308 KB: 640x480 @ 8bpp needs 307,200 visible
-// bytes, but drivers place the framebuffer at a BASE OFFSET — sizing
-// to exactly 300 KB put the last scanlines past the array on real
-// hardware in MacIIvi_MiSTer (base = 4 rows = 2,560 bytes; they
-// scanned out white).  308 KB covers base + framebuffer with ~9 rows
-// spare; the same repo found 320 KB broke HDMI-scaler timing closure,
-// so don't grow this casually (MacIIvi.sv MDC_VRAM_WORDS, 2026-08-10).
-//
-// The machine's 2 MB window aliases mod 512 KB, so a ROM size probe
-// sees the classic power-of-2 wrap and ADVERTISES 512 KB; the
-// unbacked 308K..512K range folds down by 204 KB onto 104K..308K so
-// probe readbacks anywhere in the window still succeed.  Only
-// software genuinely storing data in the top 204 KB would see the
-// aliasing — no supported mode does.
+// The machine's 2 MB window aliases mod 512 KB, so a ROM size probe sees
+// the classic power-of-2 wrap and ADVERTISES 512 KB.  Backing all of it
+// is impossible on this device — but it does not have to be backed
+// densely; see the compaction note on VRAM_WORDS below.
 //////////////////////////////////////////////////////////////////
-localparam VRAM_WORDS = 78848;             // 308 KB
+// STRIDE COMPACTION.  The ROM programs a 1024-byte row pitch (confirmed on
+// hardware and by the sim's [DAFB] tap), so a 480-row framebuffer spans
+// 0x1000 + 480*1024 = 495,616 bytes — far past anything M10K can hold, and
+// the old fold aliased screen rows 304..479 back onto rows 100..275 (the
+// duplicated boot floppy seen on the DE10).
+//
+// But at 640 pixels wide only the FIRST 640 bytes of each 1024-byte row are
+// ever visible: 80 bytes at 1bpp, 160 at 2bpp, 320 at 4bpp, 640 at 8bpp.
+// The remaining 384 bytes are pitch padding no supported depth reaches.  So
+// store 640 bytes of every row and drop the tail: the whole 512 KB window
+// becomes 512*640 = 320 KB of BRAM, which fits with room to spare, and
+// EVERY row of EVERY depth (8bpp included) is backed exactly once — no
+// aliasing anywhere in the visible framebuffer.
+//
+// The 384-byte tails all share one scratch block, so a write and read-back
+// at the same tail address still agree (VRAM size probes poke row-aligned
+// offsets, which are all col 0).  Only software genuinely storing data in
+// the pitch padding of two different rows at once would notice.
+//
+// Compaction assumes the 1024-byte pitch, so it engages only when the
+// driver has actually programmed one; any pitch <= 640 already fits the
+// array linearly and maps identically (with the old fold as a backstop for
+// probe reads past the end).
+localparam VRAM_WORDS = 82016;             // 320.4 KB: 512*160 + 96 tail
 localparam [16:0] VRAM_FOLD = 17'd52224;   // 204 KB, in words
+localparam [16:0] VRAM_TAIL = 17'd81920;   // 512 rows * 160 words
+
+wire vram_compact = (vid_stride == 14'd1024);
 
 function [16:0] vram_map(input [16:0] w);  // window word -> storage word
-	vram_map = (w >= 17'd78848) ? (w - VRAM_FOLD) : w;
+	reg [8:0] row;                         // 1024 B = 256 words per row
+	reg [7:0] col;
+	begin
+		row = w[16:8];
+		col = w[7:0];
+		if (!vram_compact)
+			vram_map = (w >= VRAM_WORDS) ? (w - VRAM_FOLD) : w;
+		else if (col < 8'd160)             // visible 640 bytes: row*160 + col
+			vram_map = {row, 7'd0} + {2'd0, row, 5'd0} + {9'd0, col};
+		else                               // pitch padding: shared scratch
+			vram_map = VRAM_TAIL + {9'd0, (col - 8'd160)};
+	end
 endfunction
 
 reg [31:0] vram_qa;

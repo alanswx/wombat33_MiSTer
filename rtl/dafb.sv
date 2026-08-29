@@ -43,6 +43,9 @@ module dafb
 	// video: VRAM word fetch (registered externally, 1-cycle latency)
 	output [21:2] vid_addr,
 	input  [31:0] vid_rdata,
+	// the programmed row pitch, so the platform's VRAM mapper can compact
+	// away the never-visible tail of each row (see wombat33.sv)
+	output [13:0] vid_stride,
 
 	output  [7:0] vga_r,
 	output  [7:0] vga_g,
@@ -59,6 +62,7 @@ module dafb
 //----------------------------------------------------------------------------
 reg [20:0] fb_base;
 reg [13:0] stride;               // bytes
+assign vid_stride = stride;
 reg  [2:0] sense_drive;          // last value written to the sense register
 reg [11:0] timing_ctrl, config_r, swatch_mode, test_r, swatch_test;
 reg [11:0] hparam [0:9];

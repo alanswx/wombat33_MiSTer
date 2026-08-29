@@ -86,8 +86,9 @@ localparam ROM_WORDS  = 262144;                // 1 MB
 // a flat 1 MB with no fold, so the fold had NEVER executed in sim and
 // hardware-only video corruption was invisible here (RESUME-disk-gate.md
 // carried this as a standing warning).
-localparam VRAM_WORDS = 78848;                 // 308 KB
+localparam VRAM_WORDS = 82016;                 // 320.4 KB: 512*160 + 96 tail
 localparam [16:0] VRAM_FOLD = 17'd52224;       // 204 KB, in words
+localparam [16:0] VRAM_TAIL = 17'd81920;       // 512 rows * 160 words
 
 wire        mem_req, mem_write;
 wire [31:2] mem_addr;
@@ -98,6 +99,8 @@ reg  [31:0] mem_rdata;
 reg         mem_ack;
 
 wire [21:2] vid_addr;
+wire [13:0] vid_stride;
+wire        vram_compact = (vid_stride == 14'd1024);
 reg  [31:0] vid_rdata;
 
 wire [255:0] m_debug_status;
@@ -118,6 +121,7 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.mem_ack(mem_ack),
 
 	.vid_addr(vid_addr),
+	.vid_stride(vid_stride),
 	.vid_rdata(vid_rdata),
 	.VGA_R(VGA_R),
 	.VGA_G(VGA_G),
@@ -182,7 +186,18 @@ wire [RAM_ADDR_BITS-3:0] ram_idx  = mem_addr[RAM_ADDR_BITS-1:2];
 wire [17:0]              rom_idx  = mem_addr[19:2];
 
 function [16:0] vram_map(input [16:0] w);      // window word -> storage word
-	vram_map = (w >= 17'd78848) ? (w - VRAM_FOLD) : w;
+	reg [8:0] row;
+	reg [7:0] col;
+	begin
+		row = w[16:8];
+		col = w[7:0];
+		if (!vram_compact)
+			vram_map = (w >= VRAM_WORDS) ? (w - VRAM_FOLD) : w;
+		else if (col < 8'd160)
+			vram_map = {row, 7'd0} + {2'd0, row, 5'd0} + {9'd0, col};
+		else
+			vram_map = VRAM_TAIL + {9'd0, (col - 8'd160)};
+	end
 endfunction
 
 wire [16:0]              vram_idx = vram_map(mem_addr[18:2]);
