@@ -171,6 +171,28 @@ static void adb_mouse_update() {
 	mouse_btn_dirty = false;
 }
 
+// --- open-loop ADB mouse injection (bring-up) -----------------------------
+// +mousewiggle=N : emit one relative-move packet every N frames, moving the
+// pointer down-and-right.  The click-to-warp path above closes its loop
+// against RawMouse ($82C), which nothing maintains before a System boots, so
+// it CANNOT exercise the ADB mouse at the flashing-? screen — which is
+// exactly where the hardware sits.  This path is unconditional, needs no
+// System, and runs headless (adb_mouse_update() is GUI-only).
+static int      mouse_wiggle = 0;
+static uint64_t mouse_wiggle_last = ~0ull;
+
+static void adb_mouse_wiggle(uint64_t frame) {
+	if (!mouse_wiggle) return;
+	if (frame == mouse_wiggle_last || (frame % (unsigned)mouse_wiggle)) return;
+	mouse_wiggle_last = frame;
+	const int dx = 8, py = -8;              // right, and down (PS/2 y is up+)
+	mouse_strobe ^= 1;
+	VERTOPINTERN->ps2_mouse =
+		(mouse_strobe << 24) |
+		((py & 0xFF) << 16) | ((dx & 0xFF) << 8) |
+		((py < 0) ? 0x20 : 0) | ((dx < 0) ? 0x10 : 0);
+}
+
 static void save_screenshot(int frame) {
 	char filename[64];
 	snprintf(filename, sizeof(filename), "screenshot_f%d.png", frame);
@@ -396,6 +418,8 @@ int main(int argc, char** argv, char** env) {
 			sscanf(argv[++i], "%x,%x", &stop_pc_lo, &stop_pc_hi);
 		} else if (!strcmp(argv[i], "--disk") && i + 1 < argc) {
 			scsi_disk_file = argv[++i];
+		} else if (!strncmp(argv[i], "+mousewiggle=", 13)) {
+			mouse_wiggle = atoi(argv[i] + 13);
 		} else if (!strcmp(argv[i], "--hist")) {
 			pc_hist_enable = true;
 		} else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) {
@@ -604,6 +628,8 @@ int main(int argc, char** argv, char** env) {
 			adb_mouse_update();
 			video.UpdateTexture();
 		}
+
+		adb_mouse_wiggle(video.count_frame);
 
 		if (screenshot_mode) {
 			auto it = std::find(screenshot_frames.begin(), screenshot_frames.end(),

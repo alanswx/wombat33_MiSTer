@@ -63,6 +63,7 @@ localparam CONF_STR = {
 	"Wombat33;;",
 	"S0,HDAVHD,Mount SCSI disk;",
 	"-;",
+	"O[4:3],RAM,32MB,64MB,128MB;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"-;",
 	"T[0],Reset;",
@@ -154,7 +155,7 @@ always @(posedge clk_sys) begin
 end
 
 wire reset = RESET | status[0] | buttons[1] | ioctl_download |
-             ~rom_loaded | ~pll_locked;
+             ~rom_loaded | ~pll_locked | ram_cfg_change;
 
 ///////////////////////   MACHINE   //////////////////////////////
 
@@ -173,12 +174,22 @@ wire [13:0] vid_stride;
 wire [255:0] m_debug_status;
 wire [127:0] m_debug_status2;
 
-localparam RAM_ADDR_BITS = 25;             // 32 MB
+localparam RAM_ADDR_BITS = 27;             // address ceiling: 128 MB
+
+// Installed RAM from the OSD (0=32MB, 1=48MB, 2=64MB).  The ROM probes for
+// the top of memory once, early in startup, so a change only takes effect
+// out of reset — fold it into the reset rather than letting it move under a
+// running machine.
+wire [1:0] ram_cfg = (status[4:3] == 2'd3) ? 2'd0 : status[4:3];
+reg  [1:0] ram_cfg_d;
+always @(posedge clk_sys) ram_cfg_d <= ram_cfg;
+wire ram_cfg_change = (ram_cfg != ram_cfg_d);
 
 quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.clk(clk_sys),
 	.nreset(~reset),
 	.ce(1'b1),
+	.ram_cfg(ram_cfg),
 
 	.mem_req(mem_req),
 	.mem_write(mem_write),
@@ -336,7 +347,7 @@ always @(posedge clk_sys)                  // port B: DAFB scanout
 assign DDRAM_CLK = clk_sys;
 
 localparam [28:0] DDR_RAM_BASE = 29'h0600_0000;   // byte 0x3000_0000 >> 3
-localparam [28:0] DDR_ROM_BASE = 29'h0640_0000;   // byte 0x3200_0000 >> 3
+localparam [28:0] DDR_ROM_BASE = 29'h0700_0000;   // byte 0x3800_0000 >> 3
 
 reg  [7:0] ddram_burstcnt;
 reg [28:0] ddram_addr;
@@ -408,7 +419,7 @@ always @(posedge clk_sys) begin
 				mem_ack <= 1;              // djMEMC discards ROM writes
 			end
 			else if (mem_write) begin
-				ddram_addr     <= DDR_RAM_BASE | {7'd0, mem_addr[24:3]};
+				ddram_addr     <= DDR_RAM_BASE | {5'd0, mem_addr[26:3]};
 				ddram_din      <= {2{mem_wdata}};
 				ddram_be       <= mem_addr[2] ? {mem_be, 4'b0000}
 				                              : {4'b0000, mem_be};
@@ -419,7 +430,7 @@ always @(posedge clk_sys) begin
 			else begin
 				ddram_addr     <= mem_is_rom
 				                  ? (DDR_ROM_BASE | {12'd0, mem_addr[19:3]})
-				                  : (DDR_RAM_BASE | {7'd0,  mem_addr[24:3]});
+				                  : (DDR_RAM_BASE | {5'd0,  mem_addr[26:3]});
 				ddram_burstcnt <= 8'd1;
 				ddram_rd       <= 1;
 				ddr_rd_hi      <= mem_addr[2];

@@ -24,12 +24,18 @@
 
 module quadra800
 #(
-	parameter RAM_ADDR_BITS = 23              // installed RAM: 2^23 = 8 MB
+	parameter RAM_ADDR_BITS = 27              // address space ceiling: 128 MB
 )
 (
 	input         clk,
 	input         nreset,
 	input         ce,
+
+	// installed RAM, as a real Quadra 800 configuration.  The ROM sizes
+	// memory by probing at startup, so this must be settled before reset
+	// releases — the top folds a change into the reset.
+	//   0 = 32 MB   1 = 64 MB   2 = 128 MB
+	input   [1:0] ram_cfg,
 
 	// platform memory beat port
 	output reg        mem_req,
@@ -272,6 +278,19 @@ dafb dafb (
 //----------------------------------------------------------------------------
 reg        overlay;
 
+// Installed-RAM ceiling in LONGWORDS.  Anything at or above it decodes as
+// open bus (never a bus error — see the note below), which is how the ROM's
+// sizing loop discovers the top of memory.
+// Powers of two only.  The djMEMC bank registers (iosb's djmemc_regs) are
+// stored but not honoured by this decode, so RAM is one flat linear range —
+// which matches what the ROM computes only for power-of-two totals.  A
+// 48 MB option was tried and hangs the ROM in a 3-instruction loop at
+// $408A022A: on real hardware 48 MB is two unequal banks, and sizing it
+// needs the bank decode this stub does not implement.
+wire [29:2] ram_limit = (ram_cfg == 2'd0) ? 28'h0800000 :   // 32 MB
+                        (ram_cfg == 2'd1) ? 28'h1000000 :   // 64 MB
+                                            28'h2000000;    // 128 MB
+
 // decode of a beat address; the walker sees the same physical map.
 // djMEMC acknowledges its whole DRAM window: probes beyond installed RAM
 // read open-bus zeros, never a bus error — the ROM's RAM sizing treats a
@@ -282,7 +301,7 @@ function [2:0] decode;       // 0 ram,1 rom,2 vram,3 iosb,4 berr,5 dafb,6 open
 		if (a[31:28] == 4'h4)              decode = 3'd1;
 		else if (overlay && a[31:22] == 10'd0) decode = 3'd1;
 		else if (a[31:30] == 2'b00)
-			decode = (a[29:2] < (28'd1 << (RAM_ADDR_BITS-2))) ? 3'd0 : 3'd6;
+			decode = (a[29:2] < ram_limit) ? 3'd0 : 3'd6;
 		else if (a[31:21] == 11'b1111_1001_000) decode = 3'd2;  // $F900xxxx-$F91Fxxxx
 		else if (a[31:10] == 22'b1111_1001_1000_0000_0000_00) decode = 3'd5;
 		else if (a[31:28] == 4'h5)         decode = 3'd3;

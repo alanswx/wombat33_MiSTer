@@ -78,7 +78,10 @@ module emu
 //----------------------------------------------------------------------------
 // The machine
 //----------------------------------------------------------------------------
-localparam RAM_ADDR_BITS = 25;                 // 32 MB (a target config; 48 MB later)
+localparam RAM_ADDR_BITS = 27;                 // ceiling: 128 MB
+// +ram=0|1|2 selects 32/64/128 MB, matching the OSD option on hardware
+reg [1:0] ram_cfg = 2'd0;
+initial if (!$value$plusargs("ram=%d", ram_cfg)) ram_cfg = 2'd0;
 localparam RAM_WORDS  = 1 << (RAM_ADDR_BITS-2);
 localparam ROM_WORDS  = 262144;                // 1 MB
 // VRAM mirrors wombat33.sv exactly: 308 KB backed, with the 204 KB fold
@@ -108,6 +111,7 @@ wire [127:0] m_debug_status2;
 
 quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.clk(clk_sys),
+	.ram_cfg(ram_cfg),
 	.nreset(~reset),
 	.ce(1'b1),
 
