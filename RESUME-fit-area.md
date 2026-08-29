@@ -17,11 +17,64 @@ through `6d79e0c` (never pushed).  Environment quirks live in the
   there, never write.  Its own path on Windows is
   `C:\Temp\mistercore\wombat33_MiSTer`.
 
-## Where we are
+## STATUS 2026-08-29 — all four items DONE, awaiting the Quartus compile
+
+All four conversions are implemented, committed, and regression-clean:
+
+| commit | item | sim regression |
+|---|---|---|
+| `ae3e81c` | 2: `rtl/dpram.v` altsyncram wrapper (ctag_ram/atc_ram) | gate identical to baseline |
+| `93184c6` | 1: asc_wavetable 4x `asc_bank` + iosb `A_ASC` wait state | gate identical to baseline |
+| `119aa9c` | 3: ncr53c96 `ncr_sbuf` + synth sequencer + registered reads | gate (see below) |
+| `1d4cde2` | 4: rtc3430042 pram single port pair, inferred M10K | gate (see below) |
+| `fcd213d` | qsf area-first knobs (the old step-1 fallback, applied) | no sim impact |
+| `bcb0559` | 3-fix: io transactions complete on io_ack FALLING | gate (see below) |
+
+The first 3+4 gate TRIPPED the Sad Mac watch and it was a real find:
+buf_valid was published at io_ack RISING (= command accepted, load still
+streaming), which the old asynchronous sbuf read got away with by racing
+one word behind the load; the registered read served a stale byte 0 per
+sector and the partition scan aborted.  `bcb0559` moves all completion
+to the ack FALLING edge with an io_busy hold-off window — this was a
+live hardware bug regardless (hps_io streams slower than the fill
+drains), so the fit campaign flushed out a real DE10 blocker.
+
+A fresh BASELINE gate ran first and scored exactly the recorded
+acceptance (2 REAL cpu diffs, clean elsewhere), then the gate re-ran
+after items 1+2 (identical scores, identical DONE instruction count
+201834866) and finally after items 3+4 with the ack-fall fix —
+**identical scores again** (DONE instr 201842882, +8k poll iterations
+riding out the new latencies; every suite scores exactly the
+acceptance record).  Diskless boots reach the flashing-? idle at
+`$408014CA` after every step.  Gate runs take ~10 min wall on the
+laptop; recipe unchanged (below).
+
+**Next: compile on the Windows box** (recipe below, unchanged).  In the
+reports, the four arrays now appear as explicit RAMs, so check:
+
+- RAM Summary: `dpram:ctag_ram|altsyncram` (128x94) and
+  `dpram:atc_ram|altsyncram` (32x168), four `asc_bank|altsyncram`
+  (128x32), `ncr_sbuf|altsyncram` (256x16), and the inferred
+  `rtc3430042 pram` (256x8) — all `M10K`.  TDP slices at x20, so
+  expect ~24 M10K total (ctag 5, atc 9, asc 8, sbuf 1, pram 1);
+  M10K usage ≈ 423/553.
+- Entity table: `asc_wavetable`, `ncr53c96`, `rtc3430042` own-logic
+  ALUTs collapse from 7,781 / 4,057 / 1,137; `ap040_cache` loses
+  ctag_ram's 4,366.  Total registers ≈ 27,300 (was 62,729).
+- If the Fitter STILL fails after this, the remaining levers are the
+  doc's items 2 and 3 under "If it is still over" (iosb/dafb, then the
+  ap040_core sequencer with apolkosnik).
+
+On-hardware/beyond-gate risk notes: REQUEST SENSE after an error and
+true CHECK CONDITION paths get little gate coverage (same synth
+mechanism as INQUIRY, which is covered); PRAM read-back timing now has
+one extra core clock (invisible under the VIA bit-bang clock).
+
+## Where we were (2026-08-29 morning)
 
 `905d1a7` fixed the Analysis & Synthesis hang (VRAM was building 2.5 Mbit
 of registers).  A&S now succeeds in ~13 min and `vram0..3` map as
-`M10K block / True Dual Port / 78848 x 8`.  **The Fitter now fails on
+`M10K block / True Dual Port / 78848 x 8`.  **The Fitter then failed on
 area:**
 
 ```
