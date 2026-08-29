@@ -445,8 +445,9 @@ wire [7:0] wbyte = be[3] ? wdata[31:24] :
                    be[2] ? wdata[23:16] :
                    be[1] ? wdata[15:8]  : wdata[7:0];
 
-localparam A_IDLE = 2'd0, A_VIA = 2'd1, A_CAPTURE = 2'd2, A_SDMA = 2'd3;
-reg [1:0] astate;
+localparam A_IDLE = 3'd0, A_VIA = 3'd1, A_CAPTURE = 3'd2, A_SDMA = 3'd3,
+           A_ASC = 3'd4;
+reg [2:0] astate;
 reg [3:0] sdma_be;                 // byte lanes of the pseudo-DMA beat
 
 always @(posedge clk) begin
@@ -527,7 +528,15 @@ always @(posedge clk) begin
 					if (write) djmemc_regs[addr[5:2]] <= wdata;
 					else       rdata <= djmemc_regs[addr[5:2]];
 				end
-				else if (sel_asc) rdata <= asc_rdata;   // writes strobe asc_stb
+				else if (sel_asc) begin
+					// the asc sample RAM reads back through a registered
+					// block-RAM port: hold the ack one cycle so the read
+					// lands (writes stay posted; asc_stb fired this cycle)
+					if (!write) begin
+						ack    <= 0;
+						astate <= A_ASC;
+					end
+				end
 				else if (sel_scsi) rdata <= {4{ncr_rdata}};  // scsi_strobe fires
 				else if (sel_sdma) begin
 					// pseudo-DMA beat: hold off the ack until the chip has
@@ -567,6 +576,11 @@ always @(posedge clk) begin
 			ack    <= 1;
 			astate <= A_IDLE;
 		end
+		A_ASC: begin
+			rdata  <= asc_rdata;
+			ack    <= 1;
+			astate <= A_IDLE;
+		end
 		A_SDMA: if (sdma_valid) begin
 			if (sdma_left == 3'd1) begin
 				sdma_rd <= 0;
@@ -584,6 +598,7 @@ always @(posedge clk) begin
 				sdma_left  <= sdma_left - 1'b1;
 			end
 		end
+		default: astate <= A_IDLE;
 		endcase
 	end
 end
