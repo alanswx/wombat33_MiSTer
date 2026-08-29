@@ -49,7 +49,10 @@ from it.
    against RawMouse (`d2016d2`).  sim_main also gained the [STOP]
    register/DSErrCode/DrvQ dump and RAM watchpoints.
 
-## GATE RESULT (fastboot ROM, 2026-08-28 late) — PASSED except 2 cpu diffs
+## GATE RESULT — ACCEPTANCE PASSED (pristine ROM confirmed identical)
+
+THE gate ran on BOTH ROMs (fastboot, then the pristine acceptance
+run) with identical scores and byte-identical result sizes:
 
 The full chain ran end to end: boot → mount → payload → all FIVE
 suites chained → results written (write path live for the first time
