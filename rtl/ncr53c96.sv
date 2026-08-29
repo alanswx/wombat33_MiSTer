@@ -402,12 +402,19 @@ always @(posedge clk) begin
 			phase <= PH_STAT;
 			raise(I_BUS);
 		end
-		// data-out: full sector in the buffer -> flush it
+		// data-out: full sector in the buffer -> flush it.  When this
+		// flush exhausts the CDB's block count the transfer is over:
+		// flip to STATUS so the ROM's write loop (which polls the phase
+		// bits to know when to stop feeding bytes) terminates — without
+		// this a PIO write streams forever, lba marching off the file.
 		if ((xfer_out || xfer_pio_out) && sbuf_pos == 10'd512 &&
 		    !flush_pending && !io_rd && !io_wr) begin
 			io_lba <= lba;
 			lba <= lba + 1'b1;
-			if (blocks_left != 0) blocks_left <= blocks_left - 1'b1;
+			if (blocks_left != 0) begin
+				blocks_left <= blocks_left - 1'b1;
+				if (blocks_left == 32'd1 && !data_dir_in) phase <= PH_STAT;
+			end
 			io_wr <= 1;
 			flush_pending <= 1;
 			sbuf_pos <= 0;
