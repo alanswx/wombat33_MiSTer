@@ -15,7 +15,11 @@ set rev wombat33
 if {[llength $quartus(args)] > 0} { set rev [lindex $quartus(args) 0] }
 
 project_open $rev -revision $rev
-create_timing_netlist -post_fit
+# No -post_fit: post-fit IS the default, and 17.0's parser mis-reads the flag
+# as an operating-condition name ("did not match any valid operating
+# conditions").  Plain create_timing_netlist gives the default worst-case slow
+# corner, which is the one the compile's own slack numbers came from.
+create_timing_netlist
 read_sdc
 update_timing_netlist
 
@@ -23,19 +27,24 @@ set out output_files/timing_worst.rpt
 file delete -force $out
 
 # Worst setup paths across every clock, with the full node-by-node path so the
-# offending logic is identifiable by instance name.
+# offending logic is identifiable by instance name.  This one matters; the
+# extras below are wrapped so a version quirk in them cannot discard it.
 report_timing -setup -npaths 20 -detail full_path -stdout -file $out
 
 # Same again restricted to the core machine clock, in case a faster framework
 # clock's paths crowd out the core's in the list above.
-set core [get_clocks -nowarn {*emu|pll|pll_inst*divclk}]
-if {[get_collection_size $core] > 0} {
-    report_timing -setup -npaths 10 -detail full_path -to_clock $core \
-        -stdout -file $out -append
-}
+if {[catch {
+    set core [get_clocks -nowarn {*emu|pll|pll_inst*divclk}]
+    if {[get_collection_size $core] > 0} {
+        report_timing -setup -npaths 10 -detail full_path -to_clock $core \
+            -stdout -file $out -append
+    }
+} msg]} { post_message -type warning "core-clock report skipped: $msg" }
 
-# Endpoint counts per clock: confirms how many paths actually fail.
-report_clock_fmax_summary -stdout -file $out -append
+# Per-clock Fmax, for context alongside the paths.
+if {[catch {
+    report_clock_fmax_summary -stdout -file $out -append
+} msg]} { post_message -type warning "fmax summary skipped: $msg" }
 
 delete_timing_netlist
 project_close
