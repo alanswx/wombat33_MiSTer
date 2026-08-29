@@ -1,0 +1,20 @@
+# Line-ending policy for files synced from the MiSTer template (../Template_MiSTer).
+#
+# Scoped to EXACT paths on purpose: the repo currently has a mix of committed
+# line endings in sys/ (LF, CRLF, and a few mixed). A broad pattern like *.v or
+# *.sv would force-renormalize those existing blobs and produce huge whole-file
+# diffs. These exact paths cover only the files involved in the template update,
+# all of which are already stored as LF, so pinning them to eol=lf is churn-free.
+#
+# Effect: these files are treated as text and always stored/checked out with LF,
+# regardless of the editor or OS (immune to core.autocrlf).
+*.sv          text eol=lf
+
+# Quartus project files. Quartus on the Windows build box rewrites these with
+# CRLF on every compile, which otherwise shows up as a whole-file diff. Pinning
+# to eol=lf makes git normalize the working tree back to LF, so the Windows
+# rewrites become invisible. .qsf/.sdc blobs are already LF (churn-free); .qpf
+# was committed with CRLF and is renormalized to LF in this same commit.
+*.qsf         text eol=lf
+*.qpf         text eol=lf
+*.sdc         text eol=lf
