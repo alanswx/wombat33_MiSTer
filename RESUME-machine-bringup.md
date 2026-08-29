@@ -1,115 +1,96 @@
-# Resume prompt — wombat33 machine bring-up (moved to the laptop)
+# Resume prompt — wombat33 machine bring-up (laptop, post-Sad-Mac)
 
-Paste this whole file as the opening message of a new session on the
-laptop. Repo state: everything is committed on `main` through
-`930a9c9` ("Interactive-first sim"); the working tree was clean at
-hand-off.
+Paste this file as the opening message of a new session. Repo state:
+clean tree, committed on `main` through `b62e32c` (never pushed).
+Environment quirks (GUI launch needs the sandbox disabled, speeds,
+qemu/mame paths, no lldb-attach on a running Vemu) live in the
+`laptop-sim-environment` memory note. Binding rules unchanged: ONE
+Vemu at a time, always the GUI, commit to main, clean big trace logs,
+bench disks run as copies, `gen/score_vs_oracle.py` is the pass/fail
+contract (`--flat-env` for bare-TB runs only).
 
-## Working rules (Dani, 2026-08-28 — binding)
+## Problem 1 — Sad Mac 0000000F/00000033 at ~2.21G cycles: SOLVED
 
-- **ALWAYS run the machine sim (Vemu) interactively** — the GUI, never
-  headless. Debug flags work in the GUI: `--trace-after N` turns the
-  trace file on, a `--stop-at-pc lo,hi` hit pauses the sim in the UI
-  (RUN unchecks) with registers live in the Machine panel. The batch
-  sim040 corpus testbench (Vtb_corpus) has no GUI and stays batch.
-- **Only ONE simulation at a time.** Sequence runs; don't stack
-  background sims (and don't leave a GUI instance running forgotten).
-- Clean up big sim logs as you go — cpu_trace.log runs grow to GBs.
+The hand-off read `$33` as System Error `vector − 1` = vector 52 =
+FPU OPERR and queued an FPU exception-delivery hunt.
 
-## What the laptop needs
+Tried, in order:
+- **Static FPSP analysis** (before tracing): mapped the ROM's FP vector
+  installer at `$4088D200` (vector 52 → `$4088D28C`), decoded that
+  handler as a compacted Motorola `x_operr` port, fetched fpsp.h
+  equates for the frame offsets it reads. Built a whole theory about
+  AP68040 FSAVE frames. **The trace refuted the FPU theory outright**
+  — no FPSP flow anywhere near the failure.
+- **Side discovery kept for upstream (real bugs, wrong culprit)**: the
+  AP68040's FSAVE $30/$60 frame payloads sit one longword low vs the
+  real 040 layout, both frames write/pop 4 bytes more than architected
+  (13/25 longs). Detailed in finding 33's side note in
+  `SingleStepTests/test-blockers.md`. Not yet fixed; coordinate with
+  apolkosnik (Dani has an active DM thread).
+- **`--trace-after` + `--stop-at-pc 4080280e,4080281f`** (the working
+  method): the tail showed an explicit `_SysError($33)` =
+  **dsBadSlotInt** from the slot-interrupt service at `$4088BC56` —
+  NOT a vector-52 exception. See the new "not every Sad Mac code is
+  vector−1" section in `docs/quadra800-rom-notes.md`.
+- **Root cause & fix** (`rtl/iosb.sv`, commit `0316cb0`):
+  `nubus_irqs = {1'b1, ~vbl_irq, 5'b11111}` is a 7-bit concat
+  zero-extended to 8, so DAFB VBL landed on bit 5 (= empty NuBus slot
+  $E, no handler → SysError 51) instead of bit 6 (= internal video,
+  QEMU `VIA2_NUBUS_IRQ_INTVIDEO`). Fix: `6'b111111`. Finding 33.
 
-- This repo with the `rtl/ap68040` submodule (@ 3fed526) and
-  `releases/quadra800.rom` (tracked). MacLC/lbmactwo checkouts are NOT
-  needed — via6522/adb/framework files are copied into `rtl/` and
-  `verilator/sim/`.
-- Verilator **5.028 built from source** (was in `~/.local/bin`; apt's is
-  too old), SDL2 dev libs, xxd. `cd verilator && PATH=$HOME/.local/bin:$PATH make`
-  builds Vemu and generates `quadra800.rom.hex`.
-- For oracle work (strongly recommended): QEMU git-master q800 (was at
-  `~/nextstep-test/qemu-src`) and the MAME source tree (`~/repos/mame`)
-  — see the memory notes `qemu-device-trace-oracle` /
-  `qemu-q800-oracle`. Update those paths if they differ on the laptop.
+## Problem 2 — post-fix boot spun forever in the SCSI scan: SOLVED
 
-## Where things stand (2026-08-28 evening)
+Boot then sat at `$408D1982-98` polling the 53C96 for 680M+ cycles.
+Decoded the loop: `btst #7` of STATUS (reg 4) waiting for INT after a
+SELECT. Our `rtl/ncr53c96.sv` raised `irq` on selection timeout but
+STATUS bit 7 was hardwired 0 (QEMU esp.c: `STAT_INT 0x80` mirrors into
+RSTAT). Fix: bit 7 = `irq` (commit `eb3311f`). Diskless boot now
+completes: slot scan → SCSI scan → **flashing-? floppy idle loop at
+`$408014CA`, ~2.31G cycles** — first time the machine reached the
+correct diskless end state.
 
-The machine RTL is live end to end: AP68040 on its native 32-bit bus,
-djMEMC (overlay, open-bus DRAM window, config regs), IOSB (VIA1 +
-machine ID $12, pseudo-VIA, Turbo SCSI PDMA, ID reg), DAFB (640x480,
-max 8bpp — the core's ceiling by decision), RTC, EASC wavetable (chime
-is audible in the GUI Audio window), NCR 53C96 + disk target
-(`--disk <image>` mounts on SCSI ID 0 — **untested** against the ROM),
-ADB keyboard/mouse (lbmactwo lineage — untested). 32 MB RAM config
-(target configs 32/48 MB; 8 MB double-faults — see rules below).
+## Problem 3 — 4.5-minute boot iterations (RAM test = 70%): SOLVED
 
-**RESOLVED on the laptop (2026-08-28, finding 33).** The Sad Mac
-`0000000F / 00000033` was NOT FPU OPERR — the `vector − 1` reading was
-wrong. The trace showed an explicit `_SysError($33)` = **dsBadSlotInt**:
-the DAFB VBL arrived on pseudo-VIA slot bit 5 (empty NuBus slot $E)
-instead of bit 6 (internal video) because `nubus_irqs` in `rtl/iosb.sv`
-was a 7-bit concat zero-extended. One-bit fix, committed. The boot now
-runs past 2.22G cycles into the SCSI boot-device scan ($408D19xx
-polling the 53C96). See finding 33 in `SingleStepTests/test-blockers.md`
-and the new "not every Sad Mac code is vector−1" section in
-`docs/quadra800-rom-notes.md`.
+- The pre-existing `+warmstart` plusarg (seeds 'WLSC' at `$CFC`) never
+  helped: the RAM test has its OWN gate — `cmpi.l #'WLSC',(-4,a6)` at
+  `$4084733C`, magic at **table−4 = `$01FFFFA0`**, the stamp a passing
+  test leaves at top-of-RAM; zeroed sim RAM is always "cold".
+- **Patch-only attempt failed**: NOP the gate branch (file offset
+  `$47344`, `6606`→`4E71`) → death chime → SCC monitor at cycle 53M.
+  That identified the 40M–80M boot phase as the **ROM checksum**
+  (32-bit sum of big-endian words over [4,end), stored at offset 0).
+- **Working solution**: patch + checksum fixup =
+  `docs/tools/make-fastboot-rom.sh`, `make fastboot`, run with
+  `+rom=quadra800-fastboot.rom.hex`. Diskless boot: 2.31G → **420M
+  cycles (~47 s), 5.5x**. Full reverse engineering in
+  `docs/quadra800-ram-test.md`. Sim-only; pristine ROM for acceptance.
 
-Side discovery recorded in finding 33 for upstream AP68040 work (real
-bugs, not this Sad Mac): the core's FSAVE $30/$60 frame payloads sit
-one longword low vs the real 040 layout the ROM FPSP addresses, and
-both frames write/pop 4 bytes more than their architected sizes.
+## Problem 4 — the acceptance gate disk boot: NOT STARTED (next step)
 
-### Immediate next step
+Boot a COPY of the all-in-one bench disk via `--disk` (extract fresh
+from `SingleStepTests/prebuilt/quadra800-allinone-2026-08-28b.tgz`;
+manifest: 5 suites, Results.jsonl at abs offset 715776, expected
+`C=862D7F48`). Boot rows `A/D/E/C/3` must paint, suites chain, then
+score every suite with `gen/score_vs_oracle.py` (NO `--flat-env`).
+Expect a trace→fix loop on the 53C96 data-transfer paths — flagged
+shaky in `rtl/ncr53c96.sv`: non-DMA transfers minimal, PDMA byte order
+unverified vs MAME dma16_swap, DMA-select CDB unimplemented. Iterate
+with the fastboot ROM (47 s/lap); run THE gate on the pristine ROM.
 
-Diskless boot now heads for the flashing-? floppy. The acceptance gate
-below is the live target: mount a COPY of the all-in-one bench disk via
-`--disk` and walk the 53C96 model through the real boot (its flagged
-shaky spots — non-DMA transfers, PDMA byte order — are now actually
-exercised by the ROM's scan).
+```sh
+cd verilator && make fastboot
+cp <fresh-extracted>.hda /tmp/gate.hda
+./obj_dir/Vemu +rom=quadra800-fastboot.rom.hex --disk /tmp/gate.hda
+```
+`--stop-at-pc` is now resumable in the GUI (stop parks RUN; re-check
+RUN to continue) and flushes cpu_trace.log at the stop.
 
-### Also in flight at hand-off
+## Open threads
 
-`SingleStepTests/preboot/sim040`: the FULL 722-row cpu corpus
-(finding 31) was re-running with a fresh forced rebuild
-(`SIM=verilator MAXCYCLES=4000000000 CDEFS="-DLAST_TEST_INDEX=721"
-./run_corpus.sh cpu`), at 1.68G cycles at hand-off. Evidence so far:
-the hand-off-era build products were slow AND hung at results-row 408;
-a fresh 0..430 build runs 6x faster, sails past that row, and scores
-**427 rows, 0 REAL** with the new `--flat-env` scorer flag
-(finding 32: 7 env-read rows classify as `envread` in the bare TB;
-machine acceptance scoring stays strict). If the full run wasn't
-finished/collected before the move: rerun the command above on the
-laptop (~30-60 min) and score; expected 0 REAL. Update finding 31
-either way.
-
-## The acceptance gate (unchanged)
-
-Boot a COPY of
-`SingleStepTests/preboot/supervisor_bench/dist/quadra800-allinone.hda`
-via `./obj_dir/Vemu --disk <copy>`, boot rows `A/D/E/C/3` paint with
-`C = 862D7F48`, suites chain, extract `/Results.jsonl`, score every
-suite with `gen/score_vs_oracle.py` (NO --flat-env there). The 53C96
-model's shaky spots are flagged in `rtl/ncr53c96.sv` (non-DMA data
-transfers minimal, PDMA byte order unverified vs MAME's dma16_swap,
-DMA-select CDB unimplemented) — expect a trace→fix loop after the Sad
-Mac is cleared.
-
-## Machine rules learned the hard way (do not relearn)
-
-- RAM space NEVER bus-errors: djMEMC acks its whole DRAM window;
-  beyond installed RAM reads open-bus zeros. A berr there = the ROM's
-  critical-error path (death chime → SCC monitor at $408B9886).
-- Linear RAM ≥ 32 MB (bank probes land at $01000000+; 8 MB ⇒ MemTop 0
-  ⇒ double fault at boot-stack setup). Real 8 MB needs bank-conf
-  address decode — hardware-core work, later.
-- NuBus slot probes EXPECT berr — keep it for empty spaces.
-- QEMU q800 `--trace 'djmemc_*' --trace 'iosb_*' --trace 'macfb_*'` is
-  the boot ground truth; QEMU `-m 32` reaches gray desktop + flashing
-  floppy at 640x480 with this ROM. MAME's models differ in load-bearing
-  ways (documented in the memory notes).
-
-## Campaign rules that still bind
-
-Commit to `main`, never push; one-line code comments, rationale to
-`SingleStepTests/test-blockers.md` (findings run through 32);
-corpus files change only with a stated reason; bench disks are
-single-use — always run on copies; `gen/score_vs_oracle.py` remains THE
-pass/fail contract (`--flat-env` for bare-TB runs ONLY).
+- Desktop (via screen share) was still grinding the finding-31 full
+  cpu corpus rerun at 0.71 Mcyc/s — collect/score it or rerun here
+  (this laptop is ~13x faster); update finding 31 either way.
+- AP68040 FSAVE frame fix (see Problem 1 side discovery) — upstream
+  coordination, then the `saverestore` bench suite becomes meaningful.
+- Audio is scope-only (no SDL playback anywhere in sim_audio) — the
+  "chime" was always the waveform plot. Optional small feature.
