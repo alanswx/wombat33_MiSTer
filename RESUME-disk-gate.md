@@ -49,7 +49,33 @@ from it.
    against RawMouse (`d2016d2`).  sim_main also gained the [STOP]
    register/DSErrCode/DrvQ dump and RAM watchpoints.
 
-## ACTIVE — the gate run (verify, then score)
+## GATE RESULT (fastboot ROM, 2026-08-28 late) — PASSED except 2 cpu diffs
+
+The full chain ran end to end: boot → mount → payload → all FIVE
+suites chained → results written (write path live for the first time
+ever after `21f37d6`) → bench parked at its DONE point (CPU frozen at
+`$400FA` after a clean final ICCS/msgacc — that's completion, not a
+hang).  Scored vs the REAL-SILICON oracles
+(`results/allinone/*_hardware_quadra800_2026-08-28.jsonl`):
+
+| suite | rows | verdict |
+|---|---|---|
+| cpu | 717 | **2 REAL diffs** / 13,585 field-groups |
+| fpu | 270 | clean |
+| saverestore | 8 | clean |
+| integration | 1328 | clean |
+| mmu_full | 24 | clean (env 25 / frame 2 classified) |
+
+Both cpu diffs are one family — 68040 memory-indirect modes
+(`MOVE.L ([bd.W,A6]),D1` and postindexed) take vec 4 on AP68040 where
+silicon executes.  CPU-core decode gap → the apolkosnik/finding-31
+thread, NOT disk/SCSI.  Scoring recipe: dd the 1 MB at sector 1398 →
+`gen/split_allinone_results.py <manifest> <blob> <outdir>` →
+`gen/score_vs_oracle.py {suite} <oracle> <split>` (mmu_full scores as
+`mmu`; NO `--flat-env`).  Pristine-ROM acceptance was launched at
+session end — if it wasn't scored, repeat the recipe on its disk copy.
+
+## The gate run mechanics (for reruns)
 
 Running at session end: fastboot ROM + freshly blessed copy,
 monitored.  To reproduce:
