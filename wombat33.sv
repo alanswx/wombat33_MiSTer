@@ -8,11 +8,10 @@
 //     the machine's bus FSM already tolerates wait states and the 68040
 //     caches absorb the latency.  ROM writes are acked and discarded
 //     (djMEMC behavior), which also write-protects the ROM region.
-//   - VRAM is on-chip BRAM (VRAM_AW below; 2^17 words = 512 KB) because
-//     the DAFB scanout expects registered 1-cycle reads.  The machine's
-//     1 MB VRAM window aliases onto it; the boot 640x480@8bpp screen
-//     needs 300 KB.  This is the main BRAM consumer — shrink it first
-//     if the fit fails.
+//   - VRAM is on-chip BRAM, 300 KB physical (exactly 640x480@8bpp)
+//     advertised as 512 KB via window aliasing + a fold — see the VRAM
+//     section — because the DAFB scanout expects registered 1-cycle
+//     reads.  Still the main BRAM consumer (~2.4 Mbit).
 //   - The ROM uploads as boot.rom (ioctl index 0) into the DDR3 ROM
 //     region; the machine is held in reset until it lands.
 //   - The SCSI disk is hps_io block device 0 (mount a .hda in the OSD);
@@ -231,20 +230,32 @@ assign LED_DISK = {1'b1, sd_rd[0] | sd_wr[0]};
 //////////////////////////////////////////////////////////////////
 // VRAM — on-chip, true dual port: CPU beats on port A (2-cycle
 // handshake: capture, then deliver), DAFB scanout on port B with the
-// registered 1-cycle read the machine expects.  The 1 MB window
-// aliases onto 2^VRAM_AW words.
+// registered 1-cycle read the machine expects.
+//
+// Physical storage is 300 KB — exactly 640x480 @ 8bpp, the largest
+// framebuffer any supported mode uses.  The machine's 2 MB window
+// aliases mod 512 KB, so a ROM size probe sees the classic power-of-2
+// wrap and ADVERTISES 512 KB; the unbacked 300K..512K range folds
+// down by 212 KB onto 88K..300K so probe readbacks anywhere in the
+// window still succeed.  Only software genuinely storing data in the
+// top 212 KB would see the aliasing — no supported mode does.
 //////////////////////////////////////////////////////////////////
-localparam VRAM_AW = 17;                   // 2^17 x 32 = 512 KB
+localparam VRAM_WORDS = 76800;             // 300 KB
+localparam [16:0] VRAM_FOLD = 17'd54272;   // 212 KB, in words
 
-reg [31:0] vram [0:(1<<VRAM_AW)-1];
+function [16:0] vram_map(input [16:0] w);  // window word -> storage word
+	vram_map = (w >= 17'd76800) ? (w - VRAM_FOLD) : w;
+endfunction
+
+reg [31:0] vram [0:VRAM_WORDS-1];
 reg [31:0] vram_qa;
 reg        vram_ph;                        // port-A phase: 0 capture, 1 deliver
 
-wire            mem_is_ram  = (mem_memsel == 2'd0);
-wire            mem_is_rom  = (mem_memsel == 2'd1);
-wire            mem_is_vram = !mem_is_ram && !mem_is_rom;
-wire [VRAM_AW-1:0] va_addr  = mem_addr[VRAM_AW+1:2];
-wire            va_we       = mem_req && mem_is_vram && mem_write && !vram_ph;
+wire         mem_is_ram  = (mem_memsel == 2'd0);
+wire         mem_is_rom  = (mem_memsel == 2'd1);
+wire         mem_is_vram = !mem_is_ram && !mem_is_rom;
+wire [16:0]  va_addr     = vram_map(mem_addr[18:2]);
+wire         va_we       = mem_req && mem_is_vram && mem_write && !vram_ph;
 
 always @(posedge clk_sys) begin
 	if (va_we) begin
@@ -256,7 +267,7 @@ always @(posedge clk_sys) begin
 	vram_qa <= vram[va_addr];
 end
 
-always @(posedge clk_sys) vid_rdata <= vram[vid_addr[VRAM_AW+1:2]];
+always @(posedge clk_sys) vid_rdata <= vram[vram_map(vid_addr[18:2])];
 
 //////////////////////////////////////////////////////////////////
 // DDR3 bridge — RAM + ROM regions, plus the boot.rom upload path.
