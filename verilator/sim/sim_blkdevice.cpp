@@ -109,7 +109,10 @@ void SimBlockDevice::BeforeEval(long long cycles)
         // synchronous, so the next address is driven after consuming this word.
         // Write 16-bit word as 2 bytes
         unsigned short word = *(sd_buff_din[i]);
-        if (!Verilated::commandArgsPlusMatch("ignore_scsi_writes")) {
+        // commandArgsPlusMatch returns "" (never NULL) when the plusarg is
+        // absent, so `!ptr` was always false and every write was silently
+        // discarded — test the string's emptiness, not the pointer
+        if (!Verilated::commandArgsPlusMatch("ignore_scsi_writes")[0]) {
           disk[i].put((word >> 8) & 0xFF);
           disk[i].put(word & 0xFF);
         }
