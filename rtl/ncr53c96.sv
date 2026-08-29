@@ -129,6 +129,19 @@ reg  [7:0] scsi_status;            // 0 good, 2 check condition
 reg  [7:0] sense_key;
 reg        buf_valid;              // sbuf holds data ready to stream
 reg        flush_pending;          // io_wr outstanding, sbuf owned by platform
+reg        io_ack_d;               // for the ack falling edge = transfer done
+
+// A block-device transfer is in flight from the io_rd/io_wr strobe until
+// the cycle after io_ack falls.  The engine must not conclude anything
+// about the buffer inside that window: io_ack RISING only means the
+// platform accepted the command — the buffer words then stream in (load)
+// or out (flush) for the whole time ack is high.  The old code published
+// buf_valid at the rising edge and survived only because the bare-array
+// read was asynchronous: the fill chased the load exactly one word
+// behind, same-cycle writes included.  A registered read loses that race
+// for the first byte (and real hps_io streams far slower than the fill
+// drains, so rising-edge publication was a hardware bug waiting).
+wire io_busy = io_rd || io_wr || io_ack || io_ack_d;
 
 `ifdef VERILATOR
 // bring-up taps: command writes, CDB executions, interrupt edges — with
@@ -355,6 +368,7 @@ always @(posedge clk) begin
 		chunk_irq_armed <= 0;
 		lba <= 0; blocks_left <= 0;
 		sbuf_len <= 0; sbuf_pos <= 0; buf_valid <= 0; flush_pending <= 0;
+		io_ack_d <= 0;
 		data_dir_in <= 0; scsi_status <= 0; sense_key <= 0;
 		synth_kind <= 0; synth_idx <= 0; synth_len <= 0;
 		sense_r <= 0; cap_r <= 0;
@@ -399,21 +413,28 @@ always @(posedge clk) begin
 
 		// (the sector arriving from the platform during io_rd service
 		// lands through the RAM's port S above)
+		//
+		// ack rising = command accepted: drop the request strobes.
+		// ack falling = transfer complete: only now publish a loaded
+		// sector / release a flushed buffer (see io_busy above).
+		io_ack_d <= io_ack;
 		if (io_ack) begin
-			if (io_rd) begin
+			io_rd <= 0;
+			io_wr <= 0;
+		end
+		if (io_ack_d && !io_ack) begin
+			if (!flush_pending) begin
 				buf_valid <= 1;
 				sbuf_len <= 10'd512;
 				sbuf_pos <= 0;
 			end
-			io_rd <= 0;
-			io_wr <= 0;
 			flush_pending <= 0;
 		end
 
 		//---------------------------------------------------- block prefetch
 		// data-in: fetch the next sector whenever the current one is spent
 		if (phase == PH_DIN && data_dir_in && blocks_left != 0 &&
-		    !io_rd && !io_wr && (!buf_valid || sbuf_pos >= sbuf_len)) begin
+		    !io_busy && (!buf_valid || sbuf_pos >= sbuf_len)) begin
 			buf_valid <= 0;
 			io_lba <= lba;
 			lba <= lba + 1'b1;
@@ -503,12 +524,12 @@ always @(posedge clk) begin
 		if (xfer_in && chunk_irq_armed && tc_zero && fifo_cnt < 5'd2) begin
 			chunk_irq_armed <= 0;
 			xfer_in <= 0;
-			if (!byte_avail && blocks_left == 0 && !io_rd) phase <= PH_STAT;
+			if (!byte_avail && blocks_left == 0 && !io_busy) phase <= PH_STAT;
 			raise(I_BUS);
 		end
 		// data-in underflow: source exhausted before TC — go to status
 		if (xfer_in && chunk_irq_armed && !tc_zero && !byte_avail &&
-		    blocks_left == 0 && !io_rd) begin
+		    blocks_left == 0 && !io_busy) begin
 			chunk_irq_armed <= 0;
 			xfer_in <= 0;
 			phase <= PH_STAT;
@@ -520,7 +541,7 @@ always @(posedge clk) begin
 		// bits to know when to stop feeding bytes) terminates — without
 		// this a PIO write streams forever, lba marching off the file.
 		if ((xfer_out || xfer_pio_out) && sbuf_pos == 10'd512 &&
-		    !flush_pending && !io_rd && !io_wr) begin
+		    !flush_pending && !io_busy) begin
 			io_lba <= lba;
 			lba <= lba + 1'b1;
 			if (blocks_left != 0) begin
@@ -533,7 +554,7 @@ always @(posedge clk) begin
 		end
 		// data-out complete: TC expired, FIFO drained, buffer flushed
 		if (xfer_out && chunk_irq_armed && tc_zero && fifo_cnt == 0 &&
-		    !flush_pending && !io_wr) begin
+		    !flush_pending && !io_busy) begin
 			if (sbuf_pos != 0 && sbuf_pos < 10'd512) begin
 				// trailing partial sector: flush what we have
 				io_lba <= lba;
