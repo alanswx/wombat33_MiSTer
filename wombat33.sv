@@ -136,7 +136,11 @@ pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
-	.outclk_0(clk_sys),                    // 33.33 MHz machine clock
+	.outclk_0(clk_sys),                    // 33.000000 MHz machine clock — the
+	                                       // real Quadra 800 rate, and the exact
+	                                       // base every time-anchored divider
+	                                       // assumes (RTC SEC_DIV, the 60.15 Hz
+	                                       // tick, VIA E_HALF, ASC SAMPLE_DIV)
 	.locked(pll_locked)
 );
 

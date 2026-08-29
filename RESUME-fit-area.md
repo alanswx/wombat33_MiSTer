@@ -321,7 +321,9 @@ from 63,484 to roughly 28,000.
 - `Logic utilization (in ALMs)` **< 41,910** and the Fitter reports
   `Successful`.
 - `output_files\wombat33.rbf` produced (`GENERATE_RBF_FILE ON`).
-- Timing: check `wombat33.sta.rpt` closes at 33.33 MHz.  `wombat33.sdc` has
+- Timing: check `wombat33.sta.rpt` closes at 33.000 MHz (PLL retuned from
+  33.333 on 2026-08-29 — exact real-Quadra rate; every time-anchored
+  divider assumes it).  `wombat33.sdc` has
   only `derive_pll_clocks` / `derive_clock_uncertainty` today.
 - Sim regressions unchanged: diskless boot reaches flashing-? at
   `$408014CA`; THE gate scores 2 REAL cpu diffs and clean elsewhere.
