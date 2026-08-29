@@ -122,7 +122,6 @@ reg [31:0] disk_blocks;
 reg  [7:0] cdb [0:9];
 reg [31:0] lba;
 reg [31:0] blocks_left;            // read: blocks not yet fetched; write: not yet flushed
-reg [15:0] sbuf [0:255];           // one sector / synthesized data
 reg  [9:0] sbuf_len;               // valid bytes in sbuf
 reg  [9:0] sbuf_pos;               // next byte index
 reg        data_dir_in;            // 1 = target->initiator
@@ -130,8 +129,6 @@ reg  [7:0] scsi_status;            // 0 good, 2 check condition
 reg  [7:0] sense_key;
 reg        buf_valid;              // sbuf holds data ready to stream
 reg        flush_pending;          // io_wr outstanding, sbuf owned by platform
-
-assign sd_buff_din = sbuf[sd_buff_addr];
 
 `ifdef VERILATOR
 // bring-up taps: command writes, CDB executions, interrupt edges — with
@@ -142,8 +139,6 @@ initial dbg_cyc = 0;
 `endif
 
 wire byte_avail = buf_valid && (sbuf_pos < sbuf_len);
-wire [7:0] sbuf_byte = sbuf_pos[0] ? sbuf[sbuf_pos[9:1]][7:0]
-                                   : sbuf[sbuf_pos[9:1]][15:8];
 reg [7:0] dma_rlatch;
 assign dma_rdata = dma_rlatch;
 
@@ -216,12 +211,6 @@ task cdb_byte(input [7:0] b);
 	end
 endtask
 
-// prepare synthesized data in sbuf (big-endian byte pairs)
-task set_byte(input [9:0] idx, input [7:0] b);
-	if (idx[0]) sbuf[idx[9:1]][7:0]  <= b;
-	else        sbuf[idx[9:1]][15:8] <= b;
-endtask
-
 //----------------------------------------------------------------------------
 // main
 //----------------------------------------------------------------------------
@@ -232,6 +221,121 @@ wire reg_rd_cyc = ce && sel && !write;
 wire fifo_ext   = (reg_wr_cyc && (rs == 4'h2 || rs == 4'h3)) ||
                   (reg_rd_cyc && rs == 4'h2);
 wire isr_read   = reg_rd_cyc && (rs == 4'h5);
+
+//----------------------------------------------------------------------------
+// sector buffer — 256 x 16 block RAM (was a bare array: same-cycle
+// multi-word clears in exec_cdb and two asynchronous reads kept it out
+// of M10K, at 4,057 ALUTs / 4,562 registers).  Port S is the platform
+// side: the sector load during io_rd service and the flush readback,
+// both at sd_buff_addr.  Port E is the engine side: the synthesized-
+// response writes, the data-out drain, and the data-in byte reads.
+//
+// The FIFO-engine arm selects are decided here, one-hot down the same
+// priority chain the clocked engine executes, so the write-port mux and
+// the engine cannot drift apart.
+//----------------------------------------------------------------------------
+wire eng_rd      = !fifo_ext && dma_rd && !dma_valid;
+wire eng_wr      = !fifo_ext && dma_wr && !dma_valid;
+wire arm_pop     = eng_rd && fifo_cnt != 0;
+wire arm_rd_idle = !arm_pop && eng_rd && !xfer_in && !cdb_active;
+wire arm_cdb_dma = !arm_pop && !arm_rd_idle && eng_wr && cdb_active &&
+                   dma_active && !tc_zero;
+wire arm_out_dma = !arm_pop && !arm_rd_idle && !arm_cdb_dma && eng_wr &&
+                   xfer_out && dma_active && !tc_zero && fifo_cnt < 5'd16;
+wire arm_swallow = !arm_pop && !arm_rd_idle && !arm_cdb_dma && !arm_out_dma &&
+                   eng_wr && !cdb_active && !xfer_out;
+wire no_dma_arm  = !arm_pop && !arm_rd_idle && !arm_cdb_dma && !arm_out_dma &&
+                   !arm_swallow;
+wire arm_cdb_ff  = !fifo_ext && no_dma_arm && cdb_active && fifo_cnt != 0;
+wire arm_drain   = !fifo_ext && no_dma_arm && !arm_cdb_ff &&
+                   (xfer_out || xfer_pio_out) && fifo_cnt != 0 &&
+                   !flush_pending && sbuf_pos < 10'd512;
+wire arm_fill    = !fifo_ext && no_dma_arm && !arm_cdb_ff && !arm_drain &&
+                   xfer_in && dma_active && !tc_zero && fifo_cnt < 5'd16 &&
+                   byte_avail && sbuf_rd_ok;
+wire arm_pio_in  = !fifo_ext && no_dma_arm && !arm_cdb_ff && !arm_drain &&
+                   !arm_fill && xfer_pio_in && byte_avail && fifo_cnt == 0 &&
+                   sbuf_rd_ok;
+
+// Synthesized-response sequencer: exec_cdb can no longer clear and fill
+// 18 words in one cycle, so it records what to build and this machine
+// streams one byte per clock into port E, publishing buf_valid with the
+// last byte.  The ROM is still waiting on the select interrupt / phase
+// when it lands, so the extra cycles are invisible.
+localparam [1:0] SY_SENSE = 2'd0, SY_INQ = 2'd1, SY_MODE = 2'd2, SY_CAP = 2'd3;
+reg  [1:0] synth_kind;
+reg  [5:0] synth_idx;
+reg  [5:0] synth_len;               // != 0 while synthesizing
+reg  [7:0] sense_r;                 // sense key latched at exec (it clears)
+reg [31:0] cap_r;                   // disk_blocks - 1 latched at exec
+wire       synth_on = synth_len != 0;
+
+function [7:0] synth_byte(input [1:0] kind, input [5:0] idx);
+	case (kind)
+	SY_SENSE: synth_byte = (idx == 0) ? 8'h70 :
+	                       (idx == 2) ? sense_r :
+	                       (idx == 7) ? 8'h0A : 8'h00;
+	SY_INQ:   case (idx)                       // bytes not listed: $20,
+	          6'd0, 6'd1: synth_byte = 8'h00;  // the old $2020 preset
+	          6'd2, 6'd3: synth_byte = 8'h02;  // SCSI-2
+	          6'd4:  synth_byte = 8'd31;
+	          6'd8:  synth_byte = "W"; 6'd9:  synth_byte = "O";
+	          6'd10: synth_byte = "M"; 6'd11: synth_byte = "B";
+	          6'd12: synth_byte = "A"; 6'd13: synth_byte = "T";
+	          6'd14: synth_byte = "3"; 6'd15: synth_byte = "3";
+	          default: synth_byte = 8'h20;
+	          endcase
+	SY_MODE:  synth_byte = (idx == 0) ? 8'h03 : 8'h00;
+	default:  case (idx)                       // SY_CAP: 512-byte blocks
+	          6'd0: synth_byte = cap_r[31:24];
+	          6'd1: synth_byte = cap_r[23:16];
+	          6'd2: synth_byte = cap_r[15:8];
+	          6'd3: synth_byte = cap_r[7:0];
+	          6'd6: synth_byte = 8'd2;
+	          default: synth_byte = 8'h00;
+	          endcase
+	endcase
+endfunction
+
+// Port E: synth and drain writes own the address; otherwise it reads
+// ahead of the data-in stream at sbuf_pos.  sbuf_rd_ok covers the one
+// cycle after the read address moved (or a write stole the port) while
+// the registered q_e still shows the previous word — the fill arms wait
+// it out (a stall only on word crossings; within a word the address is
+// unchanged).  Completion logic keeps the pure byte_avail.
+wire        we_e    = synth_on || arm_drain;
+wire  [7:0] addr_e  = synth_on ? {3'd0, synth_idx[5:1]} : sbuf_pos[8:1];
+wire  [7:0] wbyte_e = synth_on ? synth_byte(synth_kind, synth_idx) : fifo[0];
+wire        wodd_e  = synth_on ? synth_idx[0] : sbuf_pos[0];
+wire [15:0] q_e, q_s;
+
+ncr_sbuf sbuf
+(
+	.clk    (clk),
+	.addr_e (addr_e),
+	.din_e  ({2{wbyte_e}}),
+	.be_e   (wodd_e ? 2'b01 : 2'b10),
+	.we_e   (we_e),
+	.q_e    (q_e),
+	.addr_s (sd_buff_addr),
+	.din_s  (sd_buff_dout),
+	.we_s   (sd_buff_wr),
+	.q_s    (q_s)
+);
+
+// platform readback (write flush): hps_io and the sim both sample a
+// held address many cycles after driving it, so the registered read is
+// transparent to them
+assign sd_buff_din = q_s;
+
+reg  [7:0] eq_addr;                // address q_e currently reflects
+reg        eq_wr;
+always @(posedge clk) begin
+	eq_addr <= addr_e;
+	eq_wr   <= we_e;
+end
+wire       sbuf_rd_ok = (eq_addr == sbuf_pos[8:1]) && !eq_wr;
+wire [7:0] sbuf_byte  = sbuf_pos[0] ? q_e[7:0] : q_e[15:8];
 
 always @(posedge clk) begin
 	if (!nreset) begin
@@ -252,6 +356,8 @@ always @(posedge clk) begin
 		lba <= 0; blocks_left <= 0;
 		sbuf_len <= 0; sbuf_pos <= 0; buf_valid <= 0; flush_pending <= 0;
 		data_dir_in <= 0; scsi_status <= 0; sense_key <= 0;
+		synth_kind <= 0; synth_idx <= 0; synth_len <= 0;
+		sense_r <= 0; cap_r <= 0;
 	end
 	else begin
 		i_new = 8'h00;
@@ -291,9 +397,8 @@ always @(posedge clk) begin
 			disk_blocks <= img_size[40:9];
 		end
 
-		// sector arrives from the platform during io_rd service
-		if (sd_buff_wr) sbuf[sd_buff_addr] <= sd_buff_dout;
-
+		// (the sector arriving from the platform during io_rd service
+		// lands through the RAM's port S above)
 		if (io_ack) begin
 			if (io_rd) begin
 				buf_valid <= 1;
@@ -318,61 +423,68 @@ always @(posedge clk) begin
 
 		//---------------------------------------------------- FIFO engine
 		// exactly one FIFO action per cycle; the register interface (push,
-		// pop, flush) preempts the chain on its own cycles
-		if (!fifo_ext) begin
-			if (dma_rd && !dma_valid && fifo_cnt != 0) begin
-				// PDMA read: pop the head
-				dma_rlatch <= fifo[0];
-				fifo_shift;
-				dma_valid <= 1;
-			end
-			else if (dma_rd && !dma_valid && !xfer_in && !cdb_active) begin
-				// PDMA read with nothing pending: don't wedge the bus
-				dma_rlatch <= 8'hFF;
-				dma_valid <= 1;
-			end
-			else if (dma_wr && !dma_valid && cdb_active && dma_active && !tc_zero) begin
-				// PDMA write during CDB collection (the ROM's last CDB byte)
-				cdb_byte(dma_wdata);
-				dec_tc;
-				dma_valid <= 1;
-			end
-			else if (dma_wr && !dma_valid && xfer_out && dma_active && !tc_zero &&
-			         fifo_cnt < 5'd16) begin
-				// PDMA write, data-out: into the FIFO; TC counts the DACK
-				fifo_push(dma_wdata);
-				dec_tc;
-				dma_valid <= 1;
-			end
-			else if (dma_wr && !dma_valid && !cdb_active && !xfer_out) begin
-				// stray PDMA write: swallow it rather than wedging the bus
-				dma_valid <= 1;
-			end
-			else if (cdb_active && fifo_cnt != 0) begin
-				// CDB bytes preloaded/pushed into the FIFO drain into cdb[]
-				cdb_byte(fifo[0]);
-				fifo_shift;
-			end
-			else if ((xfer_out || xfer_pio_out) && fifo_cnt != 0 &&
-			         !flush_pending && sbuf_pos < 10'd512) begin
-				// data-out: FIFO drains into the sector buffer
-				set_byte(sbuf_pos, fifo[0]);
-				sbuf_pos <= sbuf_pos + 1'b1;
-				fifo_shift;
-			end
-			else if (xfer_in && dma_active && !tc_zero && fifo_cnt < 5'd16 &&
-			         byte_avail) begin
-				// data-in: sector buffer fills the FIFO; TC counts here
-				fifo_push(sbuf_byte);
-				sbuf_pos <= sbuf_pos + 1'b1;
-				dec_tc;
-			end
-			else if (xfer_pio_in && byte_avail && fifo_cnt == 0) begin
-				// non-DMA TI data-in: exactly one byte, then bus service
-				fifo_push(sbuf_byte);
-				sbuf_pos <= sbuf_pos + 1'b1;
-				xfer_pio_in <= 0;
-				raise(I_BUS);
+		// pop, flush) preempts the chain on its own cycles (fifo_ext).
+		// The arm predicates live with the sector-buffer port mux above.
+		if (arm_pop) begin
+			// PDMA read: pop the head
+			dma_rlatch <= fifo[0];
+			fifo_shift;
+			dma_valid <= 1;
+		end
+		else if (arm_rd_idle) begin
+			// PDMA read with nothing pending: don't wedge the bus
+			dma_rlatch <= 8'hFF;
+			dma_valid <= 1;
+		end
+		else if (arm_cdb_dma) begin
+			// PDMA write during CDB collection (the ROM's last CDB byte)
+			cdb_byte(dma_wdata);
+			dec_tc;
+			dma_valid <= 1;
+		end
+		else if (arm_out_dma) begin
+			// PDMA write, data-out: into the FIFO; TC counts the DACK
+			fifo_push(dma_wdata);
+			dec_tc;
+			dma_valid <= 1;
+		end
+		else if (arm_swallow) begin
+			// stray PDMA write: swallow it rather than wedging the bus
+			dma_valid <= 1;
+		end
+		else if (arm_cdb_ff) begin
+			// CDB bytes preloaded/pushed into the FIFO drain into cdb[]
+			cdb_byte(fifo[0]);
+			fifo_shift;
+		end
+		else if (arm_drain) begin
+			// data-out: FIFO head into the sector buffer (the write
+			// itself runs on port E above)
+			sbuf_pos <= sbuf_pos + 1'b1;
+			fifo_shift;
+		end
+		else if (arm_fill) begin
+			// data-in: sector buffer fills the FIFO; TC counts here
+			fifo_push(sbuf_byte);
+			sbuf_pos <= sbuf_pos + 1'b1;
+			dec_tc;
+		end
+		else if (arm_pio_in) begin
+			// non-DMA TI data-in: exactly one byte, then bus service
+			fifo_push(sbuf_byte);
+			sbuf_pos <= sbuf_pos + 1'b1;
+			xfer_pio_in <= 0;
+			raise(I_BUS);
+		end
+
+		// synthesized responses stream one byte per clock through port E;
+		// the last byte publishes the buffer.  A new exec_cdb below
+		// overrides these assignments (its arms run later in this block)
+		if (synth_on) begin
+			synth_idx <= synth_idx + 1'b1;
+			if (synth_idx == synth_len - 1'b1) begin
+				synth_len <= 0;
+				buf_valid <= 1;
 			end
 		end
 
@@ -605,14 +717,12 @@ endtask
 // byte landed, so cdb[] is settled
 //----------------------------------------------------------------------------
 task exec_cdb;
-	reg [31:0] cap;
 	begin
 		scsi_status <= 8'h00;
 		buf_valid <= 0;
 		sbuf_pos <= 0;
 		blocks_left <= 0;
 		data_dir_in <= 1;
-		cap = disk_blocks - 1;
 		// deferred select interrupt: BS|FC with the command's phase visible
 		raise(I_BUS | I_FC);
 
@@ -621,42 +731,26 @@ task exec_cdb;
 			phase <= PH_STAT;
 		end
 		8'h03: begin                                   // REQUEST SENSE
-			for (i = 0; i < 9; i = i + 1) sbuf[i] <= 16'h0000;
-			set_byte(10'd0, 8'h70);
-			set_byte(10'd2, sense_key);
-			set_byte(10'd7, 8'h0A);
+			synth_kind <= SY_SENSE; synth_idx <= 0; synth_len <= 6'd18;
+			sense_r <= sense_key;
 			sense_key <= 0;
-			sbuf_len <= 10'd18; buf_valid <= 1;
+			sbuf_len <= 10'd18;
 			phase <= PH_DIN;
 		end
 		8'h12: begin                                   // INQUIRY
-			for (i = 0; i < 18; i = i + 1) sbuf[i] <= 16'h2020;
-			set_byte(10'd0, 8'h00);                    // direct-access
-			set_byte(10'd1, 8'h00);
-			set_byte(10'd2, 8'h02);                    // SCSI-2
-			set_byte(10'd3, 8'h02);
-			set_byte(10'd4, 8'd31);
-			set_byte(10'd8,  "W"); set_byte(10'd9,  "O");
-			set_byte(10'd10, "M"); set_byte(10'd11, "B");
-			set_byte(10'd12, "A"); set_byte(10'd13, "T");
-			set_byte(10'd14, "3"); set_byte(10'd15, "3");
-			sbuf_len <= 10'd36; buf_valid <= 1;
+			synth_kind <= SY_INQ; synth_idx <= 0; synth_len <= 6'd36;
+			sbuf_len <= 10'd36;
 			phase <= PH_DIN;
 		end
 		8'h1A: begin                                   // MODE SENSE(6)
-			for (i = 0; i < 6; i = i + 1) sbuf[i] <= 16'h0000;
-			set_byte(10'd0, 8'h03);
-			sbuf_len <= 10'd4; buf_valid <= 1;
+			synth_kind <= SY_MODE; synth_idx <= 0; synth_len <= 6'd4;
+			sbuf_len <= 10'd4;
 			phase <= PH_DIN;
 		end
 		8'h25: begin                                   // READ CAPACITY(10)
-			set_byte(10'd0, cap[31:24]);
-			set_byte(10'd1, cap[23:16]);
-			set_byte(10'd2, cap[15:8]);
-			set_byte(10'd3, cap[7:0]);
-			set_byte(10'd4, 8'd0); set_byte(10'd5, 8'd0);
-			set_byte(10'd6, 8'd2); set_byte(10'd7, 8'd0);   // 512-byte blocks
-			sbuf_len <= 10'd8; buf_valid <= 1;
+			synth_kind <= SY_CAP; synth_idx <= 0; synth_len <= 6'd8;
+			cap_r <= disk_blocks - 32'd1;
+			sbuf_len <= 10'd8;
 			phase <= PH_DIN;
 		end
 		8'h08: begin                                   // READ(6)
@@ -689,5 +783,109 @@ task exec_cdb;
 		endcase
 	end
 endtask
+
+endmodule
+
+//============================================================================
+//  ncr_sbuf — the 53c96 target's sector buffer as 256 x 16 block RAM.
+//  Port E: engine side, byte-lane writes (be_e[1] = high byte = even
+//  byte address).  Port S: platform side, full-word writes.  Both reads
+//  registered (M10K semantics).  The two ports never write the same
+//  word in the same cycle (loads run only during io_rd service of read
+//  commands; drain and synth writes only outside them), and mixed-port
+//  read-during-write collisions are excluded by buf_valid/flush_pending
+//  gating in the engine — DONT_CARE on hardware, old-data in the sim
+//  branch, neither reachable.
+//============================================================================
+module ncr_sbuf
+(
+	input         clk,
+	input   [7:0] addr_e,
+	input  [15:0] din_e,
+	input   [1:0] be_e,
+	input         we_e,
+	output [15:0] q_e,
+	input   [7:0] addr_s,
+	input  [15:0] din_s,
+	input         we_s,
+	output [15:0] q_s
+);
+
+`ifdef VERILATOR
+
+	reg [15:0] mem [0:255];
+	reg [15:0] q_e_r, q_s_r;
+	always @(posedge clk) begin
+		if (we_e) begin
+			if (be_e[1]) mem[addr_e][15:8] <= din_e[15:8];
+			if (be_e[0]) mem[addr_e][7:0]  <= din_e[7:0];
+		end
+		if (we_s) mem[addr_s] <= din_s;
+		q_e_r <= mem[addr_e];
+		q_s_r <= mem[addr_s];
+	end
+	assign q_e = q_e_r;
+	assign q_s = q_s_r;
+
+`else
+
+	altsyncram ram
+	(
+		.clock0    (clk),
+		.address_a (addr_e),
+		.data_a    (din_e),
+		.wren_a    (we_e),
+		.byteena_a (be_e),
+		.q_a       (q_e),
+
+		.address_b (addr_s),
+		.data_b    (din_s),
+		.wren_b    (we_s),
+		.q_b       (q_s),
+
+		.aclr0(1'b0),
+		.aclr1(1'b0),
+		.addressstall_a(1'b0),
+		.addressstall_b(1'b0),
+		.byteena_b(1'b1),
+		.clock1(1'b1),
+		.clocken0(1'b1),
+		.clocken1(1'b1),
+		.clocken2(1'b1),
+		.clocken3(1'b1),
+		.eccstatus(),
+		.rden_a(1'b1),
+		.rden_b(1'b1)
+	);
+	defparam
+		ram.numwords_a = 256,
+		ram.widthad_a  = 8,
+		ram.width_a    = 16,
+		ram.width_byteena_a = 2,
+		ram.numwords_b = 256,
+		ram.widthad_b  = 8,
+		ram.width_b    = 16,
+		ram.width_byteena_b = 1,
+		ram.address_reg_b = "CLOCK0",
+		ram.clock_enable_input_a = "BYPASS",
+		ram.clock_enable_input_b = "BYPASS",
+		ram.clock_enable_output_a = "BYPASS",
+		ram.clock_enable_output_b = "BYPASS",
+		ram.indata_reg_b = "CLOCK0",
+		ram.intended_device_family = "Cyclone V",
+		ram.lpm_type = "altsyncram",
+		ram.operation_mode = "BIDIR_DUAL_PORT",
+		ram.outdata_aclr_a = "NONE",
+		ram.outdata_aclr_b = "NONE",
+		ram.outdata_reg_a = "UNREGISTERED",
+		ram.outdata_reg_b = "UNREGISTERED",
+		ram.power_up_uninitialized = "FALSE",
+		ram.ram_block_type = "M10K",
+		ram.read_during_write_mode_mixed_ports = "DONT_CARE",
+		ram.read_during_write_mode_port_a = "NEW_DATA_NO_NBE_READ",
+		ram.read_during_write_mode_port_b = "NEW_DATA_NO_NBE_READ",
+		ram.wrcontrol_wraddress_reg_b = "CLOCK0";
+
+`endif
 
 endmodule
