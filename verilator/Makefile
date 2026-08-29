@@ -62,7 +62,7 @@ V_SRC = \
 	$(AP)/ap040_mmu.v \
 	$(AP)/ap040_cache.v \
 	$(AP)/ap040_fpu.v \
-	$(AP)/primitives/dpram.v
+	$(RTL)/dpram.v
 
 C_SRC = \
 	sim_main.cpp \
