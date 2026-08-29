@@ -76,7 +76,7 @@ void SimBlockDevice::MountDisk( std::string file, int index) {
 }
 
 
-void SimBlockDevice::BeforeEval(int cycles)
+void SimBlockDevice::BeforeEval(long long cycles)
 {
 //
 // switch to a new disk if current_disk is -1

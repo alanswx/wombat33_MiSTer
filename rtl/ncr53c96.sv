@@ -133,6 +133,14 @@ reg        flush_pending;          // io_wr outstanding, sbuf owned by platform
 
 assign sd_buff_din = sbuf[sd_buff_addr];
 
+`ifdef VERILATOR
+// bring-up taps: command writes, CDB executions, interrupt edges — with
+// the transfer-engine state that decides completion.  Sim-only.
+reg [63:0] dbg_cyc;
+reg        dbg_irq_d, dbg_iow_d, dbg_ior_d, dbg_ack_d;
+initial dbg_cyc = 0;
+`endif
+
 wire byte_avail = buf_valid && (sbuf_pos < sbuf_len);
 wire [7:0] sbuf_byte = sbuf_pos[0] ? sbuf[sbuf_pos[9:1]][7:0]
                                    : sbuf[sbuf_pos[9:1]][15:8];
@@ -248,6 +256,35 @@ always @(posedge clk) begin
 	else begin
 		i_new = 8'h00;
 		dma_valid <= 0;
+
+`ifdef VERILATOR
+		dbg_cyc <= dbg_cyc + 64'd1;
+		if (ce && sel && write && rs == 4'h3)
+			$display("[NCR %0d] cmd=%02X ph=%0d tc=%0d tz=%b ff=%0d bl=%0d sp=%0d xi=%b xo=%b fp=%b ca=%b",
+			         dbg_cyc, wdata, phase, tcounter, tc_zero, fifo_cnt,
+			         blocks_left, sbuf_pos, xfer_in, xfer_out, flush_pending,
+			         cdb_active);
+		if (exec_pending)
+			$display("[NCR %0d] cdb %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+			         dbg_cyc, cdb[0], cdb[1], cdb[2], cdb[3], cdb[4],
+			         cdb[5], cdb[6], cdb[7], cdb[8], cdb[9]);
+		dbg_irq_d <= irq;
+		if (irq && !dbg_irq_d)
+			$display("[NCR %0d] INT+ ist=%02X ph=%0d", dbg_cyc, istatus, phase);
+		if (io_wr && !dbg_iow_d)
+			$display("[NCR %0d] io_wr+ lba=%0d fp=%b", dbg_cyc, io_lba, flush_pending);
+		if (io_rd && !dbg_ior_d)
+			$display("[NCR %0d] io_rd+ lba=%0d", dbg_cyc, io_lba);
+		if (io_ack && !dbg_ack_d)
+			$display("[NCR %0d] io_ack+ rd=%b wr=%b ff=%0d sp=%0d po=%b",
+			         dbg_cyc, io_rd, io_wr, fifo_cnt, sbuf_pos, xfer_pio_out);
+		if (!io_ack && dbg_ack_d)
+			$display("[NCR %0d] io_ack- fp=%b ff=%0d sp=%0d po=%b",
+			         dbg_cyc, flush_pending, fifo_cnt, sbuf_pos, xfer_pio_out);
+		dbg_iow_d <= io_wr;
+		dbg_ior_d <= io_rd;
+		dbg_ack_d <= io_ack;
+`endif
 
 		if (img_mounted) begin
 			mounted <= (img_size != 0);

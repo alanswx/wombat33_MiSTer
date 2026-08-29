@@ -37,7 +37,10 @@ public:
 	bool mountQueue[kVDNUM];
 	std::fstream disk[kVDNUM];
 
-	void BeforeEval(int cycles);
+	// cycles is the sim's half-cycle counter: must be 64-bit — an int
+	// wraps negative at 2^31 (~1.07G machine cycles) and the <2000 boot
+	// guard then disables the block device forever, mid-transfer
+	void BeforeEval(long long cycles);
 	void AfterEval(void);
 	//void QueueDownload(std::string file, int index);
 	//void QueueDownload(std::string file, int index, bool restart);
