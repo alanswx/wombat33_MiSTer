@@ -8,10 +8,11 @@
 //     the machine's bus FSM already tolerates wait states and the 68040
 //     caches absorb the latency.  ROM writes are acked and discarded
 //     (djMEMC behavior), which also write-protects the ROM region.
-//   - VRAM is on-chip BRAM, 300 KB physical (exactly 640x480@8bpp)
+//   - VRAM is on-chip BRAM, 308 KB physical (640x480@8bpp + headroom
+//     for the driver's framebuffer base offset — MacIIvi precedent)
 //     advertised as 512 KB via window aliasing + a fold — see the VRAM
 //     section — because the DAFB scanout expects registered 1-cycle
-//     reads.  Still the main BRAM consumer (~2.4 Mbit).
+//     reads.  Still the main BRAM consumer (~2.5 Mbit).
 //   - The ROM uploads as boot.rom (ioctl index 0) into the DDR3 ROM
 //     region; the machine is held in reset until it lands.
 //   - The SCSI disk is hps_io block device 0 (mount a .hda in the OSD);
@@ -232,19 +233,26 @@ assign LED_DISK = {1'b1, sd_rd[0] | sd_wr[0]};
 // handshake: capture, then deliver), DAFB scanout on port B with the
 // registered 1-cycle read the machine expects.
 //
-// Physical storage is 300 KB — exactly 640x480 @ 8bpp, the largest
-// framebuffer any supported mode uses.  The machine's 2 MB window
-// aliases mod 512 KB, so a ROM size probe sees the classic power-of-2
-// wrap and ADVERTISES 512 KB; the unbacked 300K..512K range folds
-// down by 212 KB onto 88K..300K so probe readbacks anywhere in the
-// window still succeed.  Only software genuinely storing data in the
-// top 212 KB would see the aliasing — no supported mode does.
+// Physical storage is 308 KB: 640x480 @ 8bpp needs 307,200 visible
+// bytes, but drivers place the framebuffer at a BASE OFFSET — sizing
+// to exactly 300 KB put the last scanlines past the array on real
+// hardware in MacIIvi_MiSTer (base = 4 rows = 2,560 bytes; they
+// scanned out white).  308 KB covers base + framebuffer with ~9 rows
+// spare; the same repo found 320 KB broke HDMI-scaler timing closure,
+// so don't grow this casually (MacIIvi.sv MDC_VRAM_WORDS, 2026-08-10).
+//
+// The machine's 2 MB window aliases mod 512 KB, so a ROM size probe
+// sees the classic power-of-2 wrap and ADVERTISES 512 KB; the
+// unbacked 308K..512K range folds down by 204 KB onto 104K..308K so
+// probe readbacks anywhere in the window still succeed.  Only
+// software genuinely storing data in the top 204 KB would see the
+// aliasing — no supported mode does.
 //////////////////////////////////////////////////////////////////
-localparam VRAM_WORDS = 76800;             // 300 KB
-localparam [16:0] VRAM_FOLD = 17'd54272;   // 212 KB, in words
+localparam VRAM_WORDS = 78848;             // 308 KB
+localparam [16:0] VRAM_FOLD = 17'd52224;   // 204 KB, in words
 
 function [16:0] vram_map(input [16:0] w);  // window word -> storage word
-	vram_map = (w >= 17'd76800) ? (w - VRAM_FOLD) : w;
+	vram_map = (w >= 17'd78848) ? (w - VRAM_FOLD) : w;
 endfunction
 
 reg [31:0] vram [0:VRAM_WORDS-1];
