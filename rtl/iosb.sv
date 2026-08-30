@@ -90,12 +90,31 @@ wire       e_falling = e_pulse &&  ephase;
 reg [$clog2(TICK_HALF)-1:0] tickdiv;
 reg        tick_60hz;
 
+// VIA1 CA2 = the one-second interrupt, and Mac OS needs it to advance its
+// clock: without it the menu bar simply never ticks (it sat frozen through a
+// whole session, first at the 1904 "Fri 12:00" and then at whatever the RTC was
+// seeded with). CA2 was tied to 0 here.
+//
+// On a real Quadra this line comes from the RTC chip. Deriving it from 60 CA1
+// periods is 0.9975 s rather than exactly 1 s, which is what MacLC_MiSTer does
+// (dataController_top.sv:729) and is fine for timekeeping -- the OS re-reads the
+// RTC anyway, and that is now seeded from the host clock.
+reg  [5:0] tick_count;
+reg        tick_60hz_d;
+wire       onesec = (tick_count == 6'd59);
+
 always @(posedge clk) begin
 	if (!nreset) begin
 		ediv <= 0; ephase <= 0;
 		tickdiv <= 0; tick_60hz <= 0;
+		tick_count <= 0; tick_60hz_d <= 0;
 	end
 	else begin
+		// count CA1 periods for the one-second line
+		tick_60hz_d <= tick_60hz;
+		if (tick_60hz && !tick_60hz_d)
+			tick_count <= onesec ? 6'd0 : tick_count + 1'b1;
+
 		ediv <= e_pulse ? '0 : ediv + 1'b1;
 		if (e_pulse) ephase <= ~ephase;
 		if (tickdiv == TICK_HALF-1) begin
@@ -164,7 +183,7 @@ via6522 via1 (
 
 	.ca1_i     (tick_60hz),
 	.ca2_o     (),
-	.ca2_i     (1'b0),
+	.ca2_i     (onesec),
 	.ca2_t     (),
 	.cb1_o     (),
 	.cb1_i     (1'b0),
