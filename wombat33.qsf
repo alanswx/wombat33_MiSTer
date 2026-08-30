@@ -56,7 +56,14 @@ set_global_assignment -name ECO_OPTIMIZE_TIMING ON
 set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
-set_global_assignment -name SEED 1
+# Fitter seed. At 82% ALM utilisation the placement is marginal enough that the
+# 99 MHz clk_ram (SDRAM) domain's HOLD slack swings with the netlist: seed 1 gave
+# +0.449 and +0.464 ns on two builds, then -0.122 ns on 2026-08-30 after an
+# unrelated clk_sys change. Hold slack is a placement artifact, so reseeding is
+# the right lever; if a future build violates again, try another value rather
+# than assuming the RTL change caused it. Check the STA summary, not just the
+# Fitter status -- scripts/deploy_screenshot.sh now refuses a violated build.
+set_global_assignment -name SEED 2
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 

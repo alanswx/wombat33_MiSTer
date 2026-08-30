@@ -22,6 +22,11 @@ module iosb
 	// AP040 core's own 2^21 stall watchdog in wombat_cpu.sv.  That ordering is
 	// the point -- the fault is reported here, with the bus released, instead
 	// of surfacing as an unrecoverable core stall.  See the A_SDMA comment.
+	//
+	// This budget only covers IDLE waiting: the counter is frozen while a
+	// platform block transfer is outstanding, because SD latency dwarfs it.
+	// Do not "fix" a spurious timeout by growing this -- past 2^21 the core
+	// watchdog wins and the deadlock this exists to break comes back.
 	parameter SDMA_TIMEOUT_BITS = 18
 )
 (
@@ -667,7 +672,16 @@ always @(posedge clk) begin
 			         iosb_dbg_cyc, sdma_left, sdma_be, sdma_rd, sdma_wr);
 `endif
 		end
-		else sdma_watch <= sdma_watch + 1'b1;
+		// Do NOT age the watchdog while a platform block transfer is in flight.
+		// The beat is not wedged then -- it is legitimately waiting for the HPS
+		// to hand over or accept a sector, and SD latency on a busy card runs to
+		// tens of ms, far past this 7.9 ms budget. Counting through that fired
+		// the escape on a perfectly healthy transfer and bus-errored the boot:
+		// Sad Mac $0000000F / $00000001 on hardware 2026-08-30, i.e. DSErrCode 1
+		// = vector 2 = bus error, and it moved around between boots exactly as a
+		// latency-dependent fault would. Only idle waiting counts toward the
+		// timeout, which is the condition the escape was actually written for.
+		else if (!io_rd && !io_wr) sdma_watch <= sdma_watch + 1'b1;
 		default: astate <= A_IDLE;
 		endcase
 	end

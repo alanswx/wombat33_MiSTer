@@ -58,6 +58,33 @@ case "$FIT_STATUS" in
         log "WARN: no parseable Fitter Status in $REV.fit.summary. Build state unknown — continuing." ;;
 esac
 
+# A Fitter "Successful" says the design PLACED, not that it will WORK. Timing is
+# the separate gate, and it is the one that matters for hardware: a violated
+# build can boot and then corrupt memory in ways that look like random software
+# bugs. Refuse it here rather than leave the judgement to whoever reads the log.
+# Override with ALLOW_TIMING_VIOLATION=1 only for a deliberate throwaway probe.
+STA="output_files/$REV.sta.summary"
+if [ -r "$STA" ]; then
+    WORST=$(awk '/[Ss]lack/ { v=""; for (i=1;i<=NF;i++) if ($i ~ /^-?[0-9]+\.[0-9]+$/) v=$i
+                 if (v!="") { if (!seen || v+0 < min+0) { min=v; seen=1 } } }
+                 END { if (seen) print min }' "$STA")
+    if [ -n "${WORST:-}" ] && awk "BEGIN{exit !($WORST < 0)}"; then
+        if [ "${ALLOW_TIMING_VIOLATION:-0}" = 1 ]; then
+            log "WARN: timing VIOLATED (worst slack $WORST ns) — deploying anyway"
+            log "      because ALLOW_TIMING_VIOLATION=1. Do not trust this build."
+        else
+            log "ERROR: timing NOT met — worst slack $WORST ns in $STA."
+            log "       Refusing to deploy. Re-fit until slack is positive, or set"
+            log "       ALLOW_TIMING_VIOLATION=1 for a deliberate throwaway probe."
+            exit 1
+        fi
+    else
+        log "Timing OK — worst slack +$WORST ns"
+    fi
+else
+    log "WARN: no $STA to check timing against — continuing."
+fi
+
 log "=== Push rbf + seed ROM/mount + launch via the reusable launcher ==="
 # git-bash/MSYS rewrites bare "/media/fat/..." args into Windows paths; disable that
 # so the absolute --seed-remote/--seed-mount-cfg paths reach the MiSTer unmangled.

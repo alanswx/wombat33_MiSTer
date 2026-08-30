@@ -165,6 +165,35 @@ end
 wire reset = RESET | status[0] | buttons[1] | ioctl_download |
              ~rom_loaded | ~pll_locked | ram_cfg_change;
 
+// Replay a mount that arrived while the machine was held in reset.
+//
+// With SC0 the Main re-mounts the saved image as soon as the core loads --
+// which is INSIDE the reset window above, because `reset` covers the whole
+// boot.rom ioctl upload. ncr53c96 latches `mounted`/`disk_blocks` only on the
+// img_mounted pulse and its always block is reset-gated, so that pulse was
+// dropped on the floor: the Main had the file open (fd present, pos stuck at
+// 0) while the machine sat on the flashing-? diskless screen. Manual OSD
+// mounts worked only because they land long after reset releases.
+//
+// This latch lives outside the machine reset: remember the mount, then issue
+// a fresh one-cycle pulse once the machine is running. Size is captured a
+// cycle before the pulse so it is stable when the target samples it, which
+// also covers a live re-mount from the OSD while running.
+reg        mount_pending = 0;
+reg [63:0] mount_size    = 0;
+reg        mach_img_mounted = 0;
+always @(posedge clk_sys) begin
+	mach_img_mounted <= 0;
+	if (img_mounted[0]) begin
+		mount_size    <= img_size;
+		mount_pending <= 1;
+	end
+	else if (mount_pending && !reset) begin
+		mount_pending    <= 0;
+		mach_img_mounted <= 1;
+	end
+end
+
 ///////////////////////   MACHINE   //////////////////////////////
 
 wire        mem_req, mem_write;
@@ -226,8 +255,8 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
 
-	.img_mounted(img_mounted[0]),
-	.img_size(img_size),
+	.img_mounted(mach_img_mounted),
+	.img_size(mount_size),
 	.io_lba(sd_lba[0]),
 	.io_rd(sd_rd[0]),
 	.io_wr(sd_wr[0]),

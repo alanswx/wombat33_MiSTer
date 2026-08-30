@@ -167,9 +167,28 @@ echo "$hr"           | tee -a "$LOG"
 } | tee -a "$LOG"
 echo "$hr" | tee -a "$LOG"
 
+# Timing verdict, recomputed here on purpose: the summary above runs inside a
+# `{ ... } | tee` pipeline, i.e. a subshell, so anything it sets is lost. Before
+# this, a build that printed "VIOLATED — *** TIMING NOT MET ***" still ended with
+# "RESULT: OK" and exit 0, which is exactly backwards for the one gate that keeps
+# an untrustworthy .rbf off real hardware. (Hit on 2026-08-30: -0.122 ns hold on
+# the 99 MHz SDRAM domain reported as OK.)
+TIMING_BAD=0
+SLK_OUT=""
+if [ "$CHECK_ONLY" != 1 ]; then
+    SLK_OUT=$(worst_slack || true)
+    if [ -n "${SLK_OUT:-}" ] && awk "BEGIN{exit !($SLK_OUT < 0)}"; then TIMING_BAD=1; fi
+fi
+
 # Overall verdict + a nudge toward deploy (which this script deliberately does NOT do).
 if [ "$RC" -ne 0 ]; then
     log "RESULT: FAILED (quartus exit=$RC) — see $LOG"
+elif [ "$TIMING_BAD" = 1 ]; then
+    log "RESULT: FAILED — timing NOT met (worst slack ${SLK_OUT} ns)."
+    log "        output_files/$RBF_NAME exists but must NOT be flashed;"
+    log "        deploy_screenshot.sh will refuse it. Re-fit (e.g. a different"
+    log "        SEED in the .qsf) or reduce the critical path first."
+    RC=1
 elif [ "$CHECK_ONLY" = 1 ]; then
     log "RESULT: check passed (Analysis & Synthesis only; no .rbf produced)"
 elif [ -f "output_files/$RBF_NAME" ]; then
