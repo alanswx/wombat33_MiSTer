@@ -353,28 +353,33 @@ always @(posedge clk) begin
 				via1_sr_ext_data <= kbd_to_mac;
 				via1_kbd_to_mac_fresh <= 1'b0;
 			end
-			else if (via1_shift_timer == 22'd1) begin
+			// `via1_sr_active` is the fix: only ever complete a shift the VIA
+			// actually has ARMED. Without it this branch fabricated shift
+			// completions out of nothing, and via6522.sv:190 makes every
+			// sr_ext_complete raise IFR bit 2 -- so the shim was firing the
+			// VIA1 shift-register interrupt at the ADB driver roughly every
+			// 11 ms whether or not the ROM had asked for a byte. The driver
+			// consumes each one as a real device response.
+			//
+			// Instrumented in sim: all 338 fallback completions in a boot
+			// window fired with the ADB bus IDLE (st=11) and no interrupt
+			// asserted -- i.e. completions the real PIC would never have
+			// clocked, because it only clocks CB1 when it has data to send.
+			//
+			// There is no safe byte to invent here, which is what makes the
+			// completion itself the bug. Proved on hardware: delivering $FF
+			// (the "no data" value QEMU and MAME use, and correct for a
+			// keyboard poll) decodes in an ADB mouse Talk R0 as
+			// {~button, dy} / {1, dx} with 7-bit SIGNED deltas, so $FF = -1,
+			// and the injected reports became a permanently drifting cursor.
+			// $00 would read as a phantom button-down instead. Both symptoms
+			// are the same defect: a response the transceiver never produced.
+			else if (via1_shift_timer == 22'd1 && via1_sr_active) begin
 				if (!adb_resp_pending || adb_bus_idle) begin
 					via1_shift_timer <= 22'd0;
 					via1_sr_ext_complete <= 1'b1;
 					via1_sr_ext_load <= 1'b1;
-					// $FF, not kbd_to_mac. This is the idle heartbeat: it fires
-					// when the transceiver produced NOTHING, so there is no byte
-					// to hand over -- and handing over kbd_to_mac re-presents the
-					// LAST REAL response byte as though it were fresh. Autopoll
-					// alternates Talk to the keyboard (addr 2) and the mouse
-					// (addr 3), so after mouse motion that stale byte is usually
-					// mouse data; replayed into a keyboard poll it decodes as
-					// keycodes, which is the intermittent phantom-key report.
-					//
-					// $FF is the "nothing to report" value everywhere else in
-					// this stack: QEMU hw/misc/mac_via.c fills a no-response /
-					// bus-timeout reply with ff ff, MAME macadb.cpp uses ff for
-					// both "no data" and key-up, and adb.sv itself already pads
-					// a single-key response with 8'hFF. adb.sv is right to
-					// return an EMPTY response here; only this shim invented a
-					// byte, so only this shim needs fixing.
-					via1_sr_ext_data <= 8'hFF;
+					via1_sr_ext_data <= kbd_to_mac;
 				end
 			end
 		end

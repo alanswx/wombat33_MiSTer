@@ -8,6 +8,8 @@ Usage:
 
 Each positional argument is sent as "kbd:<arg>". Special forms:
     sleep:0.5     -> wait that many seconds
+    mouse:3,0     -> mouseMove:3,0    relative mouse motion (dx,dy)
+    mousebtn:1    -> mouseBtn:1       mouse button state
     raw:42        -> kbdRaw:42      press+release a RAW LINUX KEYCODE
     down:42       -> kbdRawDown:42  press and HOLD (no release)
     up:42         -> kbdRawUp:42    release a held key
@@ -57,6 +59,10 @@ async def main():
                 pfx, code = k.split(":", 1)
                 payload = {"raw": "kbdRaw", "down": "kbdRawDown",
                            "up": "kbdRawUp"}[pfx] + ":" + code
+            elif k.startswith("mouse:"):
+                payload = "mouseMove:" + k.split(":", 1)[1]
+            elif k.startswith("mousebtn:"):
+                payload = "mouseBtn:" + k.split(":", 1)[1]
             else:
                 payload = f"kbd:{k}"
             print(f">> {payload}")
