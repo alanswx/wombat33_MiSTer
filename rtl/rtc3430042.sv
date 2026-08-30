@@ -18,12 +18,21 @@ module rtc3430042
 	input        clk,
 	input        nreset,
 
+	// Unix seconds from the HPS (hps_io TIMESTAMP[31:0]); bit 32 is a
+	// toggle we do not need. Seeded ONCE, the first cycle it is non-zero:
+	// the ROM reads the clock long after that, and re-seeding later would
+	// yank time out from under a running System. Same pattern MacLC_MiSTer
+	// uses in rtl/egret_behavioral.sv:375.
+	input [32:0] timestamp,
+
 	input        ce_n,                  // PB2, low = selected
 	input        clk_in,                // PB1
 	input        data_in,               // PB0 as driven by the host
 	output       data_out,              // PB0 read-back
 	output       data_oe                // chip is driving PB0 (send phase)
 );
+
+localparam [31:0] MAC_UNIX_DELTA = 32'd2082844800;  // 1904-01-01 -> 1970-01-01
 
 localparam ST_NORMAL = 2'd0, ST_WRITE = 2'd1, ST_XPCMD = 2'd2, ST_XPWRITE = 2'd3;
 
@@ -37,6 +46,7 @@ reg        out_bit;
 reg        wprot;
 reg  [7:0] xpaddr;
 reg        ce_d, clk_d;
+reg        rtc_init;                   // clock has been seeded from the host
 
 assign data_out = out_bit;
 assign data_oe  = dir_out && !ce_n;
@@ -95,6 +105,7 @@ always @(posedge clk) begin
 		ce_d <= 1; clk_d <= 0; rd_pend <= 0;
 		secdiv <= 0;
 		seconds[0] <= 0; seconds[1] <= 0; seconds[2] <= 0; seconds[3] <= 0;
+		rtc_init <= 0;
 	end
 	else begin
 		// a PRAM read launched by exec_cmd lands one clock later; any
@@ -105,10 +116,21 @@ always @(posedge clk) begin
 			rd_pend   <= 0;
 		end
 
-		secdiv <= sec_tick ? '0 : secdiv + 1'b1;
-		if (sec_tick) begin
-			seconds[0] <= sec_n[7:0];   seconds[1] <= sec_n[15:8];
-			seconds[2] <= sec_n[23:16]; seconds[3] <= sec_n[31:24];
+		// Seed from the host clock before free-running. The Mac epoch is
+		// 1904-01-01 and Unix is 1970-01-01, so the constant below is the
+		// 2,082,844,800 seconds between them -- without it the Mac boots at
+		// "Fri 12:00" every time (the 1904 zero).
+		if (!rtc_init && timestamp[31:0] != 32'd0) begin
+			{seconds[3], seconds[2], seconds[1], seconds[0]} <=
+				timestamp[31:0] + MAC_UNIX_DELTA;
+			rtc_init <= 1'b1;
+		end
+		else begin
+			secdiv <= sec_tick ? '0 : secdiv + 1'b1;
+			if (sec_tick) begin
+				seconds[0] <= sec_n[7:0];   seconds[1] <= sec_n[15:8];
+				seconds[2] <= sec_n[23:16]; seconds[3] <= sec_n[31:24];
+			end
 		end
 
 		ce_d  <= ce_n;

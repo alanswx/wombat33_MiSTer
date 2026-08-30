@@ -97,6 +97,7 @@ wire [12:0] sd_buff_addr;
 wire [15:0] sd_buff_dout;
 wire [15:0] sd_buff_din[1];
 wire        sd_buff_wr;
+wire [32:0] TIMESTAMP;                     // Unix seconds from the HPS, for the RTC
 wire  [0:0] img_mounted;
 wire        img_readonly;
 wire [63:0] img_size;
@@ -113,6 +114,8 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1), .VDNUM(1), .BLKSZ(2)) hps_io
 
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
+
+	.TIMESTAMP(TIMESTAMP),
 
 	.ioctl_download(ioctl_download),
 	.ioctl_index(ioctl_index),
@@ -275,6 +278,7 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
+	.timestamp(TIMESTAMP),
 
 	.img_mounted(mach_img_mounted),
 	.img_size(mount_size),

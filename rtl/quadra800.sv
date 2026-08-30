@@ -79,6 +79,9 @@ module quadra800
 	input  [10:0] ps2_key,
 	input  [24:0] ps2_mouse,
 
+	// Unix seconds from the HPS, for the RTC
+	input  [32:0] timestamp,
+
 	// debug
 	output            dbg_berr,
 	output     [31:0] dbg_berr_addr,
@@ -234,7 +237,8 @@ iosb iosb (
 	.sd_buff_wr(sd_buff_wr),
 
 	.ps2_key(ps2_key),
-	.ps2_mouse(ps2_mouse)
+	.ps2_mouse(ps2_mouse),
+	.timestamp(timestamp)
 );
 
 //----------------------------------------------------------------------------

@@ -72,7 +72,10 @@ module iosb
 
 	// ADB input devices
 	input  [10:0] ps2_key,
-	input  [24:0] ps2_mouse
+	input  [24:0] ps2_mouse,
+
+	// Unix seconds from the HPS, straight through to the RTC
+	input  [32:0] timestamp
 );
 
 //----------------------------------------------------------------------------
@@ -124,6 +127,7 @@ wire rtc_line  = rtc_doe ? rtc_dout : 1'b1;
 rtc3430042 rtc (
 	.clk(clk),
 	.nreset(nreset),
+	.timestamp(timestamp),
 	.ce_n(rtc_ce_n),
 	.clk_in(rtc_clk),
 	.data_in(rtc_din),

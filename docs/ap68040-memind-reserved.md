@@ -85,35 +85,39 @@ deletes `|| (extw[6] && extw[2])` and adds a comment recording why. The other
 three illegality checks are untouched — `BD SIZE = 00`, `extw[3] != 0` and
 `I/IS = 100` remain rejected.
 
-## DO NOT SEND THIS YET — the patch regressed hardware (2026-08-30)
+## Status: UNVERIFIED, but NOT a regression (corrected 2026-08-30)
 
-The patch was built into the core (`544d7976`, timing met) and run on the MiSTer
-at .143 against the `2026-08-28b` bench image. **The bench stopped working.** It
-reached the happy Mac, read to file offset 65536, and the disk went quiet — the
-CPU payload lives at offset 333312, so the payload read never completed.
+The patch was built into a core (`544d7976`) and run on the MiSTer at .143
+against the `2026-08-28b` bench image. The bench stalled after the happy Mac at
+file offset 65536, without completing the payload read.
 
-The same bench had previously run **fine on this core on hardware**. So this is a
-regression introduced by the patch, not a pre-existing fault. My first
-explanation — a SCSI stall — was wrong, and was reached by defending the patch
-instead of suspecting it; the correct baseline is "it used to work".
+**I first recorded that as "the patch regressed hardware". That was wrong.**
+The control was then run in all four combinations, and they are identical:
 
-**Conclusion: the decode analysis above is necessary but NOT sufficient.**
-Removing `(extw[6] && extw[2])` does something beyond letting the two corpus rows
-execute. The mechanism is not yet understood. Candidates worth checking, in order:
+| | hardware | Verilator |
+|---|---|---|
+| patched CPU | stalls, `pos=65536` | stalls, `ncr=2042`, last `lba=97` |
+| stock CPU   | stalls, `pos=65536` | stalls, `ncr=2042`, last `lba=97` |
 
-1. A byte sequence somewhere in the ROM or boot stub now decodes as a
-   memory-indirect operand where it previously took vector 4, sending the EA
-   state machine down `S_EA_BD`/`S_EA_MIND` and issuing a read the machine
-   cannot answer.
-2. `S_EA_MIND`'s `case (extw[1:0])` relies on `extw[2:0] == 3'b000` and the
-   removed guard to make `2'b00` unreachable; re-check that with the guard gone
-   there is still no path in which `extw[1:0] == 2'b00` reaches it.
-3. Something unrelated to decode — re-fit variance is unlikely to cause a
-   functional hang, but the build should be repeated before concluding.
+The bench does not run on this core **with or without** the patch, so the patch
+is not responsible. Two lessons worth keeping: the first attribution was made
+without running the stock-CPU control, and the sim half of the comparison was
+additionally invalid because it used the HARDWARE-flavor image — which
+`RESUME-disk-gate.md` says needs `make-emulator-gate-disk.sh` re-blessing to
+boot under the sim at all.
 
-The right next step is to bisect in the Verilator gate rather than on hardware,
-where a wedge costs a disk restore. The patch is reverted in the working tree;
-this file and the `.patch` are kept as the analysis, not as a recommendation.
+**Where that leaves the patch: unverified, not disproven.** The decode analysis
+and the 4/4 encoding correlation stand, and the hardware capture showing
+`vec = 0` stands. What is still missing is a scored before/after, and that is
+blocked on the bench not running on this core — a separate problem, unrelated
+to the CPU. Do not send the report as "verified" until that gate produces a
+number; the honest claim today is "analysis only".
+
+Separately, the last SCSI transaction before the bench stall completes textbook
+clean (read `lba=97`, 512 bytes, status, command complete, message accepted, bus
+idle). The engine is healthy and idle — the driver simply stops issuing
+commands. So the bench stall is a software/CPU-side stop, not a SCSI wedge, and
+it wants its own investigation.
 
 ## Caveats, stated plainly
 
