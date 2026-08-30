@@ -358,7 +358,23 @@ always @(posedge clk) begin
 					via1_shift_timer <= 22'd0;
 					via1_sr_ext_complete <= 1'b1;
 					via1_sr_ext_load <= 1'b1;
-					via1_sr_ext_data <= kbd_to_mac;
+					// $FF, not kbd_to_mac. This is the idle heartbeat: it fires
+					// when the transceiver produced NOTHING, so there is no byte
+					// to hand over -- and handing over kbd_to_mac re-presents the
+					// LAST REAL response byte as though it were fresh. Autopoll
+					// alternates Talk to the keyboard (addr 2) and the mouse
+					// (addr 3), so after mouse motion that stale byte is usually
+					// mouse data; replayed into a keyboard poll it decodes as
+					// keycodes, which is the intermittent phantom-key report.
+					//
+					// $FF is the "nothing to report" value everywhere else in
+					// this stack: QEMU hw/misc/mac_via.c fills a no-response /
+					// bus-timeout reply with ff ff, MAME macadb.cpp uses ff for
+					// both "no data" and key-up, and adb.sv itself already pads
+					// a single-key response with 8'hFF. adb.sv is right to
+					// return an EMPTY response here; only this shim invented a
+					// byte, so only this shim needs fixing.
+					via1_sr_ext_data <= 8'hFF;
 				end
 			end
 		end
