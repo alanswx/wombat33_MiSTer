@@ -69,7 +69,7 @@ localparam CONF_STR = {
 	// LBMacTwo) uses SC0 for this reason.
 	"SC0,HDAVHD,Mount SCSI disk;",
 	"-;",
-	"O[4:3],RAM,32MB,64MB,128MB;",
+	"O[4:3],RAM (on reset),32MB,64MB,128MB;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"-;",
 	"T[0],Reset;",
@@ -163,33 +163,47 @@ always @(posedge clk_sys) begin
 end
 
 wire reset = RESET | status[0] | buttons[1] | ioctl_download |
-             ~rom_loaded | ~pll_locked | ram_cfg_change;
+             ~rom_loaded | ~pll_locked;
 
-// Replay a mount that arrived while the machine was held in reset.
+// Re-announce the mounted image to the machine after EVERY reset.
 //
-// With SC0 the Main re-mounts the saved image as soon as the core loads --
-// which is INSIDE the reset window above, because `reset` covers the whole
-// boot.rom ioctl upload. ncr53c96 latches `mounted`/`disk_blocks` only on the
-// img_mounted pulse and its always block is reset-gated, so that pulse was
-// dropped on the floor: the Main had the file open (fd present, pos stuck at
-// 0) while the machine sat on the flashing-? diskless screen. Manual OSD
-// mounts worked only because they land long after reset releases.
+// ncr53c96 latches `mounted`/`disk_blocks` only on the img_mounted pulse, and
+// its always block is reset-gated, so a machine reset throws the mount away.
+// The Main sends that pulse exactly twice in a core's life -- once at core
+// start (SC0 restoring the saved mount) and again if you pick a file in the
+// OSD -- so after any reset the target believed no disk was present and the ROM
+// dropped to the flashing-? screen. That is why the disk had to be re-assigned
+// by hand after every reboot.
 //
-// This latch lives outside the machine reset: remember the mount, then issue
-// a fresh one-cycle pulse once the machine is running. Size is captured a
-// cycle before the pulse so it is stable when the target samples it, which
-// also covers a live re-mount from the OSD while running.
-reg        mount_pending = 0;
-reg [63:0] mount_size    = 0;
+// Two distinct problems are handled here:
+//   1. The core-start mount lands INSIDE the reset window, because `reset`
+//      spans the whole boot.rom ioctl upload -- so the pulse would be dropped
+//      even on the first boot. Symptom: the Main holds the file open (fd
+//      present, pos stuck at 0) while the machine shows flashing-?.
+//   2. Every LATER reset clears the target's copy with no new pulse coming.
+//
+// So the mount is remembered here, outside the machine reset, and replayed on
+// each reset release as well as when it first arrives. Size is captured a cycle
+// ahead of the pulse so it is stable when the target samples it.
+reg        mount_valid  = 0;      // an image is mounted (survives machine reset)
+reg [63:0] mount_size   = 0;
+reg        mount_replay = 0;
+reg        reset_d      = 1;
 reg        mach_img_mounted = 0;
 always @(posedge clk_sys) begin
 	mach_img_mounted <= 0;
+	reset_d          <= reset;
+
 	if (img_mounted[0]) begin
-		mount_size    <= img_size;
-		mount_pending <= 1;
+		mount_size   <= img_size;
+		mount_valid  <= (img_size != 0);   // size 0 = eject, replay that too
+		mount_replay <= 1;
 	end
-	else if (mount_pending && !reset) begin
-		mount_pending    <= 0;
+	else if (reset_d && !reset && mount_valid) begin
+		mount_replay <= 1;                 // reset just released: re-announce
+	end
+	else if (mount_replay && !reset) begin
+		mount_replay     <= 0;
 		mach_img_mounted <= 1;
 	end
 end
@@ -213,14 +227,21 @@ wire [127:0] m_debug_status2;
 
 localparam RAM_ADDR_BITS = 27;             // address ceiling: 128 MB
 
-// Installed RAM from the OSD (0=32MB, 1=48MB, 2=64MB).  The ROM probes for
-// the top of memory once, early in startup, so a change only takes effect
-// out of reset — fold it into the reset rather than letting it move under a
-// running machine.
-wire [1:0] ram_cfg = (status[4:3] == 2'd3) ? 2'd0 : status[4:3];
-reg  [1:0] ram_cfg_d;
-always @(posedge clk_sys) ram_cfg_d <= ram_cfg;
-wire ram_cfg_change = (ram_cfg != ram_cfg_d);
+// Installed RAM from the OSD (0=32MB, 1=64MB, 2=128MB — powers of two only;
+// see the ram_limit comment in rtl/quadra800.sv for why 48MB needs the djMEMC
+// bank decode first).
+wire [1:0] ram_cfg_osd = (status[4:3] == 2'd3) ? 2'd0 : status[4:3];
+
+// Sampled ONLY while the machine is in reset, so a new size takes effect at the
+// next reset and never under a running machine.
+//
+// This used to fold ram_cfg_change straight into `reset`, which meant nudging
+// the OSD setting instantly hard-reset a running Mac OS -- a power-cut on a
+// mounted HFS volume, and a good way to corrupt the disk by accident. The ROM
+// sizes memory exactly once during startup, so applying a change live could
+// never have worked anyway: the machine would keep using the size it probed.
+reg [1:0] ram_cfg = 2'd0;
+always @(posedge clk_sys) if (reset) ram_cfg <= ram_cfg_osd;
 
 quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.clk(clk_sys),

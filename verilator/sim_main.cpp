@@ -181,16 +181,30 @@ static void adb_mouse_update() {
 static int      mouse_wiggle = 0;
 static uint64_t mouse_wiggle_last = ~0ull;
 
+// The wiggle also CLICKS: it holds the button down for a run of reports, then
+// releases for a run.  Motion-only wiggling cannot reproduce the hardware
+// symptom where mouse movement works but button presses never take effect --
+// the button is bit 0 of ps2_mouse, carried in the same report as the deltas
+// and returned in the same ADB byte (adb.sv: response[0] = {~mouseButton, dy}).
+// +mousebtn=N sets the hold/release run length in wiggle events; 0 disables.
+static int mouse_btn_period = 0;
+static int mouse_wiggle_n   = 0;
+
 static void adb_mouse_wiggle(uint64_t frame) {
 	if (!mouse_wiggle) return;
 	if (frame == mouse_wiggle_last || (frame % (unsigned)mouse_wiggle)) return;
 	mouse_wiggle_last = frame;
 	const int dx = 8, py = -8;              // right, and down (PS/2 y is up+)
+	int btn = 0;
+	if (mouse_btn_period > 0)
+		btn = ((mouse_wiggle_n / mouse_btn_period) & 1) ? 1 : 0;
+	mouse_wiggle_n++;
 	mouse_strobe ^= 1;
 	VERTOPINTERN->ps2_mouse =
 		(mouse_strobe << 24) |
 		((py & 0xFF) << 16) | ((dx & 0xFF) << 8) |
-		((py < 0) ? 0x20 : 0) | ((dx < 0) ? 0x10 : 0);
+		((py < 0) ? 0x20 : 0) | ((dx < 0) ? 0x10 : 0) |
+		(btn ? 0x01 : 0);
 }
 
 static void save_screenshot(int frame) {
@@ -420,6 +434,8 @@ int main(int argc, char** argv, char** env) {
 			scsi_disk_file = argv[++i];
 		} else if (!strncmp(argv[i], "+mousewiggle=", 13)) {
 			mouse_wiggle = atoi(argv[i] + 13);
+		} else if (!strncmp(argv[i], "+mousebtn=", 10)) {
+			mouse_btn_period = atoi(argv[i] + 10);
 		} else if (!strcmp(argv[i], "--hist")) {
 			pc_hist_enable = true;
 		} else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) {
