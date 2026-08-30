@@ -12,6 +12,40 @@ hardware the same session — see *Root cause* below.
 | first run | freeze at the splash, disk read offset frozen for minutes |
 | after the fix (`c30adff`) | full boot to the desktop: menu bar, clock, mounted *Quad Squad* volume, control strip, apps |
 | fixed build | `wombat33.rbf` md5 `41b0c93a38fad4ad3bfec1995a7cee43`, 82 % ALMs, timing met (+0.186 ns worst) |
+| current build | `4c46a65c3a48b44ddb6f4fd6808d0422` (+0.245 ns) — **zero-touch**: core load → `SC0` auto-mount → desktop, no OSD interaction |
+
+## Deploying the ADB/SC0 build broke it three ways (all fixed, `f72f849`)
+
+Recorded because each one looked like something it was not:
+
+1. **Spurious bus error → Sad Mac `$0000000F / $00000001`.** The A_SDMA escape
+   aged its 7.9 ms counter while the SCSI target was legitimately waiting for
+   the HPS to hand over a sector; SD latency on a busy card is tens of ms, so it
+   fired on healthy transfers. Decoded via `docs/quadra800-rom-notes.md:153`:
+   D7 `$0F` = "no DSAlertTab yet", D6 = `DSErrCode` = 1 = vector 2 = bus error.
+   The tell that it was latency and not logic: the failure point *moved* between
+   boots (extension load, then LBA 489 MB), and it appeared right after
+   restoring a 2 GB image left the card churning. The counter now freezes while
+   a block transfer is outstanding. Do **not** "fix" a future spurious timeout
+   by enlarging the budget — past 2^21 the core watchdog wins and the deadlock
+   the escape exists to break returns.
+2. **`SC0` auto-mount invisible to the machine.** The Main mounts the instant
+   the core loads, inside the reset window that spans the `boot.rom` upload;
+   `ncr53c96` latches `mounted` only on the pulse, from a reset-gated block, so
+   it was dropped. Symptom: fd open on the Main side with `pos` stuck at 0 while
+   the machine showed the flashing-?. A latch outside the machine reset replays
+   the mount once the machine runs.
+3. **The build/deploy scripts would have flashed a timing-violated core.**
+   `build_only.sh` printed `VIOLATED` then `RESULT: OK` (the check ran in a
+   `{ ... } | tee` subshell, so its result was discarded), and
+   `deploy_screenshot.sh` gated only on the Fitter — which reports success for
+   a design that *placed*, not one that will *work*. Both refuse now.
+   `ALLOW_TIMING_VIOLATION=1` overrides for a deliberate throwaway probe.
+
+Also: `qsf SEED 1 -> 2`. Seed 1 gave a −0.122 ns **hold** violation on the
+99 MHz `clk_ram` domain after a change confined to `clk_sys`, where the two
+prior builds held +0.449/+0.464 ns. That is placement variance at 82 %
+utilisation, not an RTL regression — reseed rather than hunt the RTL.
 
 The tell that it was really working, before anything appeared on screen: the
 Main's read offset on the image started *moving* again (and seeking backwards),
