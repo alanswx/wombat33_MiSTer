@@ -85,6 +85,36 @@ deletes `|| (extw[6] && extw[2])` and adds a comment recording why. The other
 three illegality checks are untouched — `BD SIZE = 00`, `extw[3] != 0` and
 `I/IS = 100` remain rejected.
 
+## DO NOT SEND THIS YET — the patch regressed hardware (2026-08-30)
+
+The patch was built into the core (`544d7976`, timing met) and run on the MiSTer
+at .143 against the `2026-08-28b` bench image. **The bench stopped working.** It
+reached the happy Mac, read to file offset 65536, and the disk went quiet — the
+CPU payload lives at offset 333312, so the payload read never completed.
+
+The same bench had previously run **fine on this core on hardware**. So this is a
+regression introduced by the patch, not a pre-existing fault. My first
+explanation — a SCSI stall — was wrong, and was reached by defending the patch
+instead of suspecting it; the correct baseline is "it used to work".
+
+**Conclusion: the decode analysis above is necessary but NOT sufficient.**
+Removing `(extw[6] && extw[2])` does something beyond letting the two corpus rows
+execute. The mechanism is not yet understood. Candidates worth checking, in order:
+
+1. A byte sequence somewhere in the ROM or boot stub now decodes as a
+   memory-indirect operand where it previously took vector 4, sending the EA
+   state machine down `S_EA_BD`/`S_EA_MIND` and issuing a read the machine
+   cannot answer.
+2. `S_EA_MIND`'s `case (extw[1:0])` relies on `extw[2:0] == 3'b000` and the
+   removed guard to make `2'b00` unreachable; re-check that with the guard gone
+   there is still no path in which `extw[1:0] == 2'b00` reaches it.
+3. Something unrelated to decode — re-fit variance is unlikely to cause a
+   functional hang, but the build should be repeated before concluding.
+
+The right next step is to bisect in the Verilator gate rather than on hardware,
+where a wedge costs a disk restore. The patch is reverted in the working tree;
+this file and the `.patch` are kept as the analysis, not as a recommendation.
+
 ## Caveats, stated plainly
 
 - **Not verified on silicon as a fix.** The analysis is from the decode plus the
