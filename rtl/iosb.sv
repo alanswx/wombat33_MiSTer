@@ -15,7 +15,14 @@
 module iosb
 #(
 	parameter E_HALF    = 21,       // clk per E phase: 33 MHz/21 ~ 783.4 kHz VIA timers
-	parameter TICK_HALF = 274314    // clk per CA1 half-period: 60.15 Hz tick
+	parameter TICK_HALF = 274314,   // clk per CA1 half-period: 60.15 Hz tick
+	// Escape hatch for a wedged pseudo-DMA beat (A_SDMA).  ce is tied high at
+	// 33 MHz, so 2^18 ~ 7.9 ms: orders of magnitude longer than a legitimate
+	// DRQ latency (a byte arrives in microseconds), and ~8x SHORTER than the
+	// AP040 core's own 2^21 stall watchdog in wombat_cpu.sv.  That ordering is
+	// the point -- the fault is reported here, with the bus released, instead
+	// of surfacing as an unrecoverable core stall.  See the A_SDMA comment.
+	parameter SDMA_TIMEOUT_BITS = 18
 )
 (
 	input         clk,
@@ -30,6 +37,9 @@ module iosb
 	input  [31:0] wdata,
 	output reg [31:0] rdata,
 	output reg    ack,
+	// Asserted with the ack that releases a TIMED-OUT pseudo-DMA beat, so the
+	// bus adapter can turn it into a bus error instead of returning junk data.
+	output reg    sdma_fault,
 
 	// device interrupt lines (stage 3+ sources; quiet today)
 	input         vbl_irq,
@@ -386,6 +396,15 @@ wire       sdma_valid;
 wire       ncr_irq, ncr_drq;
 reg  [2:0] sdma_left;              // bytes still to move in this beat
 reg [31:0] sdma_shift;
+reg [SDMA_TIMEOUT_BITS-1:0] sdma_watch;   // A_SDMA hold-off watchdog
+
+`ifdef SIMULATION
+// Own cycle counter so the timeout tap can print in the same "[NCR <cycle>]"
+// form as the ncr53c96 taps (ncr53c96's dbg_cyc is local to that module).
+reg [63:0] iosb_dbg_cyc;
+initial iosb_dbg_cyc = 0;
+always @(posedge clk) if (ce) iosb_dbg_cyc <= iosb_dbg_cyc + 64'd1;
+`endif
 
 ncr53c96 #(.DISK_ID(0)) scsi (
 	.clk(clk),
@@ -467,9 +486,11 @@ always @(posedge clk) begin
 		iosb_regs[0] <= 16'd1;               // IOSB_CONFIG: BCLK 33 MHz (QEMU)
 		sdma_rd <= 0; sdma_wr <= 0; sdma_left <= 0;
 		sdma_shift <= 0; sdma_wbyte <= 0; sdma_be <= 0;
+		sdma_watch <= 0; sdma_fault <= 0;
 	end
 	else if (ce) begin
-		ack <= 0;
+		ack        <= 0;
+		sdma_fault <= 0;             // one-cycle, rides with its ack
 
 		// interrupt line edges latch into the pseudo-VIA IFR
 		vbl_d <= vbl_irq; scsi_d <= scsi_irq_i; drq_d <= scsi_drq_i;
@@ -559,6 +580,7 @@ always @(posedge clk) begin
 					                                                 wdata[7:0];
 					sdma_rd    <= ~write;
 					sdma_wr    <= write;
+					sdma_watch <= 0;
 					astate     <= A_SDMA;
 				end
 				else if (sel_id) rdata <= 32'hA55A2BAD;
@@ -581,7 +603,15 @@ always @(posedge clk) begin
 			ack    <= 1;
 			astate <= A_IDLE;
 		end
+		// A wedged beat used to sit here forever waiting for sdma_valid, and
+		// nothing upstream could recover: no iosb_ack meant quadra800.sv stayed
+		// in S_IOSB, which has no path back to S_IDLE, so the machine deadlocked
+		// even though the CPU escaped via its own stall watchdog.  Release the
+		// beat with a fault instead -- that is what the real IOSB does (holds
+		// /DTACK on !DRQ and lets the bus-error timer fire), and it turns an
+		// undiagnosable freeze into a bus error the ROM handler can act on.
 		A_SDMA: if (sdma_valid) begin
+			sdma_watch <= 0;
 			if (sdma_left == 3'd1) begin
 				sdma_rd <= 0;
 				sdma_wr <= 0;
@@ -598,6 +628,20 @@ always @(posedge clk) begin
 				sdma_left  <= sdma_left - 1'b1;
 			end
 		end
+		else if (&sdma_watch) begin
+			sdma_rd    <= 0;
+			sdma_wr    <= 0;
+			ack        <= 1;         // release the bus...
+			sdma_fault <= 1;         // ...but tell the adapter it failed
+			rdata      <= 32'h0;
+			sdma_watch <= 0;
+			astate     <= A_IDLE;
+`ifdef SIMULATION
+			$display("[NCR %0d] SDMA TIMEOUT left=%0d be=%b rd=%b wr=%b -- releasing beat as bus error",
+			         iosb_dbg_cyc, sdma_left, sdma_be, sdma_rd, sdma_wr);
+`endif
+		end
+		else sdma_watch <= sdma_watch + 1'b1;
 		default: astate <= A_IDLE;
 		endcase
 	end

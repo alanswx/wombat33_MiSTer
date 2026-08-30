@@ -193,6 +193,7 @@ reg   [3:0] iosb_be;
 reg  [31:0] iosb_wdata;
 wire [31:0] iosb_rdata;
 wire        iosb_ack;
+wire        iosb_fault;   // ack released a timed-out PDMA beat -> bus error
 
 wire dafb_vbl;
 
@@ -208,6 +209,7 @@ iosb iosb (
 	.wdata(iosb_wdata),
 	.rdata(iosb_rdata),
 	.ack(iosb_ack),
+	.sdma_fault(iosb_fault),
 
 	.vbl_irq(dafb_vbl),
 	.scsi_irq(1'b0),
@@ -428,7 +430,16 @@ always @(posedge clk) begin
 		end
 		S_IOSB: if (iosb_ack) begin
 			iosb_sel <= 0;
-			if (svc_walker) begin
+			// iosb_fault rides with the ack that releases a pseudo-DMA beat the
+			// IOSB gave up on. Report it as a bus error rather than acking junk:
+			// the ROM's blind PDMA path does unrolled move.l with no polling and
+			// RELIES on a bus error (handler at $408D2606) to notice a failed
+			// transfer. Acking zeros would silently corrupt the buffer instead.
+			if (iosb_fault) begin
+				if (svc_walker) walker_berr <= 1;
+				else            cpu_berr    <= 1;
+			end
+			else if (svc_walker) begin
 				walker_ack  <= 1;
 				walker_data <= iosb_rdata;
 			end

@@ -598,6 +598,30 @@ always @(posedge clk) begin
 			xfer_pio_out <= 0;
 			raise(I_BUS);
 		end
+		// non-DMA data-in underflow: the source is exhausted, so the byte this
+		// TI is waiting to hand over will NEVER arrive -- arm_pio_in gates on
+		// byte_avail, so xfer_pio_in would stay armed forever with no I_BUS and
+		// no phase change, and the driver polls for an interrupt that never
+		// comes.  Real silicon ends the data phase when the target runs out of
+		// data.  This mirrors the DMA-side "data-in underflow" arm above; only
+		// the PIO side was missing it.
+		//
+		// Found on hardware 2026-08-29 (Mac OS boot froze at "Starting Up...")
+		// and reproduced in the Verilator sim: an INQUIRY with a 36-byte
+		// allocation length transfers all 36 bytes -- the last four one at a
+		// time via non-DMA TI -- and then the chip sits in DATA-IN forever.
+		//
+		// QEMU does the same thing and for the same reason (esp.c:667-671,
+		// "If the guest underflows TC then terminate SCSI request" ->
+		// esp_command_complete(), phase STATUS, INTR_BS).  Its commit
+		// 02a3ce56a7 notes that this is precisely what makes EMILE boot on
+		// m68k -- i.e. a Mac bootloader hitting the identical stall.
+		// docs/scsi/qemu-esp-behavior.md:357-369.
+		if (xfer_pio_in && !byte_avail && blocks_left == 0 && !io_busy) begin
+			xfer_pio_in <= 0;
+			phase <= PH_STAT;
+			raise(I_BUS);
+		end
 
 		//---------------------------------------------------- registers
 		if (ce && sel) begin

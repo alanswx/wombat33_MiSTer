@@ -90,9 +90,19 @@ read INTR) or TC=full-count (writes/blind). Status+message: `$11`, wait INT
    two 16-bit halves MSB-first; 16-bit = one half; byte = **one** byte, MSB
    lane. Byte order end-to-end is already verified correct (first SCSI byte =
    D31-24/D15-8; MAME `dma16_swap` + NetBSD agree).
-7. **Hold-off needs an escape.** `iosb.sv` withholds `ack` on `!DRQ` forever;
-   `quadra800.sv` has no watchdog → a stalled PDMA beat hangs the machine
-   (the comment's "CPU watchdog's berr" doesn't exist). The non-blind boot
+7. **Hold-off needs an escape.** *(FIXED 2026-08-29 — `iosb.sv` now times
+   `A_SDMA` out after 2^18 ce-cycles ≈ 7.9 ms and releases the beat with a new
+   `sdma_fault`, which `quadra800.sv` turns into a bus error.)* `iosb.sv` used
+   to withhold `ack` on `!DRQ` forever, and `quadra800.sv` has no watchdog, so a
+   stalled PDMA beat deadlocked the machine — `svc` reaches `S_IDLE` only on the
+   matching ack, so it could never recover even after the CPU escaped.
+   **Correction to the original note:** the CPU watchdog *does* exist — the
+   `ap040_bus_timeout` at `wombat_cpu.sv:85` (2^21 ≈ 63 ms). It was added in
+   `46bd86c`, before this doc was written; the doc author looked only at
+   `quadra800.sv`. It let the *CPU* fault out, but left the bus and IOSB state
+   machines wedged, so the machine died anyway. The new IOSB timeout is
+   deliberately ~8x shorter so the fault is reported with the bus released.
+   The non-blind boot
    path pre-gates on DREQ so it may survive, but the **blind** driver path
    (`$408D228E`/`$408D216C`, chosen per-drive at `$00001936`) does raw
    unrolled `move.l` with no polling and *relies* on a bus error + the ROM's
@@ -102,6 +112,14 @@ read INTR) or TC=full-count (writes/blind). Status+message: `$11`, wait INT
    INT mid-stall (NetBSD case 3); implement the `$50F18300`/`$400` pair if the
    blind path is exercised.
 8. **Non-DMA transfer-info is wrong in both directions.**
+   *(The one-byte-per-`$10` handover and the data-out drain are implemented.
+   The missing piece — an underflow escape — was FIXED 2026-08-29, and it is
+   what froze Mac OS on hardware: `arm_pio_in` gates on `byte_avail`, so once
+   the source ran dry `xfer_pio_in` stayed armed forever with no `I_BUS` and no
+   phase change. Reproduced in sim: an INQUIRY with a $24 allocation length
+   moves all 36 bytes, the last four one at a time, and the chip then sits in
+   DATA-IN with the driver polling for an interrupt that never comes. The DMA
+   side already had this escape at `ncr53c96.sv:553`; only PIO lacked it.)*
    Data-in must move **exactly 1 byte per `$10`** and raise `I_BUS` (QEMU,
    MAME, and NetBSD's msg-in contract all agree; MSG IN via `$10` completes
    with `I_FC` instead) — `fill_fifo_from_buf`'s 16-byte handover

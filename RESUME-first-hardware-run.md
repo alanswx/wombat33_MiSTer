@@ -44,7 +44,73 @@ colour, then wedges.** Everything up to that point works.
    and did not move for >2 minutes, while consecutive screenshots stayed
    byte-identical.
 
-### The hang is the known P1 gap
+### Root cause: non-DMA transfer-info underflow in `ncr53c96.sv`
+
+**Reproduced in the Verilator sim** (WSL, headless, fast-boot ROM, the same
+pristine image) and diagnosed there. The last SCSI activity before the freeze:
+
+```
+[NCR 1644582784] cdb 12 00 00 00 24 00 ...   INQUIRY, allocation length $24 = 36
+[NCR 1644588258] cmd=90 ph=1 ... sp=0        transfer-info (DMA), data-in phase
+[NCR 1644588983] cmd=90 ph=1 ... sp=16
+[NCR 1644590160] cmd=10 ph=1 ... sp=32       non-DMA from here, one byte each
+[NCR 1644591510] cmd=10 ph=1 ... sp=33   + INT+ ist=10
+[NCR 1644592842] cmd=10 ph=1 ... sp=34   + INT+ ist=10
+[NCR 1644594174] cmd=10 ph=1 ... sp=35   + INT+ ist=10
+[NCR 1644597759] cmd=10 ph=1 ... sp=36   <- NO INTERRUPT.  Everything stops.
+```
+
+All 36 requested bytes are delivered. Every `cmd=10` raises `I_BUS` except the
+last, and the chip never leaves data-in phase, so the driver polls forever (PC
+cycling in `$00131E06`-`$00131F08`).
+
+Why: `arm_pio_in` (`ncr53c96.sv:270`) gates on `byte_avail`. Once the source is
+exhausted, `arm_pio_in` can never assert, so `xfer_pio_in` stays armed with no
+byte to hand over — no `I_BUS`, no phase change, forever. The DMA side has an
+explicit "data-in underflow -> PH_STAT + I_BUS" escape at `ncr53c96.sv:553`;
+the PIO side simply never had one.
+
+The fix adds the symmetric escape. It matches QEMU, whose equivalent
+(`esp.c:667-671` -> `esp_command_complete()`, phase STATUS, `INTR_BS`) carries
+the commit note that it is what makes EMILE boot on m68k — the same stall in
+another Mac bootloader. See `docs/scsi/qemu-esp-behavior.md:357-369`.
+
+**Verified in sim.** The fixed run is cycle-for-cycle identical to the broken one
+up to the failure, then diverges exactly where it should:
+
+```
+[NCR 1644597759] cmd=10 ph=1 ... sp=36
+[NCR 1644597761] INT+ ist=10 ph=3     <- the missing interrupt; phase -> STATUS
+[NCR 1644600802] cmd=11 ph=3          -> INT+ ist=08 ph=7   command complete
+[NCR 1644601819] cmd=12 ph=7          -> INT+ ist=20 ph=0   message accepted
+[NCR 1644741010] cdb 28 00 00 15 bb 25 ...   READ(10), LBA 1,424,165
+[NCR 1644741012] io_rd+ lba=1424165          reading the disk again
+```
+
+That LBA lands right where the hardware froze (1,424,088 on the extensions-off
+boot), which ties the sim reproduction to the real failure: the driver was
+issuing an INQUIRY between reads of that region and never came back from it.
+
+### What it was NOT
+
+Worth recording, because two plausible theories were wrong:
+
+- **Not the missing hold-off bus error.** No bus error occurs anywhere near the
+  wedge — the last one in the whole run is at cycle 651M, the ROM's NuBus card
+  probe, roughly a billion cycles earlier. Nothing was stalled on the bus.
+- **Not a deadlocked bus adapter.** That deadlock is real and reachable (see
+  below) but is not this bug.
+
+The A_SDMA hold-off deadlock *was* found while chasing this, and is fixed in the
+same batch: `iosb.sv` waited for `sdma_valid` forever, and because
+`quadra800.sv` only reaches `S_IDLE` on the matching ack, a wedged beat took the
+whole machine down permanently — the CPU's own `ap040_bus_timeout`
+(`wombat_cpu.sv:85`, 2^21 ≈ 63 ms) faults the CPU out but leaves both state
+machines stuck. `iosb.sv` now times the beat out and releases it with
+`sdma_fault`, which `quadra800.sv` turns into a bus error. That path did not
+fire in this workload; it is a latent-deadlock fix, not the boot fix.
+
+### The earlier P1 attribution (superseded)
 
 `RESUME-disk-gate.md`'s P1 backlog, first item:
 
@@ -53,8 +119,12 @@ colour, then wedges.** Everything up to that point works.
 > `$50F18300/$400` unimplemented). No timeout exists in `quadra800.sv` today — a
 > wedge hangs forever.
 
-That is exactly the signature: one SCSI beat stops, nothing bus-errors, the driver
-waits forever. **This is the next thing to fix.**
+It looked like a match — one SCSI beat stops and the driver waits forever — and
+it is what this doc originally blamed. It was wrong on both halves: a CPU-level
+watchdog *does* exist (`wombat_cpu.sv:85`; the P1 note only inspected
+`quadra800.sv`), and no bus error occurs at the wedge at all. The real cause is
+the PIO underflow above. The hold-off gap was nonetheless real, and is fixed
+alongside it.
 
 ### It is not an extension — ruled out by a clean boot
 
