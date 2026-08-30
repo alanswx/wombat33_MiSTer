@@ -14,7 +14,34 @@ hardware the same session — see *Root cause* below.
 | fixed build | `wombat33.rbf` md5 `41b0c93a38fad4ad3bfec1995a7cee43`, 82 % ALMs, timing met (+0.186 ns worst) |
 | current build | `4c46a65c3a48b44ddb6f4fd6808d0422` (+0.245 ns) — **zero-touch**: core load → `SC0` auto-mount → desktop, no OSD interaction |
 
-## Open: occasional phantom keystrokes
+## Phantom keystrokes — cause found, fix deployed (`24eefbc`), awaiting confirmation
+
+The shim's shift-in has two completion paths and both handed over `kbd_to_mac`.
+The fresh path is right; the **timer fallback** — the idle heartbeat that exists
+so an autopoll never deadlocks — was re-presenting the last *real* response byte
+as though it were fresh. Autopoll alternates keyboard (addr 2) and mouse
+(addr 3) Talks, so after mouse motion that stale byte is usually mouse data;
+replayed into a keyboard poll it decodes as keycodes. That is why the phantom
+keys tracked mouse movement.
+
+`adb.sv` was never at fault — with nothing to report it correctly returns an
+empty response and raises `_int`. Only the shim invented a byte. It now sends
+`$FF`, the "nothing to report" value used by QEMU (`mac_via.c`, `ff ff` on a
+no-response reply), MAME (`macadb.cpp`, `ff` for no-data and key-up) and
+`adb.sv` itself (the `8'hFF` pad on a single-key response).
+
+**What was measured vs. inferred.** Instrumented sim showed 338 fallback
+deliveries in one boot window, every one while the ADB bus was IDLE (`st=11`)
+with no interrupt asserted — the shim fabricating shift-register completions the
+real PIC would never have clocked. That mechanism is demonstrated. The bytes
+read `00` there only because the sim drives no `ps2_key`/`ps2_mouse`, so
+`kbd_to_mac` never held anything real; a phantom keycode itself was *not*
+directly observed and is inferred from the oracles. To close that gap, rerun
+with `+mousewiggle=<n>` once the OS is up and log the fallback bytes.
+
+`lbmactwo_MiSTer` has this identical fallback and so likely the same latent bug.
+
+## Earlier notes on this issue (superseded by the above)
 
 Reported 2026-08-30 after the ADB fix landed — much better, but keys still
 appear now and then while using the mouse.
