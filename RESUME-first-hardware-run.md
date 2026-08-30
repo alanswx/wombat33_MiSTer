@@ -1,8 +1,22 @@
 # First hardware run — 2026-08-29, MiSTer at 192.168.99.143
 
 The core was compiled and run on real hardware for the first time, off the
-2 GB *Quad Squad* disk. **It boots Mac OS to the "Starting Up…" splash in
-colour, then wedges.** Everything up to that point works.
+2 GB *Quad Squad* disk.
+
+**It boots Mac OS all the way to the Finder desktop.** The first run wedged at
+the "Starting Up…" splash; the cause was found in sim, fixed, and confirmed on
+hardware the same session — see *Root cause* below.
+
+| | |
+|---|---|
+| first run | freeze at the splash, disk read offset frozen for minutes |
+| after the fix (`c30adff`) | full boot to the desktop: menu bar, clock, mounted *Quad Squad* volume, control strip, apps |
+| fixed build | `wombat33.rbf` md5 `41b0c93a38fad4ad3bfec1995a7cee43`, 82 % ALMs, timing met (+0.186 ns worst) |
+
+The tell that it was really working, before anything appeared on screen: the
+Main's read offset on the image started *moving* again (and seeking backwards),
+where before it sat frozen. That is the cheapest liveness check on this machine
+— see the operating notes at the end.
 
 ## What was run
 
