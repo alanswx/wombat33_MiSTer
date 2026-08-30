@@ -14,6 +14,35 @@ hardware the same session — see *Root cause* below.
 | fixed build | `wombat33.rbf` md5 `41b0c93a38fad4ad3bfec1995a7cee43`, 82 % ALMs, timing met (+0.186 ns worst) |
 | current build | `4c46a65c3a48b44ddb6f4fd6808d0422` (+0.245 ns) — **zero-touch**: core load → `SC0` auto-mount → desktop, no OSD interaction |
 
+## Open: occasional phantom keystrokes
+
+Reported 2026-08-30 after the ADB fix landed — much better, but keys still
+appear now and then while using the mouse.
+
+**mrext is ruled out.** Its log for the day shows 2,349 `mouseMove` and 13
+`mouseBtn` messages and **zero `kbd` messages of any kind**
+(`grep "received message" /tmp/remote.log`), so nothing is injecting keystrokes
+from the host side. The events originate in the core's ADB path.
+
+The likely residue, and where to look first: the A/B that validated the clock
+gating left the fixed build at **96,321 VIA deliveries for 73,078 transceiver
+bytes**. The duplicate-per-byte defect is gone (unfixed was 168,474), but ~23 k
+deliveries still have no fresh byte behind them. Those come from the
+idle-autopoll heartbeat, which re-delivers `kbd_to_mac` — the *last* byte —
+when nothing fresh exists:
+
+```
+end else if (via1_shift_timer == 22'd1) begin
+    if (!adb_resp_pending || adb_bus_idle) begin
+        ... via1_sr_ext_data <= kbd_to_mac;     // stale byte, re-presented
+```
+
+That is by design and matches lbmactwo, so it is not obviously wrong — but a
+stale byte re-presented at the wrong moment is exactly the shape of an
+intermittent phantom key, and "sometimes, not always" fits. Next step is to
+instrument which deliveries are fresh vs. stale (extend the ADBTAP counters to
+split the two) before changing any RTL; do not guess at this one.
+
 ## Deploying the ADB/SC0 build broke it three ways (all fixed, `f72f849`)
 
 Recorded because each one looked like something it was not:
