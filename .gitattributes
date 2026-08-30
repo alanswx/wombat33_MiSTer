@@ -18,3 +18,11 @@
 *.qsf         text eol=lf
 *.qpf         text eol=lf
 *.sdc         text eol=lf
+
+# Shell scripts MUST be LF. Nothing pinned them before, so on a Windows checkout
+# core.autocrlf gave them CRLF — and a CRLF `#!/bin/sh` script dies the moment it
+# runs anywhere POSIX. Hit for real on 2026-08-29: docs/tools/make-fastboot-rom.sh
+# under WSL failed with `set: Illegal option -` (dash reading `set -e\r`), which
+# blocked building the sim's fast-boot ROM. These scripts run on Linux, macOS, WSL
+# and on the MiSTer itself, so LF is not cosmetic here.
+*.sh          text eol=lf
