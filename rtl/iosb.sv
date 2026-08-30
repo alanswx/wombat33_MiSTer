@@ -253,20 +253,46 @@ always @(posedge clk) begin
 	else begin
 		via1_sr_ext_complete <= 1'b0;
 		via1_sr_ext_load <= 1'b0;
-		via1_sr_out_ack <= 1'b0;
-		adb_din_strobe <= 1'b0;
 
-		if (adb_dout_strobe) begin
-			kbd_to_mac <= adb_dout;
-			via1_kbd_to_mac_fresh <= 1'b1;
-		end
+		// ---- ADB transceiver handshake: adb_en domain ONLY -----------------
+		// adb.sv's entire body sits under `else if (clk_en)` (adb.sv:297), so
+		// it samples its inputs and updates its outputs once per adb_en tick
+		// (clk/4). Driving this handshake at full clk is wrong in BOTH
+		// directions, and the rest of this shim genuinely does belong at full
+		// clk (via1_access/e_falling are full-clk events, the timers are
+		// counted in clk cycles), so only these two pieces move:
+		//
+		//   adb_din_strobe as a one-clk pulse is invisible to the transceiver
+		//   three ticks out of four -> ADB command bytes silently dropped.
+		//   Set and cleared here, it is held for a whole enable period.
+		//
+		//   adb_dout_strobe stays high for a whole enable period, so sampling
+		//   it every clk re-latches the same response byte and re-arms
+		//   via1_kbd_to_mac_fresh right after the completion below clears it
+		//   -> one response byte delivered to the VIA several times.
+		//
+		// Either desynchronises Talk/response framing, which is how mouse
+		// packet bytes end up being read as keyboard data. lbmactwo drives
+		// both sides from its clk8_en_p domain (dataController_top.sv:798 for
+		// the capture, and the enable-gated block at :1002 for the strobe);
+		// adb.sv itself is byte-identical between the two cores, so matching
+		// that gating is the whole fix.
+		if (adb_en) begin
+			adb_din_strobe  <= 1'b0;
+			via1_sr_out_ack <= 1'b0;
 
-		// shift-out completion delivers the command byte to the modem
-		if (via1_sr_out_pending && !via1_sr_out_ack) begin
-			adb_din <= via1_sr_shadow;
-			adb_din_strobe <= 1'b1;
-			via1_sr_out_ack <= 1'b1;
-			via1_sr_out_pending <= 1'b0;
+			if (adb_dout_strobe) begin
+				kbd_to_mac            <= adb_dout;
+				via1_kbd_to_mac_fresh <= 1'b1;
+			end
+
+			// shift-out completion delivers the command byte to the modem
+			if (via1_sr_out_pending && !via1_sr_out_ack) begin
+				adb_din             <= via1_sr_shadow;
+				adb_din_strobe      <= 1'b1;
+				via1_sr_out_ack     <= 1'b1;
+				via1_sr_out_pending <= 1'b0;
+			end
 		end
 
 		if (via1_acr_wr) begin

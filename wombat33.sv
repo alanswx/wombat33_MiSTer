@@ -60,7 +60,14 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `include "build_id.v"
 localparam CONF_STR = {
 	"Wombat33;;",
-	"S0,HDAVHD,Mount SCSI disk;",
+	// SC0, not S0: the letter after S is a flag, and 'C' is what sets
+	// store_name in the Main's option parser -- i.e. what makes MiSTer write
+	// config/Wombat33.s0 and re-mount the image on the next core start. With a
+	// plain S0 the mount works but is forgotten every boot, so the disk had to
+	// be picked from the OSD by hand each time and the deploy's slot-0 seed was
+	// inert. Every sibling Mac core (MacLC, MacLCII, MacIIvi, MacPlus,
+	// LBMacTwo) uses SC0 for this reason.
+	"SC0,HDAVHD,Mount SCSI disk;",
 	"-;",
 	"O[4:3],RAM,32MB,64MB,128MB;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
