@@ -696,14 +696,22 @@ module via6522 (
     always @(posedge clock) begin
         ser_cb2_c <= cb2_i;
         if (rising == 1'b1) begin
-            if (shift_active == 1'b0) begin
-                if (shift_mode_control == 3'b000) begin
-                    shift_clock <= cb1_i;
-                end else begin
-                    shift_clock <= 1'b1;
-                end
-            end else if (shift_clk_sel == 2'b11) begin
+            // With external clocking (clk_sel 11, i.e. ACR modes 011 and 111)
+            // CB1 is an input and the internal shift clock IS the pin, so it
+            // must follow cb1_i whether or not a shift is armed.  Forcing it
+            // high while idle made arming and disarming a shift generate edges
+            // of their own: clearing shift_active on an sr_ext_complete drove
+            // shift_clock 0->1, and shift_tick_r below turned that rising edge
+            // into one extra shift of the byte the completion had just loaded.
+            // Every byte the ADB shim delivered therefore reached the driver as
+            // (byte << 1) with cb2_i -- tied low here -- in the LSB.  Measured
+            // in sim: $3C read back as $78, an ADB Talk R0 pair 08/88 as 10/10.
+            // Mouse Talk R0 byte 0 is {~button, dy}, so the button bit was the
+            // one shifted off the top and could never reach the guest.
+            if (shift_mode_control == 3'b000 || shift_clk_sel == 2'b11) begin
                 shift_clock <= cb1_i;
+            end else if (shift_active == 1'b0) begin
+                shift_clock <= 1'b1;
             end else if (shift_pulse == 1'b1) begin
                 shift_clock <= ~shift_clock;
             end

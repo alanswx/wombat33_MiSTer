@@ -63,7 +63,10 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # the right lever; if a future build violates again, try another value rather
 # than assuming the RTL change caused it. Check the STA summary, not just the
 # Fitter status -- scripts/deploy_screenshot.sh now refuses a violated build.
-set_global_assignment -name SEED 2
+# 2026-08-30: seed 2 gave -0.283 ns hold on clk_ram after the via6522 shift-clock
+# fix -- a clk_sys-domain change that cannot reach the 99 MHz domain, so it was
+# the placement swinging again, not the RTL. Seed 3 fits.
+set_global_assignment -name SEED 3
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
