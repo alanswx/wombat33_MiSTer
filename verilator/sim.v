@@ -109,8 +109,14 @@ reg  [31:0] vid_rdata;
 wire [255:0] m_debug_status;
 wire [127:0] m_debug_status2;
 
+// The sim runs the scanout on clk_sys, as MacLC's does: the dedicated pixel
+// clock only matters to the HDMI scaler on real hardware, and using it here
+// would change every frame count in the existing sim regressions for no
+// benefit. Frame rate in sim is therefore 78.6 Hz, not the hardware's 59.94.
 quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.clk(clk_sys),
+	.clk_vid(clk_sys),
+	.nreset_vid(~reset),
 	.ram_cfg(ram_cfg),
 	.nreset(~reset),
 	.ce(1'b1),

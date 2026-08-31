@@ -30,6 +30,15 @@ module dafb
 	input         nreset,
 	input         ce,
 
+	// Scanout clock. The register file, the CLUT writes and the VBL status
+	// bit stay on clk (the machine's 33 MHz); everything from hcnt/vcnt down
+	// runs on clk_vid, which is the real 25.175 MHz dot clock so the core
+	// presents a standard VGA 640x480 @ 59.94 Hz mode. See rtl/pll_video.v
+	// for why that matters to the HDMI scaler, and MacLC's maclc_v8_video.sv
+	// for the same arrangement -- config 2FF-synced in, VBL toggled back.
+	input         clk_vid,
+	input         nreset_vid,
+
 	// register beat slave ($F9800000 block, addr = offset bits [9:2])
 	input         sel,
 	input         write,
@@ -87,6 +96,9 @@ assign vbl_irq = |(int_status & int_en);
 
 wire [5:0] rsel = addr[7:2];     // register within a block
 wire [1:0] blk  = addr[9:8];
+
+// pulsed in the clk domain one clk_vid VBL later; see the CDC below
+wire vbl_start;
 
 always @(posedge clk) begin
 	if (!nreset) begin
@@ -234,7 +246,23 @@ always @(posedge clk) begin
 end
 
 //----------------------------------------------------------------------------
-// scanout: 640x480 active in 800x525, one pixel per clk
+// clk -> clk_vid config crossing.  fb_base/stride/mode are quasi-static: the
+// guest programs them once per mode set and then redraws the whole screen, so
+// a 2FF sync per bit is enough and the worst case on a change is one torn
+// frame.  MacLC does exactly this (maclc_v8_video.sv *_meta stages); the meta
+// stages are false-pathed in wombat33.sdc.
+//----------------------------------------------------------------------------
+reg [20:0] fb_base_meta, fb_base_v;
+reg [13:0] stride_meta,  stride_v;
+reg  [2:0] mode_meta,    mode_v;
+always @(posedge clk_vid) begin
+	fb_base_meta <= fb_base; fb_base_v <= fb_base_meta;
+	stride_meta  <= stride;  stride_v  <= stride_meta;
+	mode_meta    <= mode;    mode_v    <= mode_meta;
+end
+
+//----------------------------------------------------------------------------
+// scanout: 640x480 active in 800x525, one pixel per clk_vid (25.175 MHz)
 //----------------------------------------------------------------------------
 localparam H_ACT = 640, H_FP = 16, H_SYNC = 96, H_TOT = 800;
 localparam V_ACT = 480, V_FP = 10, V_SYNC = 2,  V_TOT = 525;
@@ -245,12 +273,26 @@ reg [9:0] vcnt;
 wire hactive = (hcnt < H_ACT);
 wire vactive = (vcnt < V_ACT);
 assign ce_pixel = 1'b1;
-wire vbl_start = (vcnt == V_ACT) && (hcnt == 0);
+wire vbl_start_v = (vcnt == V_ACT) && (hcnt == 0);
+
+// VBL back the other way: toggle in the scanout domain, 2FF into clk, edge
+// detect there. A level would be one clk_vid cycle wide (40 ns) against a
+// 30 ns clk and could be missed or double-counted.
+reg vbl_tog = 1'b0;
+always @(posedge clk_vid) if (vbl_start_v) vbl_tog <= ~vbl_tog;
+
+reg vbl_meta, vbl_s, vbl_s_d;
+always @(posedge clk) begin
+	vbl_meta <= vbl_tog;
+	vbl_s    <= vbl_meta;
+	vbl_s_d  <= vbl_s;
+end
+assign vbl_start = vbl_s ^ vbl_s_d;
 
 // pixels per 32-bit word by depth: 32/16/8/4 for 1/2/4/8bpp
-wire [5:0] pix_per_word = (mode == 3'd0) ? 6'd32 :
-                          (mode == 3'd1) ? 6'd16 :
-                          (mode == 3'd2) ? 6'd8  : 6'd4;
+wire [5:0] pix_per_word = (mode_v == 3'd0) ? 6'd32 :
+                          (mode_v == 3'd1) ? 6'd16 :
+                          (mode_v == 3'd2) ? 6'd8  : 6'd4;
 
 // Fetch pipeline: a trigger at cycle T presents vid_addr during T+1, the
 // platform registers the VRAM read at the T+1 edge, and fetch_word
@@ -267,10 +309,10 @@ assign vid_addr = fetch_addr[21:2];
 
 // current word: the freshly fetched one on a refill boundary
 wire [31:0] cur = (shcnt == 0) ? fetch_word : shreg;
-wire [7:0] clut_idx = (mode == 3'd3) ? cur[31:24] :
-                      (mode == 3'd0) ? {7'd0, cur[31]} :
-                      (mode == 3'd1) ? {6'd0, cur[31:30]} :
-                                       {4'd0, cur[31:28]};
+wire [7:0] clut_idx = (mode_v == 3'd3) ? cur[31:24] :
+                      (mode_v == 3'd0) ? {7'd0, cur[31]} :
+                      (mode_v == 3'd1) ? {6'd0, cur[31:30]} :
+                                         {4'd0, cur[31:28]};
 
 reg [7:0] out_r, out_g, out_b;
 reg       hb_r, vb_r;
@@ -283,8 +325,8 @@ assign vga_vb = vb_r;
 // next line's base offset: (vcnt+1) * stride, tracked incrementally
 reg [21:0] line_base_next;
 
-always @(posedge clk) begin
-	if (!nreset) begin
+always @(posedge clk_vid) begin
+	if (!nreset_vid) begin
 		hcnt <= 0; vcnt <= 0;
 		vga_hs <= 1; vga_vs <= 1;
 		hb_r <= 1; vb_r <= 1;
@@ -312,32 +354,32 @@ always @(posedge clk) begin
 		if (hcnt == H_TOT-3) begin
 			// prime the next line (or frame) while still in the blank
 			if ((vcnt < V_ACT-1) || (vcnt == V_TOT-1)) begin
-				fetch_addr <= (vcnt == V_TOT-1) ? {1'b0, fb_base}
-				            : {1'b0, fb_base} + line_base_next;
+				fetch_addr <= (vcnt == V_TOT-1) ? {1'b0, fb_base_v}
+				            : {1'b0, fb_base_v} + line_base_next;
 				fpipe <= 2'b01;
 				shcnt <= 0;
 			end
 		end
 		else if (hcnt == H_TOT-1) begin
-			if (vcnt == V_TOT-1) line_base_next <= {8'd0, stride};
-			else if (vcnt < V_ACT) line_base_next <= line_base_next + {8'd0, stride};
+			if (vcnt == V_TOT-1) line_base_next <= {8'd0, stride_v};
+			else if (vcnt < V_ACT) line_base_next <= line_base_next + {8'd0, stride_v};
 		end
 		else if (hactive && vactive) begin
 			if (shcnt == 0) begin
-				shreg <= (mode == 3'd0) ? {cur[30:0], 1'b0} :
-				         (mode == 3'd1) ? {cur[29:0], 2'b0} :
-				         (mode == 3'd2) ? {cur[27:0], 4'b0} :
-				                          {cur[23:0], 8'b0};
+				shreg <= (mode_v == 3'd0) ? {cur[30:0], 1'b0} :
+				         (mode_v == 3'd1) ? {cur[29:0], 2'b0} :
+				         (mode_v == 3'd2) ? {cur[27:0], 4'b0} :
+				                            {cur[23:0], 8'b0};
 				shcnt <= pix_per_word - 1'b1;
 				fetch_addr <= fetch_addr + 22'd4;
 				fpipe <= 2'b01;
 			end
 			else begin
 				shcnt <= shcnt - 1'b1;
-				shreg <= (mode == 3'd0) ? {shreg[30:0], 1'b0} :
-				         (mode == 3'd1) ? {shreg[29:0], 2'b0} :
-				         (mode == 3'd2) ? {shreg[27:0], 4'b0} :
-				                          {shreg[23:0], 8'b0};
+				shreg <= (mode_v == 3'd0) ? {shreg[30:0], 1'b0} :
+				         (mode_v == 3'd1) ? {shreg[29:0], 2'b0} :
+				         (mode_v == 3'd2) ? {shreg[27:0], 4'b0} :
+				                            {shreg[23:0], 8'b0};
 			end
 		end
 

@@ -31,6 +31,10 @@ module quadra800
 	input         nreset,
 	input         ce,
 
+	// 25.175 MHz dot clock for the DAFB scanout (rtl/pll_video.v)
+	input         clk_vid,
+	input         nreset_vid,
+
 	// installed RAM, as a real Quadra 800 configuration.  The ROM sizes
 	// memory by probing at startup, so this must be settled before reset
 	// releases — the top folds a change into the reset.
@@ -252,6 +256,8 @@ wire [31:0] dafb_rdata;
 wire        dafb_ack;
 
 dafb dafb (
+	.clk_vid(clk_vid),
+	.nreset_vid(nreset_vid),
 	.clk(clk),
 	.nreset(nreset),
 	.ce(ce),

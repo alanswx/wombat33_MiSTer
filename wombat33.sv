@@ -143,6 +143,32 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1), .VDNUM(1), .BLKSZ(2)) hps_io
 wire clk_sys;
 wire clk_ram;                              // 99 MHz = 3x clk_sys, SDRAM domain
 wire pll_locked;
+
+// Dedicated dot clock for the DAFB scanout.  The video used to run on clk_sys,
+// which made 640x480 in an 800x525 frame refresh at 78.6 Hz with a 33 MHz dot
+// clock -- far enough off spec that Main_MiSTer's vsync_adjust synthesised a
+// broken HDMI mode from it (the reported screen showing the frame four times
+// across the width).  25.175 MHz gives exactly VGA 640x480 @ 59.94 Hz, which
+// is what the Mac LC core does; see rtl/pll_video.v.
+wire clk_vid, pll_video_locked;
+pll_video pllv
+(
+	.refclk(CLK_50M),
+	.rst(1'b0),
+	.outclk_0(clk_vid),
+	.locked(pll_video_locked),
+	.reconfig_to_pll(64'd0),
+	.reconfig_from_pll()
+);
+
+// video-domain reset: released only once the pixel clock is locked AND the
+// machine is out of reset, 2FF-synced into clk_vid
+reg vidrst_meta, vidrst_s;
+always @(posedge clk_vid) begin
+	vidrst_meta <= reset | ~pll_video_locked;
+	vidrst_s    <= vidrst_meta;
+end
+wire nreset_vid = ~vidrst_s;
 pll pll
 (
 	.refclk(CLK_50M),
@@ -250,6 +276,8 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.clk(clk_sys),
 	.nreset(~reset),
 	.ce(1'b1),
+	.clk_vid(clk_vid),
+	.nreset_vid(nreset_vid),
 	.ram_cfg(ram_cfg),
 
 	.mem_req(mem_req),
@@ -301,7 +329,7 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 );
 
 wire m_hblank, m_vblank;
-assign CLK_VIDEO = clk_sys;
+assign CLK_VIDEO = clk_vid;
 assign VGA_DE = ~(m_hblank | m_vblank);
 
 assign LED_USER = ioctl_download | sd_rd[0] | sd_wr[0];
@@ -518,7 +546,10 @@ always @(posedge clk_sys) begin            // port A: CPU beats
 	            vram1[va_addr], vram0[va_addr]};
 end
 
-always @(posedge clk_sys)                  // port B: DAFB scanout
+// port B: DAFB scanout, on the PIXEL clock.  M10K is natively dual-clock, so
+// this costs nothing and there is no timed arc between the ports -- the
+// crossing is blessed in wombat33.sdc along with the rest of clk_vid.
+always @(posedge clk_vid)
 	vid_rdata <= {vram3[vb_addr], vram2[vb_addr],
 	              vram1[vb_addr], vram0[vb_addr]};
 
