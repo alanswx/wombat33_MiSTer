@@ -32,7 +32,7 @@ module sdram
 	input             init,        // reset to initialize RAM
 	input             clk,         // clock ~100MHz
 
-	inout  reg [15:0] SDRAM_DQ,    // 16 bit bidirectional data bus
+	inout      [15:0] SDRAM_DQ,    // 16 bit bidirectional data bus
 	output reg [12:0] SDRAM_A,     // 13 bit multiplexed address bus
 	output            SDRAM_DQML,  // two byte masks
 	output            SDRAM_DQMH,  // 
@@ -62,6 +62,15 @@ module sdram
 	input             cpreq,
 	output reg        cpbusy
 );
+
+// DQ is driven from a registered value behind an explicit output enable
+// rather than by assigning 'Z inside the state machine.  Same one-cycle
+// drive window, same inferred bidir buffer -- but a continuous assignment is
+// a tristate form Verilator can elaborate, which is what lets verilator/
+// tb_sdram.sv run this controller against a chip model.
+reg [15:0] dq_out;
+reg        dq_oe;
+assign SDRAM_DQ = dq_oe ? dq_out : 16'bZZZZZZZZZZZZZZZZ;
 
 assign SDRAM_nCS  = chip;
 assign SDRAM_nRAS = command[2];
@@ -109,24 +118,31 @@ localparam STATE_IDLE_5  = 10;
 localparam STATE_RFSH    = 11;
 
 
+// These live at module scope rather than inside the always block below.  As
+// block-local statics with initialisers they were both blocking- and
+// non-blocking-assigned, which Verilator calls unsupported -- and waiving the
+// warning does not make it work: the whole always block silently stops
+// executing the moment startup finishes.  Hoisting them is identical for
+// synthesis (they were already static, and an initialiser on a reg is the
+// power-up value either way) and it makes the state machine visible to a
+// waveform viewer.
+reg [CAS_LATENCY:0] data_ready_delay = 0;
+reg        saved_wr;
+reg [12:0] cas_addr;
+reg [15:0] saved_data;
+reg  [8:0] cpcnt;
+reg        old_cpreq = 0;
+reg  [3:0] state = STATE_STARTUP;
+reg        refresh_old = 0;
+
 always @(posedge clk) begin
-	reg [CAS_LATENCY:0] data_ready_delay;
-
-	reg        saved_wr;
-	reg [12:0] cas_addr;
-	reg [15:0] saved_data;
-	reg  [8:0] cpcnt;
-	reg        old_cpreq = 0;
-	reg  [3:0] state = STATE_STARTUP;
-	reg        refresh_old;
-
 	refresh_count <= refresh_count+1'b1;
 
 	data_ready_delay <= data_ready_delay>>1;
 	if(data_ready_delay[0]) ready <= 1;
 
-	dout <= SDRAM_DQ;
-	SDRAM_DQ <= 'Z;
+	dout  <= SDRAM_DQ;
+	dq_oe <= 0;
 
 	if(SDRAM_EN) begin
 		command <= CMD_NOP;
@@ -240,7 +256,8 @@ always @(posedge clk) begin
 				SDRAM_A       <= cas_addr;
 				if(saved_wr) begin
 					command    <= CMD_WRITE;
-					SDRAM_DQ   <= saved_data;
+					dq_out     <= saved_data;
+					dq_oe      <= 1;
 					ready      <= 1;
 				end
 				else begin
@@ -255,7 +272,8 @@ always @(posedge clk) begin
 				cas_addr[8:0] <= cas_addr[8:0] + 1'd1;
 				cpcnt         <= cpcnt - 1'd1;
 				command       <= CMD_WRITE;
-				SDRAM_DQ      <= cpdin;
+				dq_out        <= cpdin;
+				dq_oe         <= 1;
 				if(!cpcnt) begin
 					state      <= STATE_IDLE_4;
 					cprd       <= 0;
