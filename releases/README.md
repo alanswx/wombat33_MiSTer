@@ -12,11 +12,57 @@ must never be flashed (`scripts/deploy_screenshot.sh` refuses one).
 
 | build | md5 | timing | notes |
 |---|---|---|---|
-| `wombat33_20260831.rbf` | `3901ef5705f58dba3279c0417412f5f8` | met, +0.243 ns | **Sound works.** Fixes the watch-cursor wedge (ASC FIFOSTAT reported an empty FIFO as full) and hooks up the $806 volume slider. |
+| `wombat33_20260831_2.rbf` | `4414e7b3294b3d554a9e43faa16682bd` | met, **+0.062 ns** | **The machine has a serial port.** Ports the Z8530 SCC from MacLC onto the beat bus, plus MIDI-over-SCC and MT32-pi. 85 % ALMs — watch the slack. |
+| `wombat33_20260831_1.rbf` | `3901ef5705f58dba3279c0417412f5f8` | met, +0.243 ns | **Sound works.** Fixes the watch-cursor wedge (ASC FIFOSTAT reported an empty FIFO as full) and hooks up the $806 volume slider. |
 | `wombat33_20260830.rbf` | `64c79dfb93ceefb549200c78671cdc31` | met, +0.248 ns | **ADB actually works** — the mouse button reaches the guest and motion stops inventing input. |
 | `wombat33_20260829.rbf` | `4c46a65c3a48b44ddb6f4fd6808d0422` | met, +0.245 ns | First build that boots Mac OS unattended. |
 
-## `wombat33_20260831.rbf`
+## `wombat33_20260831_2.rbf`
+
+md5 `4414e7b3294b3d554a9e43faa16682bd`, timing met at **+0.062 ns**.
+
+The Quadra 800 gets a serial port for the first time: `rtl/scc.v` (the Zilog
+85C30) ported from the MacLC/MacIIvi lineage, hung off the beat bus through a
+new adapter in `rtl/iosb.sv` at `$5000C000`, plus MIDI-over-SCC and the
+MT32-pi user-port block. Full rationale and the port map in
+`docs/scc-port-survey.md`.
+
+**Hardware result (192.168.99.143, 2026-08-31):** boots clean to the Mac OS 8
+desktop with the SCC live. This was the real risk — the space previously
+decoded as present-but-inert (reads 0, writes discarded, always acked), so the
+ROM's `InitSCC` and its loopback selftest now get real answers for the first
+time. A wrong answer there does not fail quietly: the sibling `lbmactwo` core
+hit exactly this and the ROM dropped into the Test Manager. This one walks
+straight through ROM → "Welcome to Mac OS" → extensions → Finder, and the
+Serial Driver loads without the freeze that had to be fixed on the LC.
+
+**Utilization moved, and the slack with it.**
+
+| | before | after |
+|---|---|---|
+| Logic (ALMs) | 34,223 / 41,910 (82 %) | **35,436 / 41,910 (85 %)** |
+| Registers | 28,980 | 29,886 |
+| DSP blocks | 47 (42 %) | 51 (46 %) |
+| RAM blocks | 421 (76 %) | 423 (76 %) |
+| Worst slack | +0.243 ns | **+0.062 ns** |
+
++1,213 ALMs buys the whole feature set (both SCC channels, four UART
+serializers, the MT32-pi block). The four extra DSPs are the baud arithmetic
+introduced by the `SYS_CLK_HZ` parameterisation — one operand is constant, so
+they can be forced into logic if DSPs ever get tight.
+
+**62 ps is the number to watch.** It met, and every other domain is
+comfortable (HDMI next at +0.243 ns), but this core is seed-sensitive and the
+next netlist change could push `clk_sys` negative. Expect a seed re-roll rather
+than a structural problem if it does.
+
+Still unproven on hardware: PPP, MIDI and MT32-pi end to end. Those need
+guest-side setup (a PPP client and MacTCP/OT) and, for MT32-pi, a Pi on the
+user port. The RTL paths are covered in simulation by
+`verilator/tb_iosb_scc.v`, which measures 1056 clk/bit on `scc_txd_a` — 31250
+baud at 33 MHz — through the real bus adapter.
+
+## `wombat33_20260831_1.rbf`
 
 md5 `3901ef5705f58dba3279c0417412f5f8`, timing met at +0.243 ns (seed 6).
 

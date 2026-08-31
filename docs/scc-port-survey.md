@@ -13,8 +13,26 @@ Survey date 2026-08-31, branch `scc-ppp-midi-mt32`. Source core:
 | 3 — baud constants re-timed for 33 MHz, gates re-run | **done** |
 | 4 — MT32-pi instance, OSD page, I2S mix, info popup | **done** |
 | 5 — LCD overlay composited into `VGA_R/G/B` | **done** |
-| Quartus Analysis & Synthesis | **clean, 0 errors** (73,500 logic cells) |
-| hardware validation on `.143` | **not yet** |
+| Quartus full compile | **successful**, timing met at **+0.062 ns** |
+| hardware boot on `.143` | **PASS** — clean boot to the Finder with the SCC live |
+| PPP / MIDI / MT32-pi end to end | **not yet** — needs guest-side setup |
+
+Fitted cost of the whole feature set: **82 % -> 85 % ALMs** (+1,213), registers
+28,980 -> 29,886, DSP 47 -> 51. Worst slack fell from +0.243 ns to **+0.062 ns**
+— it met, but that is the number to watch on the next netlist change.
+
+The hardware boot is the result that mattered. The SCC space used to decode as
+present-but-inert (reads 0, writes discarded, always acked), so the ROM's
+`InitSCC` and loopback selftest now get real answers for the first time. That
+is not a quiet failure mode when it goes wrong — the sibling `lbmactwo` core
+hit it and the ROM dropped into the Test Manager (`lbmactwo/docs/new-scc.md`).
+This core walks straight through to the desktop, and the Serial Driver loads
+without the freeze that had to be fixed on the LC.
+
+What is left is guest-side, not RTL: a PPP client plus MacTCP/OT to exercise
+PPP, a MIDI application for MIDI, and a physical Pi on the user port for
+MT32-pi. The "Browse the Internet" and "Mail" icons already on the test image
+are the obvious PPP targets.
 
 Simulation gates, all green:
 
