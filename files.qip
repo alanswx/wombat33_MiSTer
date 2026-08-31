@@ -9,7 +9,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/iosb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/via6522.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dafb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rtc3430042.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/asc_wavetable.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/easc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ncr53c96.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/adb.sv
 set_global_assignment -name VERILOG_FILE rtl/dpram.v

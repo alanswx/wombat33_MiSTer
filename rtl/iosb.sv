@@ -421,6 +421,12 @@ wire [7:0] nubus_irqs = {1'b1, ~vbl_irq, 6'b111111};  // bit 6 = internal video 
 wire       slot_any   = (nubus_irqs & 8'h79) != 8'h79;
 
 reg vbl_d, scsi_d, drq_d, asc_d, slot_d;
+// The ASC interrupt: the port comes in from quadra800.sv (tied 0 there) and
+// the real source is the EASC below. Without it the Sound Manager fills the
+// FIFO once and is never told to refill, so a sound plays for 1024 samples
+// (46 ms) and stops.
+wire asc_irq_i = asc_irq | easc_irq;
+wire easc_irq;
 wire via2_active = |(via2_ifr[6:0] & via2_ier[6:0] & 7'h1b);
 wire [7:0] via2_ifr_r = {via2_active, via2_ifr[6:0]};
 wire scsi_irq_i = scsi_irq | ncr_irq;
@@ -513,12 +519,12 @@ ncr53c96 #(.DISK_ID(0)) scsi (
 );
 
 //----------------------------------------------------------------------------
-// EASC wavetable voice (the boot chime); FIFO mode is a later stage
+// EASC — stereo FIFO (every Mac OS sound) plus the wavetable boot chime
 //----------------------------------------------------------------------------
 wire        asc_stb = ce && (astate == A_IDLE) && sel && !ack && sel_asc;
 wire [31:0] asc_rdata;
 
-asc_wavetable asc (
+easc easc (
 	.clk(clk),
 	.nreset(nreset),
 	.ce(ce),
@@ -529,6 +535,8 @@ asc_wavetable asc (
 	.be(be),
 	.wdata(wdata),
 	.rdata(asc_rdata),
+
+	.irq(easc_irq),
 
 	.sample_l(audio_l),
 	.sample_r(audio_r)
@@ -569,11 +577,11 @@ always @(posedge clk) begin
 
 		// interrupt line edges latch into the pseudo-VIA IFR
 		vbl_d <= vbl_irq; scsi_d <= scsi_irq_i; drq_d <= scsi_drq_i;
-		asc_d <= asc_irq; slot_d <= slot_any;
+		asc_d <= asc_irq_i; slot_d <= slot_any;
 		if (scsi_irq_i != scsi_d) via2_ifr[3] <= scsi_irq_i;
 		if (scsi_drq_i != drq_d)  via2_ifr[0] <= scsi_drq_i;
 		if (slot_any != slot_d) via2_ifr[1] <= slot_any;
-		if (asc_irq && !asc_d)  via2_ifr[4] <= 1'b1;
+		if (asc_irq_i && !asc_d) via2_ifr[4] <= 1'b1;
 
 		case (astate)
 		A_IDLE: if (sel && !ack) begin

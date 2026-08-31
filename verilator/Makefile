@@ -51,7 +51,7 @@ V_SRC = \
 	$(RTL)/via6522.sv \
 	$(RTL)/dafb.sv \
 	$(RTL)/rtc3430042.sv \
-	$(RTL)/asc_wavetable.sv \
+	$(RTL)/easc.sv \
 	$(RTL)/ncr53c96.sv \
 	$(RTL)/adb.sv \
 	$(AP)/ap040_core.v \
@@ -103,5 +103,13 @@ $(EXE): $(VOUT)
 		[ -e $$o ] && [ $$f -nt $$o ] && rm -f $$o obj_dir/Vemu || true; done
 	(cd obj_dir; make -f Vemu.mk)
 
+# Directed unit test for the EASC (rtl/easc.sv). Runs in seconds and does not
+# need a ROM or a disk, which is the point: the machine only touches the sound
+# chip's FIFO billions of cycles into a boot.
+#   make tb_easc && ./obj_dir_tb/tb_easc
+tb_easc:
+	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST -Wno-DECLFILENAME +define+SIMULATION=1 --top-module tb_easc --Mdir ./obj_dir_tb -o tb_easc tb_easc.sv $(RTL)/easc.sv
+	./obj_dir_tb/tb_easc
+
 clean:
-	rm -rf obj_dir
+	rm -rf obj_dir obj_dir_tb
