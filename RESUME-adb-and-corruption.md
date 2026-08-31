@@ -14,8 +14,9 @@ build/deploy timing gate, and the RTC.
 ## Ground rules, still all true
 
 - **Never reload the core or reset the machine while Mac OS is running.** It is
-  a power-cut on a mounted HFS volume. `scripts/mac_shutdown.sh` should now work
-  — the click it needed is fixed — but re-verify it before trusting it.
+  a power-cut on a mounted HFS volume. `scripts/mac_shutdown.sh` now does the
+  whole thing unattended — verified end to end 2026-08-30, reaching "It is now
+  safe to switch off your Macintosh" — so there is no longer an excuse.
 - **A hang proves nothing until the disk is known-good.** Restore from
   `games/Wombat33/backup/QuadSquad8.hda.gz` (md5
   `f4287aee9ff9a4413fa1e5fd9f2d63b4`) and re-test. Restoring takes ~6 min on the
@@ -29,10 +30,16 @@ build/deploy timing gate, and the RTC.
   image). **Frozen ≠ hung** — an idle Finder does not read; `pos=1986560` is the
   normal idle-desktop value. Frozen *plus* a byte-identical screenshot across
   minutes *plus* a half-drawn progress bar is a hang.
-- **The old pixel geometry is void.** Motion used to arrive with the deltas
-  doubled (see below), so every step count measured before this session
-  overshoots now. `scripts/mac_shutdown.sh`'s menu-bar offsets need
-  re-measuring. Pacing is unchanged: 0.02 s tracks; 0.008 s drops moves.
+- **Never trust a mouse step count.** The event-to-pixel scale is not stable:
+  measured between ~1.3 and ~2.7 px per motion event on the same machine minutes
+  apart (moves get coalesced into one ADB report and Mac OS accelerates the
+  coalesced delta). One run put 120 events at x=180, a later one at x=330. Any
+  script that navigates by pixels must **step and re-probe from a screenshot**,
+  which is what `scripts/mac_shutdown.sh` now does with
+  `scripts/menubar_probe.py` and `scripts/menuitem_probe.py`. The old 1:1
+  calibration was also measured through the corrupted stream — the same bug
+  doubled the deltas — so those numbers are void twice over. Pacing is
+  unchanged: 0.02 s works; 0.008 s drops moves.
 - **mrext's mouse button payloads are `left_down` / `left_up`.** `mouseBtn:1`
   and `mouseBtn:0` are accepted by the websocket and appear in `/tmp/remote.log`
   but do nothing at all. That is an easy way to conclude "the button is broken".
@@ -224,6 +231,27 @@ The Mac reads exactly **one hour behind** the host (minutes dead-on): standard
 vs daylight time in what the Main sends. Probably host-side; the core reflects
 `TIMESTAMP` faithfully. Check MacLC's clock on the same machine — if MacLC is
 correct, the difference is ours.
+
+## `mac_shutdown.sh` works now, and how
+
+The click it was missing is the ADB fix; the pixel geometry it relied on is
+gone. It now drives the menu by feedback instead:
+
+1. pin into the top-left corner, drop onto the menu bar, press;
+2. `scripts/menubar_probe.py` reads which title is pulled down (the open title
+   is dark through the top and bottom rows of the bar, where an unhighlighted
+   one is not) and the script slides left/right, button held, until Special is
+   the open one;
+3. `scripts/menuitem_probe.py` reads the highlighted row **by colour** — the
+   Mac OS highlight is blue (`B - R > 50`), the panel is neutral grey, the
+   desktop below is teal, and brightness alone cannot separate the highlight
+   from the desktop — and the script steps down until the LAST row of the panel
+   (`gap` 0-4) is the highlighted one;
+4. only then does it release. Every failure path releases back on the menu
+   title, selecting nothing — **Restart is the row directly above Shut Down**.
+
+It took three attempts in a row on 2026-08-30 before one landed, all three
+failing safely; re-run it if it aborts.
 
 ## Tooling added this session
 
