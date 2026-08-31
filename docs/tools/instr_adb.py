@@ -22,6 +22,7 @@ s = open(p).read()
 assert "adbtrace_en" not in s, "already instrumented"
 
 anchor = "// VIA1 SR shim (lbmactwo): the qualified 6522 access edge is A_VIA at"
+anchor2 = anchor
 obs = """// synthesis translate_off
 reg adbtrace_en; initial adbtrace_en = $test$plusargs("adbtrace");
 reg [1:0] dbg_st_p; reg dbg_int_p;
@@ -91,6 +92,35 @@ c4n = """			if (adb_dout_strobe) begin
 				// synthesis translate_on
 				kbd_to_mac            <= adb_dout;"""
 s = sub(s, c4, c4n, "dout capture")
+
+# Deadlock detector, always on (not gated on +adbtrace): the ROM's ADB interrupt
+# handler runs at IPL 7 (ori.w #$700,sr) and contains a spin on PB3,
+#     bclr #5,(a1) ; btst #3,(a1) ; beq -2
+# i.e. "wait until ADB INT deasserts", entered with the bus in Data1. adb.sv
+# asserts INT in ST_DATA1 whenever there is no command and no response, so if
+# the driver ever reaches that spin with the transceiver empty the machine
+# deadlocks with the screen frozen, no disk I/O, and the SCSI engine idle --
+# exactly the signature of the boot stall being chased. This prints if the
+# condition holds for longer than any real transaction could take.
+det = """// synthesis translate_off
+// see docs/tools/instr_adb.py: the ROM spins at IPL 7 waiting for ADB INT to
+// deassert while the bus is in Data1; adb.sv asserts it there whenever it has
+// nothing to deliver, so a long hold is a hang, not a wait.
+reg [25:0] dbg_intstuck;
+always @(posedge clk) begin
+  if (!nreset) dbg_intstuck <= 0;
+  else if ({ADBST1, ADBST0} == 2'b01 && !adb_int_n) begin
+    dbg_intstuck <= dbg_intstuck + 1'b1;
+    if (dbg_intstuck == 26'd33000)   $display("[%0t] ADBSTUCK INT asserted in DATA1 for 1ms", $time);
+    if (dbg_intstuck == 26'd330000)  $display("[%0t] ADBSTUCK INT asserted in DATA1 for 10ms", $time);
+    if (dbg_intstuck == 26'd3300000) $display("[%0t] ADBSTUCK INT asserted in DATA1 for 100ms -- DEADLOCK", $time);
+  end
+  else dbg_intstuck <= 0;
+end
+// synthesis translate_on
+
+"""
+s = sub(s, anchor2, det + anchor2, "deadlock detector")
 open(p, "w").write(s)
 print("iosb.sv patched")
 
