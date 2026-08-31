@@ -153,10 +153,45 @@ Roll back on the MiSTer with:
 gzip -dc /media/fat/games/Wombat33/backup/QuadSquad8.hda.gz > /media/fat/games/Wombat33/QuadSquad8.hda
 ```
 
-The current image is `HD00 512 Quad Squad with 8.hda` from
-`\\daninas.local\Software\BlueSCSI Images\Quadra800\`, pushed as `QuadSquad8.hda`:
-2,146,461,696 bytes, md5 `f4287aee9ff9a4413fa1e5fd9f2d63b4` (verified on both ends
-2026-08-29, and that is the hash the `backup/QuadSquad8.hda.gz` restores to).
+The image was originally pushed from `HD00 512 Quad Squad with 8.hda` in
+`\\daninas.local\Software\BlueSCSI Images\Quadra800\` as `QuadSquad8.hda`:
+2,146,461,696 bytes, md5 `f4287aee9ff9a4413fa1e5fd9f2d63b4`, verified on both ends
+2026-08-29.
+
+**That is no longer the base image.** On 2026-08-31 it was updated in place on the
+MiSTer -- new test software was installed into the running system -- and re-blessed.
+The live base is now:
+
+| | |
+|---|---|
+| path | `/media/fat/games/Wombat33/QuadSquad8.hda` |
+| size | 2,146,461,696 bytes (unchanged -- same geometry, same partition map) |
+| md5 | `a70189d3fbea5f60a5da6be4a22a2e04` (mtime 2026-08-31 13:17) |
+| backup | `backup/QuadSquad8.hda.gz`, 322,145,708 bytes, re-taken 2026-08-31 16:04, gz md5 `8a8d9c5026ffbb576672690e8e2b0c37` — **see the warning below, this one is not pristine** |
+
+The image hash is stable: md5'd twice back to back (16:24 and 16:25 on 2026-08-31)
+it returned `a70189d3...` both times, with the guest idle (`pos:` in the Main's
+fdinfo frozen). Note that `mtime` is **not** a reliable freshness signal here — the
+Main holds the image open for the whole core session, so 13:17 is the last *close*,
+not the last write.
+
+> **The 2026-08-31 16:04 backup does not restore to the image above.** It
+> decompresses (validly, and to the full 2,146,461,696 bytes — `gzip -t` passes and
+> the trailer agrees) to md5 `93738964c24e06e49b0d90d8baefac01`, not
+> `a70189d3fbea5f60a5da6be4a22a2e04`. It was taken with the core loaded and the
+> volume mounted read-write, which breaks `push_disk.sh`'s own rule of backing up
+> *before* the first boot: the result is a snapshot of a live HFS volume taken while
+> it was still being written, so it is crash-consistent at best.
+>
+> To get a base image and a backup that actually agree: shut the Mac down cleanly
+> (`bash scripts/mac_shutdown.sh`, verified unattended 2026-08-30), let the core
+> release the file, then re-run the gzip and md5 both ends. Until that is done,
+> treat the live image as the base and the `.gz` as a rough safety net only.
+
+The copy on `\\daninas.local` is **still the old `f4287aee...`** and was not
+touched. Do not re-run `push_disk.sh` from the share to "refresh" the disk: that would
+roll the machine back and lose the newly installed software. The MiSTer's own image is
+the authoritative base from here on.
 
 If you point the mount at a different filename, change `SEED_MOUNT_REL` in
 `scripts/local.env` to match — or just remount from the OSD (`Mount SCSI disk`), which

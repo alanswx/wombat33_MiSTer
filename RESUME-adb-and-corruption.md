@@ -19,9 +19,19 @@ build/deploy timing gate, and the RTC.
   whole thing unattended — verified end to end 2026-08-30, reaching "It is now
   safe to switch off your Macintosh" — so there is no longer an excuse.
 - **A hang proves nothing until the disk is known-good.** Restore from
-  `games/Wombat33/backup/QuadSquad8.hda.gz` (md5
-  `f4287aee9ff9a4413fa1e5fd9f2d63b4`) and re-test. Restoring takes ~6 min on the
-  MiSTer (`gunzip -c backup/QuadSquad8.hda.gz > QuadSquad8.hda`).
+  `games/Wombat33/backup/QuadSquad8.hda.gz` and re-test. Restoring takes ~6 min on
+  the MiSTer (`gunzip -c backup/QuadSquad8.hda.gz > QuadSquad8.hda`). **The base
+  image changed on 2026-08-31**: new test software was installed in place, so the
+  live image is now md5 `a70189d3fbea5f60a5da6be4a22a2e04` (stable, verified twice),
+  not the old `f4287aee9ff9a4413fa1e5fd9f2d63b4`.
+- **⚠ The current backup is NOT a clean restore point.** `backup/QuadSquad8.hda.gz`
+  (re-taken 2026-08-31 16:04) is a complete, valid archive but decompresses to
+  `93738964c24e06e49b0d90d8baefac01` — it was taken with the core loaded and the
+  volume mounted, i.e. a snapshot of a live HFS volume mid-write. Restoring it does
+  **not** get you back to the image the machine is running now. Before relying on
+  "restore and re-test" as a control again: `bash scripts/mac_shutdown.sh`, let the
+  core release the file, re-take the gzip, and record the hash both ends. Until then
+  a restore changes the disk out from under the experiment instead of resetting it.
 - **Suspect your own last change first, and run the control.** Every claim below
   that says "fixed" has a scored control behind it; the ones that do not say so.
 - **Measure rates, not single samples.** The boot stall below is 1-in-3, so one
