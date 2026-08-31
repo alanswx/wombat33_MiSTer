@@ -1,188 +1,106 @@
-# RESUME — watch cursor, frozen clock, dead input (regression, 2026-08-31)
+# SOLVED — watch cursor, frozen clock, dead input (2026-08-31)
 
-A regression on the core currently on the MiSTer
-(`/media/fat/_Unstable/wombat33.rbf`, md5 `2be4c8d06cb91c8238a91f500c3e973b`,
-built from `6599b0b`).
+Fixed in `rtl/easc.sv`, shipped as `releases/wombat33_20260831.rbf`
+(md5 `3901ef5705f58dba3279c0417412f5f8`, timing met +0.243 ns).
 
-**Bisected already — the user confirms `releases/wombat33_20260830.rbf` does NOT
-show it.** That build is `5352b84`: the via6522 ADB fix and nothing else. So the
-regression is in exactly three commits, all from the night of 2026-08-30:
+**Do not re-investigate the ASC interrupt or the pixel clock.** Both were the
+named prime suspects in the original version of this document and both are
+innocent — see the scored table below.
 
-| commit | what it did | hang risk |
-|---|---|---|
-| `e0990f0` | EASC FIFO mode; **connected the ASC interrupt for the first time** | **high** |
-| `1198644` | DAFB scanout moved to a 25.175 MHz pixel clock | low, see below |
-| `6599b0b` | made the EASC interrupt edge-triggered instead of level | **high** |
+## What it was
 
-Start with the ASC interrupt. Do not go near the RTC.
+`$804` FIFOSTAT bits 1/3 read `(cap == 0) || (cap >= 1023)`, so an **empty
+FIFO reported itself FULL**. A guest that fills until the full flag sets wrote
+nothing at all; with no bytes queued nothing ever popped, so the half-empty
+edge never fired and no refill interrupt was ever raised. The wait never ended.
 
-## Symptoms
+That is why every symptom looked the way it did:
 
-1. **The menu-bar clock is frozen.** Two screenshots 80 s apart are
-   byte-identical (`scratch/watch_cursor.png`, `scratch/watch_cursor2.png`),
-   both reading `Sun 11:43` while the host clock said 07:19. This is a stopped
-   clock, **not** the documented one-hour standard/daylight offset — do not go
-   chase `rtl/rtc3430042.sv`.
-2. **The cursor is a watch (busy) cursor and stays one** — zoomed in
-   `scratch/z_watch.png`, unmistakably the Mac OS wristwatch.
-3. **The mouse still moves the cursor**, but nothing else responds. The user
-   also suspects this explains input "not taking correctly" earlier.
-4. The desktop is fully drawn and the machine is not Sad-Mac'd; it is running.
+- The desktop was **fully drawn** — the wedge happens after startup, in the
+  foreground, once something asks the Sound Manager for audio.
+- The **cursor still tracked the mouse**, because ADB is VIA1 at IPL 1 and was
+  being serviced normally the whole time. Interrupts were never the problem.
+- The **menu-bar clock stopped** because the Finder was blocked, not because
+  the timebase stopped. The 60.15 Hz tick and the RTC one-second line are
+  divided from `clk` in `rtl/iosb.sv` (`TICK_HALF`) and were always correct.
 
-## The reading that makes this testable
+The original document's reading — a VIA2 interrupt pinning the CPU at IPL 2 and
+starving VIA1 through the priority mux at `rtl/iosb.sv:745` — is wrong, and the
+moving cursor is what disproves it. ADB is a VIA1 source; a genuine IPL 2 storm
+would have frozen the cursor too.
 
-Moving cursor + frozen clock + watch cursor = **interrupts are still being
-serviced while the foreground is starved.** Now look at how this core presents
-interrupt levels (`rtl/iosb.sv:745`):
+The fault only appeared with `e0990f0` because the old `asc_wavetable` returned
+`0x00` for `$804` ("version, status, everything else"), so the full flag was
+never set and the fill loop always completed.
 
-```verilog
-assign ipl_n = scc_irq     ? 3'b011 :   // IPL 4
-               via2_active ? 3'b101 :   // IPL 2
-               via1_irq    ? 3'b110 :   // IPL 1
-                             3'b111;
-```
+## Evidence
 
-It is a **priority mux, not an OR**. While `via2_active` is true, VIA1's level
-is never presented to the CPU at all. And of the two chips:
+Every run on a freshly restored disk, scored against `wombat33_20260830.rbf`:
 
-| | VIA1 (IPL 1) | VIA2 (IPL 2) |
-|---|---|---|
-| 60 Hz tick (CA1) | **yes** | |
-| RTC one-second (CA2) | **yes** | |
-| ADB shift register | **yes** | |
-| VBL / slot | | yes (`nubus_irqs` bit 6 → `via2_ifr[1]`) |
-| SCSI IRQ/DRQ | | yes |
-| **ASC** | | **yes, `via2_ifr[4]`** |
+| build | scanout | ASC IRQ | menu-bar clock |
+|---|---|---|---|
+| `20260830` (known good) | 33 MHz | n/a | ticks |
+| pre-fix | 25.175 MHz | off | FROZEN |
+| pre-fix | 33 MHz | off | FROZEN |
+| pre-fix | 25.175 MHz | off | FROZEN (2nd sample) |
+| **fixed** | 25.175 MHz | **on** | **ticks** |
 
-So a VIA2 interrupt that never goes away pins the CPU at IPL 2 and starves
-**every VIA1 source**: the 60 Hz tick (→ the clock stops), the RTC one-second
-line, and ADB. Meanwhile the cursor keeps tracking because the VBL task that
-moves it hangs off VIA2, which is still being serviced. **Every symptom above
-falls out of that one fact**, including the input flakiness.
+Rows 2–4 are what exonerate the two suspects: the wedge reproduced with the ASC
+interrupt **disconnected** (so `6599b0b`/`e0990f0`'s interrupt is not it) and
+with the DAFB scanout forced back off the pixel clock (so `1198644` is not it).
 
-## Prime suspect
+"Clock ticks" is measured, not eyeballed: consecutive screenshots differ **only**
+in the 6x11 px patch at (588,4)–(594,15), which is the clock digits. A frozen
+machine shows no diff there across minutes. Guest time tracked the host exactly
+across 41 minutes at the documented −1:00 offset.
 
-`6599b0b` / `e0990f0` connected the **ASC interrupt for the first time**. Before
-those commits `quadra800.sv` tied `iosb`'s `asc_irq` port to `1'b0` and
-`via2_ifr[4]` could never be set by anything. Now:
+## Also fixed
 
-```verilog
-// rtl/iosb.sv:428
-wire asc_irq_i = asc_irq | easc_irq;
-...
-if (asc_irq_i && !asc_d) via2_ifr[4] <= 1'b1;
-```
+`$806` volume is now applied (bits 7–5, eight steps, `x*256/7` so step 7 is
+exactly unity). Reset value is `0xE0` (max), not 0 — the boot chime is
+ROM-generated before Mac OS loads any sound preference.
 
-The first cut of that interrupt was a genuine level-storm (it asserted whenever
-a FIFO was under half full, and an *empty* FIFO always is) and it froze the
-machine at the desktop on hardware. `6599b0b` reworked it to MAME's edges — the
-pop that crosses half-empty, the push that fills, cleared by a FIFOSTAT read —
-and `make tb_easc` has a check that an idle FIFO does not interrupt. **That test
-passes, so whatever is happening now is not the same bug**, but the ASC is still
-the one genuinely new interrupt source in the machine and it is where to look
-first.
+## Corrections to the old ground rules
 
-Specific things to scrutinise in `rtl/easc.sv`:
+These cost real time. They are wrong as previously written.
 
-- `stat_read` — does the guest's actual FIFOSTAT access match this decode? It
-  requires `a[11]` and the longword at offset `$004`. If Mac OS reads the
-  status some other way, `irq_r` never clears.
-- Whether `half_cross_a/b` can fire at the pop rate (22 kHz) rather than once
-  per FIFO drain — e.g. if the guest keeps the capacity hovering at 511.
-- Whether `via2_ifr[4]` is actually clearable in practice. The path exists
-  (`rtl/iosb.sv:600`, `via2_ifr[6:0] & ~(wbyte[6:0] & 7'h1b)`, and bit 4 is in
-  that mask), but confirm the guest reaches it.
+- **`dd if=/dev/input/mouse5` is NOT a valid injection-liveness check.** MiSTer's
+  main process holds `/dev/input/event16..18` open and grabs them exclusively,
+  so `dd` reads zero bytes whether injection works or not. It read zero on a
+  perfectly healthy machine and nearly sent this session chasing a phantom, and
+  a MiSTer reboot "fixing" it in the past was probably coincidence. Test
+  injection end to end instead: move the mouse and screenshot the cursor.
+- **The 1-in-3-4 boot stall (Fault 2) looks deterministic, not random.** Both
+  boots on a power-cut volume hung at the *byte-identical* frame with identical
+  diff bboxes; all three boots on a freshly restored volume reached the desktop.
+  `scripts/mac_shutdown.sh`'s own header already says a power-cut image "hung
+  mid-boot at a repeatable offset — which then got misdiagnosed as an RTL fault
+  more than once." Restore the disk before believing any mid-boot hang.
+- **The old step 3 broke the video.** It said to point `.clk_vid(clk_sys)` at the
+  `quadra800` instantiation "leaving `CLK_VIDEO` alone". Do not: the framework
+  samples the core's video on `CLK_VIDEO`, so a 33.33 MHz scanout clocked out at
+  25.175 MHz keeps 3 pixels in 4 and the picture comes out squeezed to 484 px of
+  640 and blurred. Both clocks must move together.
+- The OSD **cannot be driven from a script here.** Neither mrext's named keys
+  (`kbd:osd`) nor raw keycodes (`raw:88` = F12) reach it, MiSTer writes no
+  `.cfg` to confirm a change, and screenshots capture the core's native 640x480
+  *before* the OSD and before aspect scaling. Runtime OSD toggles are therefore
+  useless for A/B testing — make the arm you want to test the `status=0`
+  default and rebuild.
 
-Second suspect, much weaker: `1198644` moved the DAFB scanout to a 25.175 MHz
-pixel clock and the VBL crossing became a toggle + 2FF edge detect
-(`rtl/dafb.sv`). If VBL were being *lost*, though, the cursor would stutter and
-the symptom is the opposite — the cursor is the thing that still works.
+## Still open
 
-## Why the pixel clock is the weaker suspect
-
-Worth knowing before spending a build on it. The clk_sys → clk_vid crossings in
-`1198644` are: a 2FF sync on quasi-static config, a toggle + edge detect for the
-VBL, a dual-clock M10K for the VRAM read, and two combinational reads
-(`vid_stride` into the address mapper, and the CLUT into the pixel path). The
-combinational ones are declared false paths, so if they are too slow the result
-is **wrong pixels, not a wedged CPU** — and the reported screen is drawn
-correctly. Nothing in that commit can hold a VIA2 interrupt line up.
-
-**But note the sim cannot test it.** `verilator/sim.v` ties `.clk_vid(clk_sys)`
-deliberately (so existing frame counts do not move), so in simulation the two
-domains are the same clock and the crossing barely exercises. A bug that needs a
-genuinely different clock will not reproduce there. The ASC, by contrast,
-reproduces in sim perfectly well.
-
-## Do these in order
-
-**1. Isolate the ASC interrupt with a one-line change.** In `rtl/iosb.sv:428`:
-
-```verilog
-wire asc_irq_i = asc_irq;   // was: asc_irq | easc_irq
-```
-
-Rebuild, deploy. If the clock ticks again, it is the ASC interrupt and the fix
-belongs in `rtl/easc.sv` — do not ship the machine with the line cut, because
-without it the Sound Manager fills the FIFO once and is never asked for more, so
-sound plays for 46 ms and stops.
-
-**2. Prove it in sim — the probe is already written.**
-`scratch/instr_irq.py` patches a scratch copy of `rtl/iosb.sv` with a
-`synthesis translate_off` block that logs:
-
-- every change of VIA2 IFR/IER, with which source is up (asc / vbl / scsi / drq)
-- how long `ipl_n` has been continuously presenting IPL 2 — it prints at 1 ms,
-  10 ms, 100 ms (`STUCK`) and 1 s (`WEDGED`)
-- once-a-second rates of ASC and VBL interrupt edges
-
-A handful of ASC edges per second is the Sound Manager working; a `STUCK`/
-`WEDGED` line, or IFR bit 4 set with IER bit 4 enabled and never clearing, is
-the bug. Build and run it with:
-
-```bash
-rsync -a --exclude .git --exclude 'obj_dir*' rtl verilator ~/irqchk/
-python3 scratch/instr_irq.py ~/irqchk/rtl/iosb.sv
-cd ~/irqchk/verilator && ln -sf ~/adbC/verilator/quadra800-fastboot.rom.hex . && make -j10
-./obj_dir/Vemu --headless --no-cpu-trace --max-cycles 9000000000     --disk ~/boots/irq.hda +rom=quadra800-fastboot.rom.hex +mousewiggle=3 > ~/logs/irq1.log
-grep -E 'VIA2|IPL2|RATE' ~/logs/irq1.log
-```
-
-That tree is built and a 9G-cycle boot was left running when this was written;
-`~/logs/irq1.log` may already have the answer in it. Mac OS is reached at around
-5G cycles, so the interesting part is the tail, not the head.
-
-**3. Only then** consider the video CDC: point `.clk_vid(clk_sys)` in
-`wombat33.sv`'s `quadra800` instantiation (leaving `CLK_VIDEO` alone) and see
-whether anything changes.
-
-## Traps that will otherwise cost you an hour each
-
-- **mrext's input injection dies, repeatedly** — four times in one session. The
-  websocket keeps logging every message to `/tmp/remote.log` while
-  `/dev/input/event16..18` and `/dev/input/mouse5` go completely silent. A
-  `-service restart` does not fix it; a MiSTer reboot does. Check it with
-  `dd if=/dev/input/mouse5 bs=3 count=60` (NOT `bs=1`, which evdev rejects, and
-  NOT `timeout cat`, which buffers and loses everything on SIGTERM) **before**
-  concluding the guest has hung. If the user says the mouse moves and your
-  script sees nothing, this is why.
-- **The boot stalls about 1 in 3-4** at "Starting Up…", with the disk file
-  position frozen. That is Fault 2 in `RESUME-adb-and-corruption.md`, it long
-  predates this regression, and it is a different signature (frozen *during*
-  boot, no watch cursor). Do not conflate them.
-- The volume is currently NOT cleanly unmounted, so a boot shows the "may not
-  have been shut down properly" alert. `scripts/mac_shutdown.sh` shuts the guest
-  down unattended and works — but it needs mrext alive.
-- Restore the disk from `games/Wombat33/backup/QuadSquad8.hda.gz` (md5
-  `f4287aee9ff9a4413fa1e5fd9f2d63b4`, ~6 min) before believing any hang.
-
-## Context you will want
-
-- `RESUME-adb-and-corruption.md` — everything else open on this core, and the
-  ground rules.
-- `docs/adb-via-shift.md` — the ADB fix in `5352b84`, for what the 0830 release
-  behaves like.
-- Last night's commits: `5352b84` via6522, `e0990f0` EASC FIFO, `1198644` pixel
-  clock, `6599b0b` EASC interrupt edges.
-- `make tb_easc` in `verilator/` — 18 directed checks on the sound chip, seconds,
-  no ROM or disk needed. Run it after any change to `rtl/easc.sv`.
+- **`scripts/mac_shutdown.sh` is unreliable.** It failed twice in a row against a
+  plainly visible Finder menu bar with `Special` right there, reporting
+  `no menu open (probe: NONE)` through every step and releasing with nothing
+  selected. A plain desktop click worked immediately before, so mouse-down does
+  register — something in its press-and-drag path does not. This matters: the
+  script is the stated reason you never have to power-cut the volume.
+- **clk_sys has ~0 ns timing margin.** The critical path is
+  `ap040_core|ir[7] -> exc_fmt[0]`, inside the CPU core. Any netlist
+  perturbation flips it, and it cost four wasted 20-minute builds in one
+  session. Quartus is deterministic here (a clean fit reproduced −0.165 ns
+  exactly, and wiping `db/` changed nothing), so reseeding is a real search, not
+  a re-roll. See the seed history in `wombat33.qsf`.
+- `make tb_easc` passes 18/18. Run it after any `rtl/easc.sv` change — it is
+  seconds, and it now pins the FIFOSTAT semantics that caused this bug.

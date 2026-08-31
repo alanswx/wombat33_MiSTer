@@ -12,8 +12,49 @@ must never be flashed (`scripts/deploy_screenshot.sh` refuses one).
 
 | build | md5 | timing | notes |
 |---|---|---|---|
+| `wombat33_20260831.rbf` | `3901ef5705f58dba3279c0417412f5f8` | met, +0.243 ns | **Sound works.** Fixes the watch-cursor wedge (ASC FIFOSTAT reported an empty FIFO as full) and hooks up the $806 volume slider. |
 | `wombat33_20260830.rbf` | `64c79dfb93ceefb549200c78671cdc31` | met, +0.248 ns | **ADB actually works** — the mouse button reaches the guest and motion stops inventing input. |
 | `wombat33_20260829.rbf` | `4c46a65c3a48b44ddb6f4fd6808d0422` | met, +0.245 ns | First build that boots Mac OS unattended. |
+
+## `wombat33_20260831.rbf`
+
+md5 `3901ef5705f58dba3279c0417412f5f8`, timing met at +0.243 ns (seed 6).
+
+Two changes, both in `rtl/easc.sv`.
+
+**The watch-cursor wedge is fixed.** `$804` FIFOSTAT bits 1/3 read
+`(cap == 0) || (cap >= 1023)`, so an EMPTY FIFO reported itself FULL. A guest
+that fills until the full flag sets therefore wrote nothing; with no bytes
+queued nothing ever popped, so the half-empty edge never fired and no refill
+interrupt was ever raised. The wait never ended. Mac OS sat at a fully drawn
+desktop with a watch cursor and a stopped menu-bar clock while ADB kept
+tracking the mouse at interrupt level -- interrupts were fine all along, the
+foreground was simply blocked forever.
+
+Scored on hardware against `wombat33_20260830.rbf`, every run on a freshly
+restored disk:
+
+| build | scanout | ASC IRQ | menu-bar clock |
+|---|---|---|---|
+| `20260830` (known good) | 33 MHz | n/a | ticks |
+| pre-fix | 25.175 MHz | off | FROZEN |
+| pre-fix | 33 MHz | off | FROZEN |
+| pre-fix | 25.175 MHz | off | FROZEN (2nd sample) |
+| this build | 25.175 MHz | **on** | ticks |
+
+Note rows 2-4: the wedge reproduced with the ASC interrupt DISCONNECTED and
+with the DAFB scanout forced back off the 25.175 MHz pixel clock. Both of
+those were the prime suspects and both are innocent. Do not re-investigate
+them; the fault was always the status register.
+
+**The Sound control panel's volume slider works.** `$806` was stored and
+ignored (MAME does not apply it either). Bits 7-5 are the eight steps the
+panel offers; the gain table is `x*256/7` so step 7 is EXACTLY unity and a
+machine at maximum sounds identical to before. `volume` resets to `0xE0`
+(max), not 0 -- the boot chime is ROM-generated before Mac OS loads any sound
+preference, and a zero reset would silence it.
+
+`make tb_easc` passes 18/18, including `stat after reset = 05`.
 
 ## `wombat33_20260830.rbf`
 

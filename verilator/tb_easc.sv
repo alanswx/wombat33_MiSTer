@@ -133,10 +133,11 @@ initial begin
 
 	bus_read(12'h804, rv);
 	$display("      stat after reset = %02x", rv[31:24]);
-	// bits: 0 = A under half, 1 = A empty-or-full, 2/3 = same for B. Empty is
-	// also under-half, so the live flags read 0x0F where MAME's sticky model
-	// writes 0x0A on a clear.
-	check(rv[31:24] == 8'h0F, "both FIFOs report empty (stat = 0x0F)");
+	// bits: 0 = A under half, 1 = A FULL, 2/3 = same for B.  An empty FIFO is
+	// under-half but NOT full, so this reads 0x05.  It used to read 0x0F,
+	// because bit 1 folded in (cap == 0) -- reporting empty as full is what
+	// wedged Mac OS; see the fifo_stat comment in rtl/easc.sv.
+	check(rv[31:24] == 8'h05, "an empty FIFO is under-half but NOT full (stat = 0x05)");
 
 	// 8 longwords = 32 bytes into FIFO A, a rising ramp.  NB: an expression
 	// like {8'h80 + i*4, ...} promotes each operand to 32 bits (i is an
@@ -155,7 +156,7 @@ initial begin
 	check(dut.cap_b >= 24 && dut.cap_b <= 32, "FIFO B took the longword writes");
 
 	bus_read(12'h804, rv);
-	check(rv[31:24] == 8'h05, "both FIFOs now half-empty, neither empty/full");
+	check(rv[31:24] == 8'h05, "32 bytes in: both FIFOs under half, neither full");
 
 	// let it play out: 32 samples at SAMPLE_DIV=20
 	trace_pops = 1;

@@ -66,7 +66,24 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # 2026-08-30: seed 2 gave -0.283 ns hold on clk_ram after the via6522 shift-clock
 # fix -- a clk_sys-domain change that cannot reach the 99 MHz domain, so it was
 # the placement swinging again, not the RTL. Seed 3 fits.
-set_global_assignment -name SEED 3
+# 2026-08-31: seed 3 then gave SETUP -0.435 ns and -0.165 ns on clk_sys for a
+# one-line easc.sv change that REMOVES logic (the fifo_stat full flag), while
+# the same tree had fitted at +0.201..+0.246 ns minutes earlier. Placement
+# again, not the RTL. Seed 4 also missed (-0.393 ns setup on clk_sys, one
+# endpoint, 1.3% of the 30.303 ns period). clk_sys sits at roughly 0 +/- 0.4 ns
+# and flips sign with placement; the ASC does not appear in any failing path.
+# Seed 5 was worse still (-1.643 ns), i.e. four straight misses trending the
+# wrong way -- outside the +/-0.4 ns band this design normally swings in. Two
+# fitter runs had been killed with taskkill /F mid-fit that morning and db/ +
+# incremental_db/ were carried through every build after, so the state was
+# suspect. Wiping both dirs changed nothing: a clean seed-3 fit reproduced
+# -0.165 ns exactly, so Quartus is deterministic here and db/ was never the
+# problem. report_timing names the path: ap040_core|ir[7] -> |exc_fmt[0], i.e.
+# INSIDE THE CPU CORE on clk_sys -- nothing to do with whatever RTL you just
+# touched. The design has ~0 ns margin there and any netlist perturbation
+# flips it, so walk seeds and do not go hunting in your own diff. Tried:
+# 3 -> -0.165, 4 -> -0.393, 5 -> -1.643.
+set_global_assignment -name SEED 6
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
