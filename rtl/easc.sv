@@ -235,6 +235,12 @@ wire pop_b = tick && fifo_mode && (cap_b != 0);
 wire psh_a = push_do && !push_to_b;
 wire psh_b = push_do &&  push_to_b;
 
+// interrupt edges: the pop that crosses half-empty, and the push that fills
+wire half_cross_a = pop_a && (cap_a == 11'd511);
+wire half_cross_b = pop_b && (cap_b == 11'd511);
+wire fill_a       = psh_a && (cap_a >= 11'd1022);
+wire fill_b       = psh_b && (cap_b >= 11'd1022);
+
 reg irq_r;
 assign irq = irq_r;
 
@@ -351,12 +357,19 @@ always @(posedge clk) begin
 		end
 
 		// ---- interrupt ---------------------------------------------------
-		// Only (re)assert on the sample tick.  Re-asserting every clock
-		// re-interrupts the CPU before its handler can RTE, which is an
-		// interrupt storm -- the exact failure MacLC's asc.sv documents.
+		// EDGE, not level. MAME raises it when a pop takes the capacity down
+		// THROUGH the half-way mark (asc.cpp keeps the cap from before the
+		// decrement precisely so the last sample does not re-trigger) and
+		// when a push fills the FIFO; it is cleared by a FIFOSTAT read.
+		//
+		// A level condition here -- "assert whenever cap < 512" -- turns an
+		// idle chip left in FIFO mode into a 22 kHz interrupt source that the
+		// guest cannot switch off, because an empty FIFO is permanently under
+		// half full. That is an interrupt storm of exactly the kind MacLC's
+		// asc.sv header warns about, and it hangs the machine.
 		if (stat_read)
 			irq_r <= 1'b0;
-		else if (tick && fifo_mode && ((cap_a < 512) || (cap_b < 512)))
+		else if (half_cross_a || half_cross_b || fill_a || fill_b)
 			irq_r <= 1'b1;
 
 		// ---- register writes ---------------------------------------------

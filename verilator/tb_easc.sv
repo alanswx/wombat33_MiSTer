@@ -193,6 +193,25 @@ initial begin
 	check(sample_l == 16'sh4000 && sample_r == 16'sh4000,
 	      "CONTROL_STEREO clear mirrors FIFO A to both channels");
 
+	// ---- interrupt: an EDGE, never a level -------------------------------
+	// An idle chip in FIFO mode must NOT interrupt. A level condition here
+	// ("cap < 512") makes an empty FIFO a 22 kHz interrupt source the guest
+	// cannot switch off, which hangs the machine.
+	reg_write(12'h802, 8'h02);          // stereo again
+	reg_write(12'h803, 8'h80);          // clear both FIFOs
+	bus_read(12'h804, rv);              // clear any latched irq
+	repeat (400) @(posedge clk);        // 20 sample ticks with empty FIFOs
+	check(irq == 1'b0, "an empty FIFO does not interrupt (no storm)");
+
+	// fill past half, then let it drain through the half-way mark
+	for (i = 0; i < 160; i = i + 1)
+		bus_write(12'h000, 4'b1111, word4(8'h90, 1));
+	$display("      cap_a=%0d after the big fill", dut.cap_a);
+	bus_read(12'h804, rv);              // clear
+	check(irq == 1'b0, "irq clear after a FIFOSTAT read");
+	while (dut.cap_a > 505) @(posedge clk);
+	check(irq == 1'b1, "irq raised as the FIFO drains through half-empty");
+
 	// ------------------------------------------------------------ wavetable
 	$display("--- wavetable mode ---");
 	reg_write(12'h801, 8'h02);                 // mode = 2
