@@ -1,7 +1,8 @@
-# RESUME — after the ADB fix and the bench unblock
+# RESUME — after the ADB fix, the bench unblock, sound and the pixel clock
 
 State of the Quadra 800 core after the 2026-08-30 evening session. Read this
-before touching `rtl/via6522.sv`, `rtl/iosb.sv`, or the bench.
+before touching `rtl/via6522.sv`, `rtl/easc.sv`, `rtl/dafb.sv`, `rtl/iosb.sv`,
+or the bench.
 
 **Closed this session, do not re-investigate:** the ADB phantom-input fault
 (root cause found, fixed, verified in sim against a scored control and twice on
@@ -40,6 +41,13 @@ build/deploy timing gate, and the RTC.
   calibration was also measured through the corrupted stream — the same bug
   doubled the deltas — so those numbers are void twice over. Pacing is
   unchanged: 0.02 s works; 0.008 s drops moves.
+- **mrext's input injection dies, repeatedly.** It happened twice in one
+  session: the websocket keeps logging every message to `/tmp/remote.log` while
+  `/dev/input/event16..18` and `/dev/input/mouse5` go completely silent. A
+  `-service restart` did not fix it; a MiSTer reboot did. Check it with
+  `dd if=/dev/input/mouse5 bs=3 count=60` (NOT `bs=1`, which evdev rejects, and
+  NOT `timeout cat`, which buffers and loses everything on SIGTERM) **before**
+  concluding the guest has hung.
 - **mrext's mouse button payloads are `left_down` / `left_up`.** `mouseBtn:1`
   and `mouseBtn:0` are accepted by the websocket and appear in `/tmp/remote.log`
   but do nothing at all. That is an easy way to conclude "the button is broken".
@@ -153,6 +161,80 @@ The submodule is deliberately still clean at `0e76761` — vendored upstream, so
 the patch belongs upstream, not as a local divergence. **The report is now
 sendable.** Sending it is a decision for a human, not something to do unasked.
 
+## SOLVED — sound: only the boot chime worked, now all of it does
+
+`rtl/asc_wavetable.sv` implemented ONLY the wavetable path and its mixer forced
+the output to zero in every other mode:
+
+```verilog
+if (tick && mode == 8'd2) ... out <= acc <<< 5;
+else if (mode != 8'd2) out <= 0;
+```
+
+Measured in sim: the ROM sets MODE = 2 at t=34.8M, loads the four voice
+increments and plays the chime, then at t=121.8M sets MODE = **1** (FIFO) and
+starts streaming bytes. Everything after that — every Mac OS beep, alert and
+application sound — went into a mixer hard-wired to silence.
+
+Now `rtl/easc.sv`. **Named easc, not asc, because it is not the LC's part**:
+MAME wires `ASC_EASC` into the IOSB (`apple/iosb.cpp:89`) with channel 0 to the
+left speaker and channel 1 to the right, so it is stereo and its FIFO plays at
+full 16-bit amplitude where the LC's V8 `asc_v8_device` plays at 1/8. Two
+1024-byte FIFOs, A → left and B → right, 22257 Hz, offset-binary samples, live
+FIFOSTAT flags.
+
+**The interrupt had never been connected at all** — `iosb`'s `asc_irq` port is
+tied to `1'b0` in `quadra800.sv` — so even a working FIFO would have played
+1024 samples (46 ms) and never been asked for more.
+
+**Trap, and it cost a hardware freeze:** that interrupt must be an EDGE. The
+first version asserted whenever a FIFO was under half full; an *empty* FIFO is
+permanently under half full, so an idle chip in FIFO mode became a 22 kHz
+interrupt source the guest could not switch off, VIA2 IFR bit 4 latched, and the
+machine froze at the desktop with the menu-bar clock stopped. MAME raises it
+only on the pop that crosses the half-way mark and the push that fills, cleared
+by a FIFOSTAT read; that is what is there now.
+
+`verilator/tb_easc.sv` (`make tb_easc`, seconds, no ROM or disk) is 18 directed
+checks including that an idle FIFO does not interrupt. **Run it before trusting
+any change to that file** — the machine only touches the FIFO billions of cycles
+into a boot, so the full sim is a terrible place to find sound bugs.
+
+Still not applied: `$806` VOLUME is stored and reads back but does not scale the
+output, following MAME. Hook it up if the guest's Sound control panel needs to
+work.
+
+## SOLVED — the "weird screen": the core had no pixel clock
+
+Reported with a photo: the Mac OS splash repeated four times across the width.
+The DAFB scanned out on `clk_sys`, so 640x480 in an 800x525 frame refreshed at
+33 MHz / (800*525) = **78.6 Hz with a 33 MHz dot clock**. Main_MiSTer's
+`vsync_adjust` measures the core's frame time and programs the HDMI pixel clock
+from it — acceptance window a useless 2..300 MHz, `refresh_min`/`max` guards
+default OFF — so a mode that far off spec becomes an out-of-spec HDMI mode that
+**latches** until the next video change.
+
+Fixed by doing what the Mac LC core does, which is what was asked for:
+`rtl/pll_video.v` is ported from `MacLC_MiSTer/rtl/pll_video.v` (minus the
+runtime reconfiguration this core has no use for) and gives exactly 25.175 MHz →
+VGA 640x480 @ 59.94 Hz. `CLK_VIDEO` is that clock, `CE_PIXEL` stays 1.
+
+Everything from `hcnt`/`vcnt` down in `dafb.sv` moved to `clk_vid`; the register
+file, CLUT writes and the VBL status bit stay on `clk_sys`. The three crossings
+are MacLC's: `fb_base`/`stride`/`mode` 2FF-synced in (quasi-static, worst case
+one torn frame), the VBL back as a **toggle** plus edge detect (a level would be
+one 40 ns pulse against a 30 ns clock), and the VRAM read port as a dual-**clock**
+M10K, which the block natively is.
+
+`wombat33.sdc` declares the new PLL asynchronous to everything else. Without
+that it lands in NO clock group — `sys_top.sdc`'s pattern matches only the main
+PLL — and every framework path touching `CLK_VIDEO` is timed against unrelated
+domains. `MacLC.sdc:78` has the same block and records why.
+
+The Verilator sim keeps the scanout on `clk_sys` (78.6 Hz), as MacLC's does:
+the pixel clock only matters to the HDMI scaler on real hardware, and changing
+it would move every frame count in the existing regressions.
+
 ## OPEN — Fault 2, the boot stall (still the real one)
 
 Reproduced this session on the **fixed** core, on a **freshly restored pristine**
@@ -168,7 +250,13 @@ corruption.** Sector 1,437,035 was compared byte-for-byte against pristine and
 is identical, containing valid 68k code. `735,761,920` was simply where reading
 stopped.
 
-**The lead worth chasing first** — from reading the ROM's ADB interrupt handler
+**The ADB-deadlock hypothesis below did NOT reproduce.** Four parallel sim boots
+with deliberately varied ADB load (no mouse / wiggle=2 / 3 / 7, 8G cycles each,
+32G total) all reached Mac OS, and the detector committed for it fired zero
+times. That is a real negative, though not a conclusive one: the sim is
+deterministic and does not model the real SD latency the hardware sees.
+
+**The lead, still unproven** — from reading the ROM's ADB interrupt handler
 in `docs/quadra800-rom-disassembly.asm`, `a1` = VIA1 base:
 
 ```
@@ -264,6 +352,14 @@ failing safely; re-run it if it aborts.
   across a shift-out completion or a CPU SR write; both replace the register.
 - `scripts/adb_hw_test.sh` — the click and phantom-input regressions on
   hardware, in one command.
+- `scripts/menubar_probe.py` / `scripts/menuitem_probe.py` — read which menu is
+  pulled down and which row is highlighted out of a screenshot, so a script can
+  navigate the guest without trusting a pixel count.
+- `verilator/tb_easc.sv` + `make tb_easc` — 18 directed checks on the sound
+  chip, in seconds, with no ROM or disk.
+- `scratch/instr_asc.py`, `scratch/instr_easc2.py` — `$display` probes for the
+  sound chip's registers, voice bytes and FIFO contents. `scratch/` is
+  gitignored, so move them to `docs/tools/` if they earn a second use.
 
 Sim invocation that produced everything above:
 
@@ -286,10 +382,23 @@ run at all.
   not `gate.hda`.
 - The MiSTer was rebooted at 20:51, so the Main is the inittab-started one again
   and `/tmp/mister.log` is gone. inittab starts it once and does not respawn it.
-- Deployed core: `output_files/wombat33.rbf` from `5352b84`, SEED 3, timing met
-  (+0.248 ns). SEED 2 gave −0.283 ns hold on the 99 MHz clk_ram domain, which a
-  clk_sys change cannot reach — reseed rather than blaming the RTL, as the qsf
-  comment says.
+- Deployed core: `output_files/wombat33.rbf` from `6599b0b` (md5
+  `2be4c8d06cb91c8238a91f500c3e973b`), SEED 3, timing met (+0.204 ns). It is
+  running with the volume NOT cleanly unmounted, so the next boot will show the
+  "may not have been shut down properly" alert. SEED 2 once gave −0.283 ns hold
+  on the 99 MHz clk_ram domain, which a clk_sys change cannot reach — reseed
+  rather than blaming the RTL, as the qsf comment says.
+- **What is and is not verified on hardware.** The video change is verified as
+  far as this seat allows: the core boots and renders a clean 640x480 desktop on
+  the new dot clock. Whether the HDMI tiling is gone can only be confirmed on the
+  physical display — the screenshot API captures the core's framebuffer, not the
+  HDMI signal. The sound is verified by `make tb_easc` (18 checks) and not by
+  ear; nobody has listened to this build.
+- Boot-stall rate on this build: **1 stall in 4 boots**, at "Starting Up..."
+  with `pos` frozen at 562,865,664. That is the same rate as the builds before
+  the sound and video work, so it is Fault 2 and not a regression. (An earlier,
+  genuinely new freeze — at the desktop rather than at boot — WAS caused by the
+  first cut of the EASC interrupt; see that section.)
 - `/tmp` on the MiSTer is a 247 MB tmpfs; do not decompress the 2 GB image there.
 - WSL `/tmp` does **not** survive between `wsl -e` invocations once the last
   process exits — write sim logs to `~/logs`, not `/tmp`.
