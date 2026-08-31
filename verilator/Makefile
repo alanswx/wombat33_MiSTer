@@ -114,5 +114,14 @@ tb_easc:
 	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST -Wno-DECLFILENAME +define+SIMULATION=1 --top-module tb_easc --Mdir ./obj_dir_tb -o tb_easc tb_easc.sv $(RTL)/easc.sv
 	./obj_dir_tb/tb_easc
 
+# Directed unit test for the SDRAM beat bridge (rtl/sdram_beat32.sv) and the
+# controller under it, driven against a behavioural chip model. The GUI sim
+# backs RAM with a plain array, so this is the only place the burst capture,
+# the posted write, the two clock crossings and the chip protocol are checked.
+#   make tb_sdram
+tb_sdram:
+	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST -Wno-DECLFILENAME +define+SIMULATION=1 --top-module tb_sdram --Mdir ./obj_dir_tb -o tb_sdram tb_sdram.sv $(RTL)/sdram_beat32.sv $(RTL)/sdram.sv altddio_out_stub.v
+	./obj_dir_tb/tb_sdram
+
 clean:
 	rm -rf obj_dir obj_dir_tb
