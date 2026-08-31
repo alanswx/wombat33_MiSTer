@@ -86,6 +86,15 @@ module quadra800
 	// Unix seconds from the HPS, for the RTC
 	input  [32:0] timestamp,
 
+	// SCC serial: channel A = modem port (MidiLink / PPP / MIDI),
+	// channel B = printer port (LocalTalk on a real machine; TX only here)
+	input         scc_rxd_a,
+	output        scc_txd_a,
+	input         scc_cts_a,
+	output        scc_rts_a,
+	input         scc_rxd_b,
+	output        scc_txd_b,
+
 	// debug
 	output            dbg_berr,
 	output     [31:0] dbg_berr_addr,
@@ -222,7 +231,13 @@ iosb iosb (
 	.scsi_irq(1'b0),
 	.scsi_drq(1'b0),
 	.asc_irq(1'b0),
-	.scc_irq(1'b0),
+
+	.scc_rxd_a(scc_rxd_a),
+	.scc_txd_a(scc_txd_a),
+	.scc_cts_a(scc_cts_a),
+	.scc_rts_a(scc_rts_a),
+	.scc_rxd_b(scc_rxd_b),
+	.scc_txd_b(scc_txd_b),
 
 	.ipl_n(ipl_n),
 

@@ -51,7 +51,18 @@ module iosb
 	input         scsi_irq,
 	input         scsi_drq,
 	input         asc_irq,
-	input         scc_irq,
+
+	// SCC (Zilog 85C30) serial pins.  The chip itself is instantiated in this
+	// module.  On real hardware it is NOT inside the IOSB -- MAME wires it
+	// straight into the CPU map at $5000C000 (macquadra800.cpp:163) -- but on
+	// this core every $5xxxxxxx beat already lands here, so this is where the
+	// bus adapter belongs.  Channel A = modem port, channel B = printer port.
+	input         scc_rxd_a,
+	output        scc_txd_a,
+	input         scc_cts_a,
+	output        scc_rts_a,
+	input         scc_rxd_b,
+	output        scc_txd_b,
 
 	output  [2:0] ipl_n,           // active-low to the CPU
 
@@ -463,6 +474,10 @@ wire sel_asc    = in_low && (addr[19:12] == 8'h14);
 wire sel_scsi   = in_low && (addr[17:8] == 10'h100);   // 53C96 regs, 16-byte strides
 wire sel_sdma   = in_low && (addr[17:8] == 10'h101);   // Turbo SCSI pseudo-DMA
 wire sel_id     = (addr[27:16] == 12'hFFF);
+// SCC at $5000C000-$5000DFFF.  MAME maps it .mirror(0x00fc0000), i.e. bits
+// 23:18 are don't-care, so this decodes on [17:13] rather than the strict
+// [19:13] the VIA2/djMEMC selects use -- same reasoning as sel_scsi above.
+wire sel_scc    = in_low && (addr[17:13] == 5'b00110);
 wire [3:0] rsel = addr[12:9];
 
 //----------------------------------------------------------------------------
@@ -542,13 +557,82 @@ easc easc (
 	.sample_r(audio_r)
 );
 
+//----------------------------------------------------------------------------
+// SCC (Zilog 85C30), channel A = modem, channel B = printer
+//
+// Register addressing, straight from MAME (macquadra800.cpp:97-103):
+//   u16 mac_scc_r (offs)      -> (result << 8) | result   -- byte mirrored
+//   void mac_scc_2_w(offs, d) -> dc_ab_w(offs, d >> 8)    -- chip on D15-D8
+// The handler is 16-bit over the range, so offset = (addr - base) >> 1 and
+// therefore offset[0] = A1, offset[1] = A2.  z80scc's dc_ab decode is
+// bit0 = channel A/B, bit1 = data/control -- so rs = { A2, A1 }, exactly what
+// the LC/IIvi cores wire as cpuAddr[2:1].
+//
+// On this 32-bit beat bus A1 is NOT part of `addr` (which starts at bit 2):
+// it is carried by the byte enable.  Word 0 of the longword is lanes be[3:2]
+// (A1=0), word 1 is lanes be[1:0] (A1=1), and the SCC byte is the UPPER byte
+// of whichever word -- be[3] or be[1].  A longword access (be=1111) resolves
+// to the lower address, word 0.
+//
+// A1 is deduced from the word, not from be[3] alone: a byte access to an odd
+// address (be[2], i.e. A+1) is the D7-D0 half of word 0, which is not wired to
+// the chip on real hardware.  It must still decode as word 0 -- keying on
+// ~be[3] would have flipped it to the other CHANNEL, turning a stray odd-byte
+// touch into an access to the wrong half of the SCC.
+//----------------------------------------------------------------------------
+wire       scc_word0 = be[3] | be[2];
+wire       scc_a1    = ~scc_word0;
+wire [1:0] scc_rs    = { addr[2], scc_a1 };
+wire [7:0] scc_wbyte = scc_word0 ? wdata[31:24] : wdata[15:8];
+wire [7:0] scc_rdata;
+wire       _scc_irq;
+wire       scc_irq   = ~_scc_irq;    // scc.v drives an active-low pin
+
+// Register-interface clock enables, ~8.25 MHz (clk/4).  The LC and IIvi cores
+// clock the same chip from 8 MHz enables; the real Quadra feeds the 85C30 a
+// 7.8336 MHz PCLK.  The ratio only has to be slow enough for the two-stage
+// pointer protocol to resolve and fast enough not to stall the bus.
+reg [1:0] scc_clkdiv;
+wire scc_cep = (scc_clkdiv == 2'd0);
+wire scc_cen = (scc_clkdiv == 2'd2);
+always @(posedge clk) begin
+	if (!nreset)  scc_clkdiv <= 2'd0;
+	else if (ce)  scc_clkdiv <= scc_clkdiv + 1'b1;
+end
+
+reg scc_cs;
+
+scc #(.SYS_CLK_HZ(33_000_000)) scc_inst
+(
+	.clk       (clk),
+	.cep       (scc_cep),
+	.cen       (scc_cen),
+	.rtxc_en   (1'b0),        // reserved in scc.v; the BRG is driven off clk
+	.reset_hw  (~nreset),
+	.cs        (scc_cs),
+	.we        (write),
+	.rs        (scc_rs),
+	.wdata     (scc_wbyte),
+	.rdata     (scc_rdata),
+	._irq      (_scc_irq),
+	.rxd       (scc_rxd_a),
+	.txd       (scc_txd_a),
+	.cts       (scc_cts_a),
+	.rts       (scc_rts_a),
+	.rxd_b     (scc_rxd_b),
+	.txd_b_out (scc_txd_b),
+	.dcd_a     (1'b1),        // Quadra 800 is ADB: DCD is not mouse quadrature
+	.dcd_b     (1'b1),
+	.wreq      ()             // W/REQ unused -- no SCC DMA on this machine
+);
+
 // write byte: highest enabled lane (VIA registers never span lanes)
 wire [7:0] wbyte = be[3] ? wdata[31:24] :
                    be[2] ? wdata[23:16] :
                    be[1] ? wdata[15:8]  : wdata[7:0];
 
 localparam A_IDLE = 3'd0, A_VIA = 3'd1, A_CAPTURE = 3'd2, A_SDMA = 3'd3,
-           A_ASC = 3'd4;
+           A_ASC = 3'd4, A_SCC_ACC = 3'd5, A_SCC_REL = 3'd6;
 reg [2:0] astate;
 reg [3:0] sdma_be;                 // byte lanes of the pseudo-DMA beat
 
@@ -570,6 +654,7 @@ always @(posedge clk) begin
 		sdma_rd <= 0; sdma_wr <= 0; sdma_left <= 0;
 		sdma_shift <= 0; sdma_wbyte <= 0; sdma_be <= 0;
 		sdma_watch <= 0; sdma_fault <= 0;
+		scc_cs <= 0;
 	end
 	else if (ce) begin
 		ack        <= 0;
@@ -641,6 +726,18 @@ always @(posedge clk) begin
 						astate <= A_ASC;
 					end
 				end
+				else if (sel_scc) begin
+					// The SCC's register protocol needs the CS window to span
+					// a cen pulse (that is where the access is consumed), and
+					// then needs CS LOW across another cen pulse -- that is
+					// where scc.v clears cs_access_done and applies the
+					// deferred pointer cleanup and RX-FIFO pop.  Acking here
+					// would collapse both into one beat and swallow every
+					// second access, so hold the ack until A_SCC_REL.
+					ack    <= 0;
+					scc_cs <= 1;
+					astate <= A_SCC_ACC;
+				end
 				else if (sel_scsi) rdata <= {4{ncr_rdata}};  // scsi_strobe fires
 				else if (sel_sdma) begin
 					// pseudo-DMA beat: hold off the ack until the chip has
@@ -683,6 +780,23 @@ always @(posedge clk) begin
 		end
 		A_ASC: begin
 			rdata  <= asc_rdata;
+			ack    <= 1;
+			astate <= A_IDLE;
+		end
+		// SCC access, phase 1: CS is high.  scc.v consumes the access on the
+		// cen pulse; rdata is combinational and valid for the whole window, and
+		// the RX-FIFO pop is deferred to CS release, so sampling it on this
+		// same edge captures the pre-pop byte -- which is what a real CPU
+		// latching late in the cycle would see.
+		A_SCC_ACC: if (scc_cen) begin
+			rdata  <= {4{scc_rdata}};   // MAME mirrors the byte across the word
+			scc_cs <= 0;
+			astate <= A_SCC_REL;
+		end
+		// Phase 2: CS is low across a cen pulse, which is where scc.v clears
+		// cs_access_done and applies the pointer cleanup / FIFO pop.  Only then
+		// is the chip ready for the next access, so the ack goes here.
+		A_SCC_REL: if (scc_cen) begin
 			ack    <= 1;
 			astate <= A_IDLE;
 		end
