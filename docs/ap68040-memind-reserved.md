@@ -5,6 +5,9 @@
 **Found:** wombat33_MiSTer CPU acceptance gate, scored against a **real Quadra 800**
 capture (`SingleStepTests/results/allinone/cpu_hardware_quadra800_2026-08-28.jsonl`)
 **Patch:** `docs/ap68040-memind-reserved.patch` (one term removed from one line)
+**Status:** **VERIFIED** on the scored gate, 2026-08-30 — `cpu` goes from 2 REAL
+diffs to 0, exactly as this report predicted, with no regression in any other
+suite. See "Verification" below.
 
 ## Summary
 
@@ -85,7 +88,7 @@ deletes `|| (extw[6] && extw[2])` and adds a comment recording why. The other
 three illegality checks are untouched — `BD SIZE = 00`, `extw[3] != 0` and
 `I/IS = 100` remain rejected.
 
-## Status: UNVERIFIED, but NOT a regression (corrected 2026-08-30)
+## History: how this was briefly mis-attributed (2026-08-30, earlier)
 
 The patch was built into a core (`544d7976`) and run on the MiSTer at .143
 against the `2026-08-28b` bench image. The bench stalled after the happy Mac at
@@ -99,19 +102,18 @@ The control was then run in all four combinations, and they are identical:
 | patched CPU | stalls, `pos=65536` | stalls, `ncr=2042`, last `lba=97` |
 | stock CPU   | stalls, `pos=65536` | stalls, `ncr=2042`, last `lba=97` |
 
-The bench does not run on this core **with or without** the patch, so the patch
-is not responsible. Two lessons worth keeping: the first attribution was made
-without running the stock-CPU control, and the sim half of the comparison was
-additionally invalid because it used the HARDWARE-flavor image — which
-`RESUME-disk-gate.md` says needs `make-emulator-gate-disk.sh` re-blessing to
-boot under the sim at all.
+The bench did not run on this core **with or without** the patch, so the patch
+was not responsible. Two lessons worth keeping: the first attribution was made
+without running the stock-CPU control, and **both** halves of the comparison used
+the HARDWARE-flavor image — which `RESUME-disk-gate.md` says needs
+`make-emulator-gate-disk.sh` re-blessing, "FPGA runs need this image too". Every
+cell of that matrix is a property of the disk, not of the core.
 
-**Where that leaves the patch: unverified, not disproven.** The decode analysis
-and the 4/4 encoding correlation stand, and the hardware capture showing
-`vec = 0` stands. What is still missing is a scored before/after, and that is
-blocked on the bench not running on this core — a separate problem, unrelated
-to the CPU. Do not send the report as "verified" until that gate produces a
-number; the honest claim today is "analysis only".
+**Where that left the patch at the time: unverified, not disproven.** The decode
+analysis and the 4/4 encoding correlation stood, and the hardware capture showing
+`vec = 0` stood; what was missing was a scored before/after, blocked on the bench
+not running. That block turned out to be the disk, not the core — see
+Verification.
 
 Separately, the last SCSI transaction before the bench stall completes textbook
 clean (read `lba=97`, 512 bytes, status, command complete, message accepted, bus
@@ -119,12 +121,58 @@ idle). The engine is healthy and idle — the driver simply stops issuing
 commands. So the bench stall is a software/CPU-side stop, not a SCSI wedge, and
 it wants its own investigation.
 
+## Verification (2026-08-30)
+
+The bench never ran because **`gate.hda` was the hardware-flavor image**, byte
+identical (md5 `309e785d…`) to the raw prebuilt on both the MiSTer and the
+laptop. `RESUME-disk-gate.md` already said the emulator-flavor re-bless is
+needed and that "FPGA runs need this image too"; it had simply never been
+applied. Re-blessing it with `docs/tools/make-emulator-gate-disk.sh` makes the
+bench run to completion — the stall was never a CPU or SCSI fault.
+
+Full-machine Verilator runs, same blessed disk, same fastboot ROM, scored with
+`gen/score_vs_oracle.py` (no `--flat-env`) against the 2026-08-28 Quadra 800
+silicon captures:
+
+| suite | rows | stock `ap040_core.v` | with this patch |
+|---|---|---|---|
+| **cpu** | 717/717 | **2 REAL** (13,585 field-groups) | **0 REAL** (13,623) |
+| fpu | 270/270 | 0 REAL | 0 REAL |
+| saverestore | 8/8 | 0 REAL | 0 REAL |
+| integration | 1328/1328 | 0 REAL | 0 REAL |
+| mmu (full) | 24/25 | 13 REAL | 13 REAL (unchanged) |
+
+The two stock-CPU diffs are exactly the rows this report names, and nothing
+else:
+
+```
+REAL  MOVE.L ([bd.W,A6]),D1  memind no-idx no-od (->DEADCAFE)      vec: oracle 0 candidate 4
+REAL  MOVE.L ([bd.W=0,A6],od.W=4),D1  postindexed no-idx (->FEEDFACE) vec: oracle 0 candidate 4
+```
+
+Both disappear with the patch, and the field-group count *rises* by 38 — the
+instructions now execute and their result fields get compared instead of the
+row ending at a trap. **The prediction in this report — "should go from 2 REAL
+diffs to 0" — was made before the gate existed and is what the gate returned.**
+
+Raw rows are archived beside this report:
+`SingleStepTests/results/ap68040/fullmachine_cpu_stock_2026-08-30.jsonl` and
+`…_cpu_memindpatch_2026-08-30.jsonl`.
+
+The MMU 13 are unrelated to this patch (identical in both arms) and are a
+full-machine-harness question: `results/ap68040/README.md` records 24/24 with 0
+REAL diffs under the `preboot/sim040` corpus harness, which supplies the
+identity-translation world the MMU corpus needs. They are not evidence about
+this change either way.
+
+The submodule is deliberately left clean at `0e76761`: this is a vendored
+upstream tree, so the patch belongs upstream rather than as a local divergence.
+
 ## Caveats, stated plainly
 
-- **Not verified on silicon as a fix.** The analysis is from the decode plus the
-  hardware capture; the patched core has not yet been re-scored against the
-  oracle. The wombat33 gate (`cpu` suite, no `--flat-env`) is the check, and
-  should go from 2 REAL diffs to 0.
+- **Scored against a silicon capture, not run on silicon.** The check is the
+  wombat33 `cpu` gate against the Quadra 800 capture, and it is now green; the
+  patched core has not been run on a real 68040.
 - **No evidence this causes the disk corruption** being chased separately in
   wombat33. An illegal-instruction trap is loud — a bomb or Sad Mac — not silent
   data damage. It is a real defect worth fixing on its own merits; it should not
