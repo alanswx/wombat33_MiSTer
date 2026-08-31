@@ -280,8 +280,14 @@ wire [31:2] mem_addr;
 wire  [3:0] mem_be;
 wire [31:0] mem_wdata;
 wire  [1:0] mem_memsel;
-reg  [31:0] mem_rdata;
-reg         mem_ack;
+wire [31:0] mem_rdata;                     // VRAM/ROM reg, or the SDRAM bridge
+wire        mem_ack;
+reg  [31:0] mem_rdata_r;
+reg         mem_ack_r;
+
+wire        mem_is_ram  = (mem_memsel == 2'd0);
+wire        mem_is_rom  = (mem_memsel == 2'd1);
+wire        mem_is_vram = !mem_is_ram && !mem_is_rom;
 
 wire [21:2] vid_addr;
 reg  [31:0] vid_rdata;
@@ -516,94 +522,37 @@ assign LED_DISK = {1'b1, sd_rd[0] | sd_wr[0]};
 // SDRAM — the machine's RAM.  ROM stays in DDR3 (it is uploaded once
 // through the ioctl path and read rarely enough that latency is free).
 //
-// The MiSTer module is a 16-bit part, so one 32-bit machine beat is two
-// consecutive 16-bit accesses.  The controller (Sorgelig's, from
-// NeoGeo_MiSTer) runs at 99 MHz — three times clk_sys, from the same PLL —
-// and derives SDRAM_CLK itself with an altddio_out, so no phase-shifted
-// clock is needed here.
-//
-// Byte lanes: the machine's convention is big-endian, mem_be[3] selecting
-// mem_wdata[31:24] = the byte at offset 0 (see the VRAM lane comment).  So
-// the first SDRAM word carries wdata[31:16] and the second wdata[15:0],
-// with bs[1] driving the high half of each.  Nothing else reads this
-// memory, so the in-chip order only has to agree with itself.
+// rtl/sdram_beat32.sv owns the 16-bit controller and both clock domains:
+// one beat is one burst read (BURST_LENGTH=4 is already in the mode
+// register, so both halves arrive in a single row cycle) or two 16-bit
+// writes, and writes are acked here and drained behind the machine.  The
+// controller runs at 99 MHz — three times clk_sys, from the same PLL — and
+// derives SDRAM_CLK itself with an altddio_out, so no phase-shifted clock
+// is needed here.
 //////////////////////////////////////////////////////////////////
 
-wire        sdr_ready;
-wire [15:0] sdr_dout;
-reg         sdr_refresh = 0;
-reg  [9:0]  sdr_refcnt  = 0;
-
-// 8192 refreshes / 64 ms = one every 7.8 us = 772 cycles at 99 MHz
-always @(posedge clk_ram) begin
-	sdr_refcnt <= sdr_refcnt + 1'b1;
-	if (sdr_refcnt == 10'd771) begin
-		sdr_refcnt  <= 0;
-		sdr_refresh <= ~sdr_refresh;
-	end
-end
-
-// ---- clk_sys side: hand one beat over, wait for the ack toggle ----------
-reg         sdr_req_tgl = 0;
-reg         sdr_ack_seen = 0;
-reg  [1:0]  sdr_ack_sync = 0;
-reg         sdr_busy_s  = 0;
-reg  [26:2] sdr_addr;
-reg  [31:0] sdr_wdata;
-reg  [3:0]  sdr_be;
-reg         sdr_we;
-wire        sdr_ack_tgl;
+wire        sdr_ack;
 wire [31:0] sdr_rdata;
 
-// ---- clk_ram side: two 16-bit accesses per beat ------------------------
-reg         sdr_req_seen = 0;
-reg  [1:0]  sdr_req_sync = 0;
-reg         sdr_busy_r = 0;
-reg         sdr_acc = 0;             // 0 = high half, 1 = low half
-reg         sdr_ready_d = 0;
-reg  [31:0] sdr_hold;
+// The ack the machine sees is this bridge's or the VRAM/ROM one; they are
+// never asserted together, because mem_memsel picks exactly one consumer.
+assign mem_ack   = mem_ack_r | sdr_ack;
+assign mem_rdata = sdr_ack ? sdr_rdata : mem_rdata_r;
 
-assign sdr_rdata  = sdr_hold;
-assign sdr_ack_tgl = sdr_ack_r;
-reg         sdr_ack_r = 0;
-
-// rd/wr are held for the whole access: the controller may still be walking
-// back to its idle state when a request arrives, and it samples the request
-// only there.  Completion is the RISING edge of ready — ready sits low
-// before the very first access and through the ~122 us power-up sequence,
-// so waiting on the edge cannot false-trigger or deadlock.
-wire sdr_rd = sdr_busy_r && !sdr_we;
-wire sdr_wr = sdr_busy_r &&  sdr_we;
-
-always @(posedge clk_ram) begin
-	sdr_req_sync <= {sdr_req_sync[0], sdr_req_tgl};
-	sdr_ready_d  <= sdr_ready;
-
-	if (!sdr_busy_r) begin
-		if (sdr_req_sync[1] != sdr_req_seen) begin
-			sdr_req_seen <= sdr_req_sync[1];
-			sdr_acc      <= 0;
-			sdr_busy_r   <= 1;
-		end
-	end
-	else if (sdr_ready && !sdr_ready_d) begin
-		if (!sdr_acc) begin
-			sdr_hold[31:16] <= sdr_dout;
-			sdr_acc         <= 1;          // address advances with it
-		end
-		else begin
-			sdr_hold[15:0] <= sdr_dout;
-			sdr_busy_r     <= 0;
-			sdr_ack_r      <= ~sdr_ack_r;
-		end
-	end
-end
-
-sdram sdram
+sdram_beat32 sdr
 (
 	.init      (~pll_locked),
-	.clk       (clk_ram),
-	.SDRAM_EN  (1'b1),
+	.clk_sys   (clk_sys),
+	.clk_ram   (clk_ram),
+
+	.req       (mem_req && mem_is_ram),
+	.we        (mem_write),
+	.addr      (mem_addr[26:2]),
+	.be        (mem_be),
+	.wdata     (mem_wdata),
+	.ack       (sdr_ack),
+	.rdata     (sdr_rdata),
+	.busy      (),                       // ordering is the bridge's own affair
 
 	.SDRAM_DQ  (SDRAM_DQ),
 	.SDRAM_A   (SDRAM_A),
@@ -615,24 +564,7 @@ sdram sdram
 	.SDRAM_nRAS(SDRAM_nRAS),
 	.SDRAM_nCAS(SDRAM_nCAS),
 	.SDRAM_CKE (SDRAM_CKE),
-	.SDRAM_CLK (SDRAM_CLK),
-
-	.sel       (1'b1),
-	.addr      ({sdr_addr, sdr_acc}),      // word address; acc picks the half
-	.dout      (sdr_dout),
-	.din       (sdr_acc ? sdr_wdata[15:0] : sdr_wdata[31:16]),
-	.wr        (sdr_wr),
-	.bs        (sdr_acc ? sdr_be[1:0] : sdr_be[3:2]),
-	.rd        (sdr_rd),
-	.ready     (sdr_ready),
-	.refresh   (sdr_refresh),
-
-	.cpsel     (1'b0),
-	.cpaddr    (26'd0),
-	.cpdin     (16'd0),
-	.cprd      (),
-	.cpreq     (1'b0),
-	.cpbusy    ()
+	.SDRAM_CLK (SDRAM_CLK)
 );
 
 //////////////////////////////////////////////////////////////////
@@ -692,9 +624,6 @@ endfunction
 reg [31:0] vram_qa;
 reg        vram_ph;                        // port-A phase: 0 capture, 1 deliver
 
-wire         mem_is_ram  = (mem_memsel == 2'd0);
-wire         mem_is_rom  = (mem_memsel == 2'd1);
-wire         mem_is_vram = !mem_is_ram && !mem_is_rom;
 wire [16:0]  va_addr     = vram_map(mem_addr[18:2]);
 wire [16:0]  vb_addr     = vram_map(vid_addr[18:2]);
 wire         va_we       = mem_req && mem_is_vram && mem_write && !vram_ph;
@@ -761,7 +690,7 @@ reg        ddr_wait_data;                  // read issued, awaiting DOUT_READY
 reg        ddr_rd_hi;
 
 always @(posedge clk_sys) begin
-	mem_ack <= 0;
+	mem_ack_r <= 0;
 
 	// boot.rom halfwords: capture, then stall hps_io until written
 	if (ioctl_download && rom_index && ioctl_wr) begin
@@ -781,15 +710,15 @@ always @(posedge clk_sys) begin
 		if (!vram_ph) vram_ph <= 1;
 		else begin
 			vram_ph <= 0;
-			mem_rdata <= vram_qa;
-			mem_ack <= 1;
+			mem_rdata_r <= vram_qa;
+			mem_ack_r <= 1;
 		end
 	end
 
 	if (ddr_wait_data) begin
 		if (DDRAM_DOUT_READY) begin
-			mem_rdata <= ddr_rd_hi ? DDRAM_DOUT[63:32] : DDRAM_DOUT[31:0];
-			mem_ack   <= 1;
+			mem_rdata_r <= ddr_rd_hi ? DDRAM_DOUT[63:32] : DDRAM_DOUT[31:0];
+			mem_ack_r   <= 1;
 			ddr_wait_data <= 0;
 		end
 	end
@@ -809,7 +738,7 @@ always @(posedge clk_sys) begin
 		end
 		else if (mem_req && !mem_ack && mem_is_rom) begin
 			if (mem_write) begin
-				mem_ack <= 1;              // djMEMC discards ROM writes
+				mem_ack_r <= 1;            // djMEMC discards ROM writes
 			end
 			else begin
 				ddram_addr     <= DDR_ROM_BASE | {12'd0, mem_addr[19:3]};
@@ -819,27 +748,8 @@ always @(posedge clk_sys) begin
 				ddr_wait_data  <= 1;
 			end
 		end
-		// RAM beats go to SDRAM: hand the request across with a toggle and
-		// wait for the matching ack toggle back.  Writes are NOT posted here
-		// (unlike the old DDR3 path) — the controller has no write queue, so
-		// the beat completes when the second half has actually been issued.
-		else if (mem_req && !mem_ack && mem_is_ram && !sdr_busy_s) begin
-			sdr_addr    <= mem_addr[26:2];
-			sdr_wdata   <= mem_wdata;
-			sdr_be      <= mem_be;
-			sdr_we      <= mem_write;
-			sdr_req_tgl <= ~sdr_req_tgl;
-			sdr_busy_s  <= 1;
-		end
-	end
-
-	// SDRAM beat completion
-	sdr_ack_sync <= {sdr_ack_sync[0], sdr_ack_tgl};
-	if (sdr_busy_s && (sdr_ack_sync[1] != sdr_ack_seen)) begin
-		sdr_ack_seen <= sdr_ack_sync[1];
-		sdr_busy_s   <= 0;
-		mem_rdata    <= sdr_rdata;
-		mem_ack      <= 1;
+		// RAM beats are sdram_beat32's; nothing here gates them, so a RAM
+		// access never waits on the DDR3 side of this block.
 	end
 
 	if (reset && !ioctl_download) begin
