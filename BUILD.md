@@ -166,27 +166,36 @@ The live base is now:
 |---|---|
 | path | `/media/fat/games/Wombat33/QuadSquad8.hda` |
 | size | 2,146,461,696 bytes (unchanged -- same geometry, same partition map) |
-| md5 | `a70189d3fbea5f60a5da6be4a22a2e04` (mtime 2026-08-31 13:17) |
-| backup | `backup/QuadSquad8.hda.gz`, 322,145,708 bytes, re-taken 2026-08-31 16:04, gz md5 `8a8d9c5026ffbb576672690e8e2b0c37` — **see the warning below, this one is not pristine** |
+| md5 | `1a40aa8a77af35cabfe76d4dea9ccf13` — measured after a clean shutdown, see below |
+| pristine backup | `backup/QuadSquad8.hda.gz`, 342,339,344 bytes, taken 2026-08-31 17:27 from the quiesced image. **Restore-verified**: `gzip -t` passes and it decompresses to the same `1a40aa8a...` |
 
-The image hash is stable: md5'd twice back to back (16:24 and 16:25 on 2026-08-31)
-it returned `a70189d3...` both times, with the guest idle (`pos:` in the Main's
-fdinfo frozen). Note that `mtime` is **not** a reliable freshness signal here — the
-Main holds the image open for the whole core session, so 13:17 is the last *close*,
-not the last write.
-
-> **The 2026-08-31 16:04 backup does not restore to the image above.** It
-> decompresses (validly, and to the full 2,146,461,696 bytes — `gzip -t` passes and
-> the trailer agrees) to md5 `93738964c24e06e49b0d90d8baefac01`, not
-> `a70189d3fbea5f60a5da6be4a22a2e04`. It was taken with the core loaded and the
-> volume mounted read-write, which breaks `push_disk.sh`'s own rule of backing up
-> *before* the first boot: the result is a snapshot of a live HFS volume taken while
-> it was still being written, so it is crash-consistent at best.
+> **Hashing a mounted image gives a number that means nothing.** That is
+> measured here, not assumed — the same image produced three different md5s on
+> 2026-08-31:
 >
-> To get a base image and a backup that actually agree: shut the Mac down cleanly
-> (`bash scripts/mac_shutdown.sh`, verified unattended 2026-08-30), let the core
-> release the file, then re-run the gzip and md5 both ends. Until that is done,
-> treat the live image as the base and the `.gz` as a rough safety net only.
+> | when | md5 |
+> |---|---|
+> | as pushed from the NAS, 2026-08-29 | `f4287aee9ff9a4413fa1e5fd9f2d63b4` |
+> | mid-session: core loaded, volume mounted, guest idle | `a70189d3fbea5f60a5da6be4a22a2e04` |
+> | **after Special -> Shut Down, volume unmounted** | **`1a40aa8a77af35cabfe76d4dea9ccf13`** |
+>
+> Only the last is a base-image hash. The middle one was stable across two
+> back-to-back md5 runs with the guest idle, so "I measured it twice and it
+> agreed" does **not** mean the volume was quiesced. Two consequences:
+>
+> - `mtime` is not a freshness signal. The Main holds the image open for the
+>   whole core session, so the stamp is the last *close*, not the last write —
+>   it sat at 13:17 through all of the above.
+> - A backup taken with the volume mounted is not pristine. The 16:04 one is a
+>   complete, valid archive (`gzip -t` passes, full 2,146,461,696 bytes) that
+>   restores to `93738964c24e06e49b0d90d8baefac01` — a state the machine was
+>   never actually in. It is kept as
+>   `backup/QuadSquad8_20260831_mounted_snapshot.hda.gz` rather than deleted,
+>   but it is not a restore point.
+>
+> So `push_disk.sh`'s existing rule — back up *before* the first boot —
+> generalises to: shut the guest down (`bash scripts/mac_shutdown.sh`) and let
+> the core release the file before hashing or archiving anything.
 
 The copy on `\\daninas.local` is **still the old `f4287aee...`** and was not
 touched. Do not re-run `push_disk.sh` from the share to "refresh" the disk: that would

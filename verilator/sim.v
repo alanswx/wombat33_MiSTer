@@ -159,6 +159,16 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.sd_buff_din(sd_buff_din0),
 	.sd_buff_wr(sd_buff_wr),
 
+	// SCC serial.  Both RX lines idle high (nothing attached); TX is left
+	// open — the boot path only needs the chip to answer the ROM's InitSCC
+	// and selftest, which is exactly what this sim is for.
+	.scc_rxd_a(1'b1),
+	.scc_txd_a(),
+	.scc_cts_a(1'b1),
+	.scc_rts_a(),
+	.scc_rxd_b(1'b1),
+	.scc_txd_b(),
+
 	.dbg_berr(debug_berr),
 	.dbg_berr_addr(debug_data_addr),
 	.dbg_overlay(debug_overlay),

@@ -3,6 +3,33 @@
 Survey date 2026-08-31, branch `scc-ppp-midi-mt32`. Source core:
 `../MacLC_MiSTer` @ `e7da76f`.
 
+## Status (2026-08-31, branch `scc-ppp-midi-mt32`)
+
+| phase | state |
+|---|---|
+| 0 — `scc.v` + `txuart.v`/`rxuart.v` in, `files.qip` updated | **done** |
+| 1 — `sel_scc` decode, beat-bus adapter, IRQ to `iosb`/`quadra800` | **done** |
+| 2 — top-level serial, CONF_STR `UART` token (**PPP**) | **done** |
+| 3 — baud constants re-timed for 33 MHz, gates re-run | **done** |
+| 4 — MT32-pi instance, OSD page, I2S mix, info popup | **done** |
+| 5 — LCD overlay composited into `VGA_R/G/B` | **done** |
+| Quartus Analysis & Synthesis | **clean, 0 errors** (73,500 logic cells) |
+| hardware validation on `.143` | **not yet** |
+
+Simulation gates, all green:
+
+| gate | result |
+|---|---|
+| `verilator/tb_scc_midi.v` | PASS — unchanged, still at its 32.5 MHz default |
+| `verilator/tb_scc_baud.v` | PASS — 57600 -> 564 clk/bit |
+| `verilator/tb_iosb_scc.v` | PASS — **new**, covers the adapter |
+
+`tb_iosb_scc.v` is the one to keep green for anything touching the bus side: it
+exercises the address decode, channel independence, the back-to-back access
+case (the too-early-ack trap), and measures 1056 clk/bit on `scc_txd_a` end to
+end — i.e. 31250 baud at 33 MHz, proving the clock parameter reached the
+instance inside `iosb` and not just the module default.
+
 ## Decision (2026-08-31): port the LC's `scc.v`, use MAME as an oracle
 
 Considered: port from MacLC, transliterate MAME's `z80scc.cpp` / QEMU's

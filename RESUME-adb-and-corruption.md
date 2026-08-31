@@ -21,17 +21,21 @@ build/deploy timing gate, and the RTC.
 - **A hang proves nothing until the disk is known-good.** Restore from
   `games/Wombat33/backup/QuadSquad8.hda.gz` and re-test. Restoring takes ~6 min on
   the MiSTer (`gunzip -c backup/QuadSquad8.hda.gz > QuadSquad8.hda`). **The base
-  image changed on 2026-08-31**: new test software was installed in place, so the
-  live image is now md5 `a70189d3fbea5f60a5da6be4a22a2e04` (stable, verified twice),
-  not the old `f4287aee9ff9a4413fa1e5fd9f2d63b4`.
-- **⚠ The current backup is NOT a clean restore point.** `backup/QuadSquad8.hda.gz`
-  (re-taken 2026-08-31 16:04) is a complete, valid archive but decompresses to
-  `93738964c24e06e49b0d90d8baefac01` — it was taken with the core loaded and the
-  volume mounted, i.e. a snapshot of a live HFS volume mid-write. Restoring it does
-  **not** get you back to the image the machine is running now. Before relying on
-  "restore and re-test" as a control again: `bash scripts/mac_shutdown.sh`, let the
-  core release the file, re-take the gzip, and record the hash both ends. Until then
-  a restore changes the disk out from under the experiment instead of resetting it.
+  image changed on 2026-08-31** (new test software installed in place): a good
+  restore now lands on md5 `1a40aa8a77af35cabfe76d4dea9ccf13`, not the old
+  `f4287aee9ff9a4413fa1e5fd9f2d63b4`. That backup was re-taken 17:27 from a
+  cleanly shut down machine and is **restore-verified** — it decompresses to
+  exactly that hash.
+- **Never hash or archive the image while the volume is mounted.** On 2026-08-31
+  the same image gave three different md5s: `f4287aee` as pushed, `a70189d3`
+  mid-session, `1a40aa8a` after Special -> Shut Down. The middle one was *stable
+  across two back-to-back md5 runs with the guest idle*, so a repeated
+  measurement is not evidence the volume is quiesced. `mtime` is no help either
+  — the Main holds the image open all session, so it shows the last close.
+  The 16:04 backup taken this way is a complete, valid archive of a state the
+  machine was never in; it is kept as
+  `backup/QuadSquad8_20260831_mounted_snapshot.hda.gz` and is NOT a restore
+  point. Shut the guest down first, every time.
 - **Suspect your own last change first, and run the control.** Every claim below
   that says "fixed" has a scored control behind it; the ones that do not say so.
 - **Measure rates, not single samples.** The boot stall below is 1-in-3, so one
