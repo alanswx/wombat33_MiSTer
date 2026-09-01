@@ -84,3 +84,6 @@ verilator/sim_stdout.log
 # python tooling artifacts
 __pycache__/
 *.pyc
+
+# Claude Code local permissions (machine-specific: deploy target lives in scripts/local.env)
+.claude/settings.local.json
