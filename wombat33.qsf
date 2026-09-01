@@ -82,8 +82,19 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # INSIDE THE CPU CORE on clk_sys -- nothing to do with whatever RTL you just
 # touched. The design has ~0 ns margin there and any netlist perturbation
 # flips it, so walk seeds and do not go hunting in your own diff. Tried:
-# 3 -> -0.165, 4 -> -0.393, 5 -> -1.643.
-set_global_assignment -name SEED 6
+# 3 -> -0.165, 4 -> -0.393, 5 -> -1.643. Seed 6 then met at +0.062 ns.
+#
+# 2026-09-01, after the SDRAM fast path (rtl/sdram_beat32.sv): seed 6 went
+# from +0.062 to -0.952 ns. That is the same lottery, not the diff -- the
+# change is 97 ALMs SMALLER than the tree it replaced (35,244 vs 35,436), and
+# report_timing still names ap040_core|ir[3..4] -> |exc_fmt[0] with the loss
+# sitting in clock skew (-0.538 vs -0.126). Walked again:
+# 6 -> -0.952, 7 -> -1.029, 8 -> -0.501, 9 -> -1.235, 10 -> -1.008,
+# 11 -> -0.176, 12 -> -0.056, 13 -> +0.132.
+# Seed 13 has MORE margin than the design had before the change. Candidate
+# bitstreams for every seed above are kept in scratch/seeds/ (gitignored) with
+# their reports; scratch/seeds/restore_seed.sh <n> stages one for deploy.
+set_global_assignment -name SEED 13
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
