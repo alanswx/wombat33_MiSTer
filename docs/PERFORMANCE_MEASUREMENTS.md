@@ -452,3 +452,43 @@ It booted Mac OS 7.5.5 and completed every PR category, including Disk. Mac OS
 was shut down to its safe-to-switch-off screen, the MiSTer returned to its menu,
 and the disposable disk was restored from the pristine golden; both images then
 matched MD5 `0c4f774b4a2eccd5656e92f16119875f`.
+
+## 11. Two-entry CPU RAM store buffer (Speedometer 3.23)
+
+The next CPU-side optimization hides write-through RAM-store latency behind
+later cache hits. A two-entry ordered queue sits below `ap040_cache` and gives a
+registered acknowledgement when it captures a non-faulting physical-RAM write.
+The queued transactions then drain through the unchanged post-cache platform
+bus. Reads, ROM/device writes, and other unqualified transactions wait for all
+older stores; MMU table walks are also held, and retained SDRAM lines are hidden
+while a store is pending so neither path can observe stale memory. The boot
+overlay and all non-RAM address regions retain their previous completion path.
+
+The directed store-buffer test passes direct completion, early store capture,
+read-after-write ordering, two-entry FIFO order, full-queue backpressure,
+host-disabled bypass, and clock-enable freeze. The complete Wombat Verilator
+model builds, and the first 100 SingleStepTests CPU corpus rows match all 1,696
+architectural field groups with zero real differences.
+
+Seed 17 was rejected before deployment at -0.323 ns setup and +0.197 ns hold.
+TimeQuest placed its only setup failure on the already documented seed-sensitive
+SDRAM `open_row` to `command[0]` cross-clock path, not in the CPU or store
+buffer. The identical seed-18 netlist meets timing at **+0.165 ns setup** and
+**+0.248 ns hold**, with zero setup and hold TNS.
+
+| Speedometer 3.23 PR Test | AP040 line assist | two-entry store buffer | gain |
+|---|---:|---:|---:|
+| CPU | 3.494 | **3.626** | **+3.8%** |
+| Graphics | 4.707 | **4.804** | **+2.1%** |
+| Disk | 0.679 | **0.698** | **+2.8%** |
+| Math | 23.477 | **26.744** | **+13.9%** |
+| Old PR | 5.293 | **5.706** | **+7.8%** |
+| New PR | 2.096 | **2.160** | **+3.1%** |
+
+The RBF is `Wombat33_CPU_storebuf_seed18_20260902.rbf`, MD5
+`50b318db7b83bba6e418f15ad4e6085a` and SHA-256
+`2992d426897f089a7401eca95327507707e9fcf1753986bb8bbe9dc93e4dbe1c`.
+It booted Mac OS 7.5.5 and completed one iteration of every PR category. Mac OS
+then reached its safe-to-switch-off screen, the MiSTer returned to its menu, and
+the disposable disk was restored from the pristine golden. Both images matched
+MD5 `0c4f774b4a2eccd5656e92f16119875f` after restoration.

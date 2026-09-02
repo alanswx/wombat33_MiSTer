@@ -109,7 +109,12 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # retained-line cache-fill build also passed the full hardware PR suite at seed
 # 17, routing at +0.348 ns setup and +0.244 ns hold. Use seed 17 for this family
 # of netlists and re-check after any RTL change.
-set_global_assignment -name SEED 17
+# The two-entry CPU store-buffer netlist moved the critical path to the known
+# seed-sensitive SDRAM open_row -> command[0] crossing at seed 17 (-0.323 ns
+# setup, +0.197 ns hold); the store buffer was not present in the failing path.
+# Seed 18 meets timing at +0.165 ns setup and +0.248 ns hold and passed the full
+# Mac OS 7.5.5 Speedometer 3.23 PR suite in hardware.
+set_global_assignment -name SEED 18
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
@@ -296,6 +301,7 @@ set_global_assignment -name SDC_FILE wombat33.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE wombat33.sv
 set_global_assignment -name QIP_FILE rtl/ap68040/rtl/ap040.qip
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/wombat_cpu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/wombat_store_buffer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/wombat_bus32.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/quadra800.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/iosb.sv

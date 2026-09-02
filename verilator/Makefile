@@ -46,6 +46,7 @@ V_SRC = \
 	sim_lfsr.v \
 	$(RTL)/quadra800.sv \
 	$(RTL)/wombat_cpu.sv \
+	$(RTL)/wombat_store_buffer.sv \
 	$(RTL)/wombat_bus32.sv \
 	$(RTL)/iosb.sv \
 	$(RTL)/via6522.sv \
@@ -129,6 +130,11 @@ tb_wombat_bus32:
 	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-DECLFILENAME --top-module tb_wombat_bus32 --Mdir ./obj_dir_tb_bus32 -o tb_wombat_bus32 tb_wombat_bus32.sv $(RTL)/wombat_bus32.sv
 	./obj_dir_tb_bus32/tb_wombat_bus32
 
+# Directed ordering/backpressure test for the AP040's two-entry RAM store queue.
+tb_store_buffer:
+	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-DECLFILENAME --top-module tb_wombat_store_buffer --Mdir ./obj_dir_tb_store_buffer -o tb_wombat_store_buffer tb_wombat_store_buffer.sv $(RTL)/wombat_store_buffer.sv
+	./obj_dir_tb_store_buffer/tb_wombat_store_buffer
+
 # Whole post-cache memory transport (transaction adapter + production RAM
 # service handshake + SDRAM bridge/controller/chip model), including the
 # held-request/one-pulse-per-beat contract used by ap040_cache's refill port.
@@ -176,4 +182,4 @@ tb_memory_path_registered_first_miss:
 	./obj_dir_tb_mempath_registered_first_miss/tb_memory_path_registered_first_miss
 
 clean:
-	rm -rf obj_dir obj_dir_tb obj_dir_tb_bus32 obj_dir_tb_mempath obj_dir_tb_mempath_safe obj_dir_tb_mempath_ordered_line obj_dir_tb_mempath_stock_machine obj_dir_tb_mempath_registered_line obj_dir_tb_mempath_registered_bus_line obj_dir_tb_mempath_registered_first_miss
+	rm -rf obj_dir obj_dir_tb obj_dir_tb_bus32 obj_dir_tb_store_buffer obj_dir_tb_mempath obj_dir_tb_mempath_safe obj_dir_tb_mempath_ordered_line obj_dir_tb_mempath_stock_machine obj_dir_tb_mempath_registered_line obj_dir_tb_mempath_registered_bus_line obj_dir_tb_mempath_registered_first_miss

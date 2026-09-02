@@ -158,6 +158,7 @@ wombat_cpu cpu (
 	.cache_line_valid(!overlay && mem_line_valid),
 	.cache_line_tag({5'd0, mem_line_tag}),
 	.cache_line_data(mem_line_data),
+	.store_buffer_ok(!overlay),
 
 	.bus_req(bus_req),
 	.bus_write(bus_write),
