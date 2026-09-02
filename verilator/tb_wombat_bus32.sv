@@ -26,6 +26,7 @@ wombat_bus32 dut (
 	.clk(clk), .nreset(nreset), .ce(1'b1),
 	.t_req(t_req), .t_write(t_write), .t_size(t_size), .t_addr(t_addr),
 	.t_wdata(t_wdata), .t_berr(t_berr), .t_ack(t_ack), .t_rdata(t_rdata),
+	.t_active(),
 	.b_req(b_req), .b_write(b_write), .b_addr(b_addr), .b_be(b_be),
 	.b_wdata(b_wdata), .b_ack(b_ack), .b_rdata(b_rdata)
 );

@@ -102,8 +102,10 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # +0.431 ns hold.  The BL8/open-page netlist could not route at seed 13.  Its
 # hardware-validated stock-machine build at seed 17 routed at +0.185 ns setup
 # and +0.244 ns hold. The hardware-validated registered-line build at the same
-# seed routed at +0.289 ns setup and +0.252 ns hold. Use seed 17 for this family
-# of netlists and re-check after any RTL change.
+# seed routed at +0.289 ns setup and +0.252 ns hold. The registered pre-adapter
+# line-hit build also passed hardware at seed 17 and routed at +0.139 ns setup
+# and +0.183 ns hold. Use seed 17 for this family of netlists and re-check after
+# any RTL change.
 set_global_assignment -name SEED 17
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"

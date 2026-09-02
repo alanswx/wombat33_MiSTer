@@ -161,5 +161,12 @@ tb_memory_path_registered_line:
 	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST -Wno-DECLFILENAME +define+SIMULATION=1 --top-module tb_memory_path -GFAST_BYPASS=0 -GADAPTER_LINE_HIT=1 -GDIRECT_MEM_ACK=0 -GREGISTERED_LINE_HIT=1 --Mdir ./obj_dir_tb_mempath_registered_line -o tb_memory_path_registered_line tb_memory_path.sv tb_sdram.sv $(RTL)/wombat_bus32.sv $(RTL)/sdram_beat32.sv $(RTL)/sdram.sv altddio_out_stub.v
 	./obj_dir_tb_mempath_registered_line/tb_memory_path_registered_line
 
+# Bypass wombat_bus32 only for later aligned longwords already retained from
+# the BL8 fetch.  The first miss and all other transaction shapes keep the
+# established adapter/service-FSM path, and line-hit completion stays registered.
+tb_memory_path_registered_bus_line:
+	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST -Wno-DECLFILENAME +define+SIMULATION=1 --top-module tb_memory_path -GFAST_BYPASS=1 -GDIRECT_FIRST_MISS=0 -GADAPTER_LINE_HIT=1 -GDIRECT_MEM_ACK=0 -GREGISTERED_LINE_HIT=1 --Mdir ./obj_dir_tb_mempath_registered_bus_line -o tb_memory_path_registered_bus_line tb_memory_path.sv tb_sdram.sv $(RTL)/wombat_bus32.sv $(RTL)/sdram_beat32.sv $(RTL)/sdram.sv altddio_out_stub.v
+	./obj_dir_tb_mempath_registered_bus_line/tb_memory_path_registered_bus_line
+
 clean:
-	rm -rf obj_dir obj_dir_tb obj_dir_tb_bus32 obj_dir_tb_mempath obj_dir_tb_mempath_safe obj_dir_tb_mempath_ordered_line obj_dir_tb_mempath_stock_machine obj_dir_tb_mempath_registered_line
+	rm -rf obj_dir obj_dir_tb obj_dir_tb_bus32 obj_dir_tb_mempath obj_dir_tb_mempath_safe obj_dir_tb_mempath_ordered_line obj_dir_tb_mempath_stock_machine obj_dir_tb_mempath_registered_line obj_dir_tb_mempath_registered_bus_line

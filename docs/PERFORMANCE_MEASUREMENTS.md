@@ -320,3 +320,46 @@ The RBF is `Wombat33_BL8_regline_seed17_20260902.rbf`, MD5
 +0.252 ns hold. It booted Mac OS and completed the full PR suite, including
 Disk. Against the fresh seed-15 control at the start of this section, the
 cumulative CPU gain is **+11.7%** (2.917 to 3.258).
+
+### Registered pre-adapter line hits
+
+The next step bypasses `wombat_bus32` only for aligned longword reads that are
+already present in the retained BL8 line. The completion remains a registered
+one-cycle pulse. The adapter's active state and previous acknowledgement both
+gate the bypass, preventing the just-completed critical word from being
+acknowledged twice. A first miss, byte/word or misaligned access, page-table
+walk, write, and every non-RAM device continue to use the established adapter
+and service-FSM path. A request for the still-arriving tail of the same line
+waits instead of launching a duplicate SDRAM transaction.
+
+The integrated post-cache model improves from 25.1 to **43.7 MB/s** and a
+16-byte fill falls from 636 to **365 ns**. It passes 64 sequential reads and
+2,048 mixed posted-write/read operations in order, while the independent SDRAM
+test remains 45/45 with zero chip-protocol errors and the bus adapter remains
+6/6. The complete Verilator machine also builds successfully.
+
+| Speedometer 3.23 PR Test | registered line | registered bus line | gain |
+|---|---:|---:|---:|
+| CPU | 3.258 | **3.378** | **+3.7%** |
+| Graphics | 4.373 | **4.536** | **+3.7%** |
+| Disk | 0.679 | **0.681** | +0.3% |
+| Math | 21.694 | **22.639** | **+4.4%** |
+| Old PR | 4.920 | **5.112** | **+3.9%** |
+| New PR | 2.039 | **2.072** | **+1.6%** |
+
+The RBF is `Wombat33_BL8_regbusline_seed17_20260902.rbf`, MD5
+`df9e97bfc14612b1221cd10112e9dad3`. Quartus reports +0.139 ns setup and
++0.183 ns hold, with zero setup or hold TNS. It booted Mac OS 7.5.5 and
+completed one iteration of every PR category, including Disk, before a clean
+guest shutdown. The disposable test disk was then restored byte-for-byte from
+the pristine image; both copies had MD5 `9c685af4dd7016cf1e664a908e2d9cbe`.
+
+Against the fresh seed-15 control, the cumulative gains are **+15.8% CPU**,
+**+18.8% Graphics**, and **+24.2% Math**. The bridge itself has now reached
+43.7 MB/s, so the remaining gap to the real Quadra 800's 50--65 MB/s is no
+longer dominated by repeated SDRAM reads within a cache fill. The conservative
+next memory-only target is first-miss latency: shorten only the RAM critical
+word path while retaining a registered CPU-visible acknowledgement and the
+adapter's ownership/order checks. Broad direct memory acknowledgement remains
+rejected because it froze the hardware Disk test even when line bypass was
+disabled.

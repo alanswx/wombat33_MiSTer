@@ -123,6 +123,15 @@ wire [31:0] bus_addr, bus_wdata;
 wire  [2:0] bus_fc;
 wire        bus_ack;
 wire [31:0] bus_rdata;
+wire        bus_ack_adapter;
+wire [31:0] bus_rdata_adapter;
+wire        bus_adapter_active;
+wire        bus_req_adapter;
+reg         bus_line_ack;
+reg  [31:0] bus_line_rdata;
+
+assign bus_ack   = bus_line_ack ? 1'b1           : bus_ack_adapter;
+assign bus_rdata = bus_line_ack ? bus_line_rdata : bus_rdata_adapter;
 
 wire        walker_req, walker_we;
 wire [31:0] walker_addr, walker_wdat;
@@ -186,14 +195,15 @@ wombat_bus32 bus32 (
 	.nreset(nreset),
 	.ce(ce),
 
-	.t_req(bus_req),
+	.t_req(bus_req_adapter),
 	.t_write(bus_write),
 	.t_size(bus_size),
 	.t_addr(bus_addr),
 	.t_wdata(bus_wdata),
 	.t_berr(cpu_berr),
-	.t_ack(bus_ack),
-	.t_rdata(bus_rdata),
+	.t_ack(bus_ack_adapter),
+	.t_rdata(bus_rdata_adapter),
+	.t_active(bus_adapter_active),
 
 	.b_req(b_req),
 	.b_write(b_write),
@@ -373,6 +383,41 @@ wire [31:0] line_cpu_data = (b_addr[3:2] == 2'd0) ? mem_line_data[127:96] :
 	                        (b_addr[3:2] == 2'd1) ? mem_line_data[95:64]  :
 	                        (b_addr[3:2] == 2'd2) ? mem_line_data[63:32]  :
 	                                                        mem_line_data[31:0];
+
+// Aligned longword reads are the cache-fill shape before wombat_bus32. Once
+// the adapter has fully retired the critical-word transaction, return later
+// words from the retained BL8 line directly to that transaction port. The ack
+// remains a registered one-cycle pulse; adapter-active and adapter-ack guards
+// prevent the just-completed critical word from being acknowledged twice.
+wire bus_line_eligible = (svc == S_IDLE) && !walker_pend && !cpu_berr &&
+	                     !bus_adapter_active && !bus_ack_adapter && bus_req &&
+	                     !bus_write && (bus_size == 2'd2) &&
+	                     (bus_addr[1:0] == 2'b00) &&
+	                     (decode(bus_addr[31:2]) == 3'd0);
+wire bus_line_match = bus_line_eligible && mem_line_valid &&
+	                  (bus_addr[26:4] == mem_line_tag);
+wire bus_line_wait  = bus_line_eligible && mem_line_pending &&
+	                  (bus_addr[26:4] == mem_line_pending_tag);
+wire [31:0] bus_line_data = (bus_addr[3:2] == 2'd0) ? mem_line_data[127:96] :
+	                        (bus_addr[3:2] == 2'd1) ? mem_line_data[95:64]  :
+	                        (bus_addr[3:2] == 2'd2) ? mem_line_data[63:32]  :
+	                                                          mem_line_data[31:0];
+
+assign bus_req_adapter = bus_req && !bus_line_match && !bus_line_wait;
+
+always @(posedge clk) begin
+	if (!nreset) begin
+		bus_line_ack   <= 0;
+		bus_line_rdata <= 0;
+	end
+	else if (ce) begin
+		bus_line_ack <= 0;
+		if (!bus_line_ack && bus_line_match) begin
+			bus_line_ack   <= 1;
+			bus_line_rdata <= bus_line_data;
+		end
+	end
+end
 
 assign dbg_berr      = (svc == S_BERR);
 assign dbg_berr_addr = {svc_addr, 2'b00};
