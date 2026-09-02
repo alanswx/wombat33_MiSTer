@@ -1,5 +1,11 @@
 # Performance measurements — Speedometer 4.02
 
+> **2026-09-01 follow-up:** a timing-clean related-clock SDRAM handoff now
+> measures 151 ns per isolated read and 22.0 MB/s sequentially in
+> `tb_sdram`. On hardware, Speedometer **3.23 PR Tests** improved from CPU
+> 2.661 on the seed-13 control to **2.917** on seed 15 (+9.6%). Version 3.23's
+> PR score is not the same metric as the 4.02 Benchmark Mix below; see §8.
+
 Three-way comparison of a **real Quadra 800**, the **Wombat33 core before the
 SDRAM fast path**, and the **core with it**. Measured 2026-09-01 on hardware
 (DE10-Nano + MiSTer SDRAM board), same disk image, same ROM, same Mac OS.
@@ -205,11 +211,47 @@ memory path:
   the two clock-domain crossings. Removing them (§1c of the speed plan) is the
   next platform item and is worth more than its position in the running order
   suggested.
-- Page mode (§1d) is the structural fix and the one that reaches real-Quadra
-  *bandwidth*.
+- Page mode (§1d) is the structural prerequisite for real-Quadra bandwidth;
+  the follow-up prototype shows it must be paired with a full-line path.
 - Beyond that the remaining terms are inside the CPU core — the write-through
   cache with no write buffer, and the lack of an early ack on line fills — which
   live in the `rtl/ap68040` submodule.
 
-A useful next measurement would be the same three-way comparison after §1c and
-§1d land, to see how much of the 8.2× is memory and how much is the core.
+A useful next measurement would be the same three-way comparison after the
+page-mode work (§1d) lands, to see how much of the 8.2× is memory and how much
+is the core.
+
+## 8. Related-clock handoff follow-up (Speedometer 3.23)
+
+The current disposable MacAtrium test disk contains Speedometer 3.23, not the
+4.02 copy used above. That prevents a direct update of the real-Q800 comparison,
+but it still gives a controlled before/after measurement on one disk and one
+benchmark version.
+
+| Speedometer 3.23 PR Test | seed-13 control | seed-15 handoff | gain |
+|---|---:|---:|---:|
+| CPU | 2.661 | **2.917** | **+9.6%** |
+| Graphics | 3.487 | **3.903** | **+11.9%** |
+| Disk | 0.671 | **0.679** | +1.2% |
+| Math | 15.841 | **18.446** | **+16.4%** |
+| Old PR | 3.829 | **4.318** | **+12.8%** |
+| New PR | 1.850 | **1.946** | **+5.2%** |
+
+The seed-15 RBF is `releases/wombat33_20260901_2.rbf`, MD5
+`d1d785de28439d132333a1c9e3aab5c5`. Quartus reports +0.270 ns overall
+setup and +0.241 ns overall hold; the 99 MHz domain is +1.353 ns setup and
++0.431 ns hold. The guest booted Mac OS, completed the PR suite, and was shut
+down normally before the disk or core was touched again.
+
+Seed-13 control:
+
+![Speedometer 3.23 PR control](perf/wombat33_seed13_speedometer323_pr.png)
+
+Seed-15 related-clock handoff:
+
+![Speedometer 3.23 PR handoff](perf/wombat33_seed15_cdc_speedometer323_pr.png)
+
+The 4.02 application came from `Quad Squad:Utilities:` on the original 2 GB
+Quad Squad image. The currently mounted `QuadSquad8.hda` is a 90 MB disposable
+clone of the MacAtrium disk, so recovering that original image from the NAS or
+archive is the prerequisite for rerunning the published 4.02 tables.

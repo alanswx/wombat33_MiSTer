@@ -94,7 +94,13 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # Seed 13 has MORE margin than the design had before the change. Candidate
 # bitstreams for every seed above are kept in scratch/seeds/ (gitignored) with
 # their reports; scratch/seeds/restore_seed.sh <n> stages one for deploy.
-set_global_assignment -name SEED 13
+#
+# 2026-09-01, related-clock SDRAM handoff (151 ns reads in tb_sdram): the
+# SDRAM paths had ample margin, but the same unrelated clk_sys CPU path moved
+# again.  Seed 13 -> -0.068 ns, 14 -> -0.669 ns, 15 -> +0.270 ns setup and
+# +0.241 ns hold overall.  The 99 MHz domain at seed 15 is +1.353 ns setup and
+# +0.431 ns hold.  Use seed 15 for this netlist.
+set_global_assignment -name SEED 15
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 

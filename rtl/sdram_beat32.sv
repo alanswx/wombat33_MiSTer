@@ -2,7 +2,7 @@
 //  sdram_beat32 — 32-bit machine beats on the 16-bit MiSTer SDRAM controller.
 //
 //  Wraps rtl/sdram.sv (Sorgelig's, from NeoGeo_MiSTer) and the clk_sys <->
-//  clk_ram handshake that used to live inline in wombat33.sv.  Two things
+//  clk_ram handshake that used to live inline in wombat33.sv.  Three things
 //  here that the plain two-access bridge did not do:
 //
 //  * A READ IS ONE ROW CYCLE, NOT TWO.  The controller's mode register
@@ -13,6 +13,12 @@
 //    they are always words 0 and 1 of one burst: issue once, latch both.
 //    14 -> 8 clk_ram of SDRAM time per read beat (~141 -> ~81 ns).
 //    Writes still take two accesses; NO_WRITE_BURST=1 in the mode register.
+//
+//  * THE RELATED CLOCKS USE TIMED HALF-CYCLE HANDOFFS.  clk_sys and clk_ram
+//    are phase-aligned 1:3 outputs of the same PLL.  Capturing the request and
+//    completion toggles on clk_ram's falling edge removes the two conservative
+//    2FF synchronisers while leaving a timed half-cycle on every crossing.
+//    Hardware-tested read latency: 7 -> 5 clk_sys (~212 -> ~151 ns).
 //
 //  * WRITES ARE POSTED.  ack fires as the beat is captured and the drain
 //    happens behind the machine's back.  Nothing downstream had to change
@@ -83,7 +89,6 @@ end
 // ---- clk_sys side: hand one beat over, wait for the ack toggle ----------
 reg        req_tgl  = 0;
 reg        ack_seen = 0;
-reg  [1:0] ack_sync = 0;
 reg        posted   = 0;             // the beat in flight was acked at capture
 reg [26:2] r_addr;
 reg [31:0] r_wdata;
@@ -92,7 +97,6 @@ reg        r_we;
 
 // ---- clk_ram side: one burst read, or two 16-bit writes ----------------
 reg        req_seen = 0;
-reg  [1:0] req_sync = 0;
 reg        busy_r   = 0;
 reg        acc      = 0;             // write half: 0 = high word, 1 = low
 reg        rd2      = 0;             // burst word 1 is on the bus this cycle
@@ -102,6 +106,28 @@ reg        ack_tgl  = 0;
 
 wire [15:0] dout;
 wire        ready;
+
+// clk_sys and clk_ram are 0-degree outputs of the same PLL, with an exact
+// 1:3 frequency ratio.  They are related clocks, not asynchronous domains.
+// The old bridge nevertheless put a two-flop synchronizer in each direction,
+// which burned about 60% of a read beat after the SDRAM burst itself became
+// fast.  Transfer the toggles on clk_ram's falling edge instead: it is 5 ns
+// from either adjacent clk_ram rising edge and can never coincide with a
+// clk_sys rising edge.  The request payload remains held for the entire beat;
+// the read payload is copied alongside the completion toggle.
+//
+// These are deliberately separate falling-edge registers.  The controller
+// remains wholly rising-edge logic, and TimeQuest can time both half-cycle
+// paths because the clocks share a PLL.
+reg        req_handoff  = 0;
+reg        ack_handoff  = 0;
+reg [31:0] data_handoff = 0;
+
+always @(negedge clk_ram) begin
+	req_handoff  <= req_tgl;
+	ack_handoff  <= ack_tgl;
+	data_handoff <= hold;
+end
 
 always @(posedge clk_sys) begin
 	ack <= 0;
@@ -117,13 +143,12 @@ always @(posedge clk_sys) begin
 		if (we) ack <= 1;            // posted: the drain is invisible from here
 	end
 
-	ack_sync <= {ack_sync[0], ack_tgl};
-	if (busy && (ack_sync[1] != ack_seen)) begin
-		ack_seen <= ack_sync[1];
+	if (busy && (ack_handoff != ack_seen)) begin
+		ack_seen <= ack_handoff;
 		busy     <= 0;
 		posted   <= 0;
 		if (!posted) begin
-			rdata <= hold;
+			rdata <= data_handoff;
 			ack   <= 1;
 		end
 	end
@@ -142,7 +167,6 @@ wire rd = busy_r && !r_we && !rd2;
 wire wr = busy_r &&  r_we;
 
 always @(posedge clk_ram) begin
-	req_sync <= {req_sync[0], req_tgl};
 	ready_d  <= ready;
 
 	if (rd2) begin
@@ -154,8 +178,8 @@ always @(posedge clk_ram) begin
 		ack_tgl    <= ~ack_tgl;
 	end
 	else if (!busy_r) begin
-		if (req_sync[1] != req_seen) begin
-			req_seen <= req_sync[1];
+		if (req_handoff != req_seen) begin
+			req_seen <= req_handoff;
 			acc      <= 0;
 			busy_r   <= 1;
 		end

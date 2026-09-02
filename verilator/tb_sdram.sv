@@ -296,9 +296,9 @@ initial begin
 	$display("FAIL  tb_sdram: timeout");
 	$display("  req=%b we=%b busy=%b ack=%b | busy_r=%b acc=%b rd2=%b ready=%b",
 	         req, we, busy, ack, dut.busy_r, dut.acc, dut.rd2, dut.ready);
-	$display("  req_tgl=%b req_sync=%b req_seen=%b | ack_tgl=%b ack_sync=%b ack_seen=%b posted=%b",
-	         dut.req_tgl, dut.req_sync, dut.req_seen,
-	         dut.ack_tgl, dut.ack_sync, dut.ack_seen, dut.posted);
+	$display("  req_tgl=%b req_handoff=%b req_seen=%b | ack_tgl=%b ack_handoff=%b ack_seen=%b posted=%b",
+	         dut.req_tgl, dut.req_handoff, dut.req_seen,
+	         dut.ack_tgl, dut.ack_handoff, dut.ack_seen, dut.posted);
 	$display("  req=%b we=%b busy=%b ack=%b | busy_r=%b acc=%b rd2=%b ready=%b",
 	         req, we, busy, ack, dut.busy_r, dut.acc, dut.rd2, dut.ready);
 	$display("  sdram.state=%0d chip=%b nCS=%b cmd=%b | rd=%b wr=%b",
