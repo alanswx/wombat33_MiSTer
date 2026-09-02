@@ -5,6 +5,8 @@
 > `tb_sdram`. On hardware, Speedometer **3.23 PR Tests** improved from CPU
 > 2.661 on the seed-13 control to **2.917** on seed 15 (+9.6%). Version 3.23's
 > PR score is not the same metric as the 4.02 Benchmark Mix below; see §8.
+> A 2026-09-02 BL8/open-page follow-up raises that same 3.23 CPU score to
+> **3.139** and passes the full suite; see §9.
 
 Three-way comparison of a **real Quadra 800**, the **Wombat33 core before the
 SDRAM fast path**, and the **core with it**. Measured 2026-09-01 on hardware
@@ -255,3 +257,43 @@ The 4.02 application came from `Quad Squad:Utilities:` on the original 2 GB
 Quad Squad image. The currently mounted `QuadSquad8.hda` is a 90 MB disposable
 clone of the MacAtrium disk, so recovering that original image from the NAS or
 archive is the prerequisite for rerunning the published 4.02 tables.
+
+## 9. BL8/open-page follow-up (Speedometer 3.23)
+
+The next memory-only step keeps the machine's established registered bus
+completion but changes the SDRAM side to an open-page controller and captures
+the complete BL8 read as a retained 16-byte line. The requested longword is
+returned critical-word-first while the burst tail finishes in the background.
+The controller tracks open rows independently for all eight `{rank,bank}`
+combinations and refreshes both ranks.
+
+A fresh run of the seed-15 handoff RBF immediately before the experiment is
+the control below. Both runs used the same pristine `QuadSquad8.hda` image,
+Speedometer 3.23, Mac OS 7.5.5, and one iteration of every PR category.
+
+| Speedometer 3.23 PR Test | seed-15 control | BL8/open-page | gain |
+|---|---:|---:|---:|
+| CPU | 2.917 | **3.139** | **+7.6%** |
+| Graphics | 3.817 | **4.159** | **+9.0%** |
+| Disk | 0.672 | **0.684** | +1.8% |
+| Math | 18.224 | **20.843** | **+14.4%** |
+| Old PR | 4.269 | **4.724** | **+10.7%** |
+| New PR | 1.928 | **2.013** | **+4.4%** |
+
+The hardware RBF is `Wombat33_BL8_stockmachine_seed17_20260902.rbf`, MD5
+`e20f8dfff1d27b4df2195708bcdecc39`. Quartus reports +0.185 ns overall setup
+and +0.244 ns overall hold. The full PR suite completed normally, including
+Disk. The directed SDRAM model reports 43.7 MB/s for sequential bridge reads,
+181 ns for a cold critical word, 121 ns for an open-page read, and 30 ns for a
+retained-line read. The whole stock machine transport remains slower at an
+estimated 19.5 MB/s / 819 ns per 16-byte fill because each longword still
+crosses the registered transaction adapter and service FSM.
+
+Two more aggressive handshakes were rejected on hardware. Both completed CPU
+and Graphics but froze during Disk; one included the full pre-adapter line
+bypass, while the other disabled that bypass and retained only direct memory
+acknowledgement. The passing stock-machine build therefore clears BL8 and the
+open-page controller and isolates the remaining fault to the shortened
+completion path. Future work should shorten RAM completion only, leaving the
+ROM, VRAM, IOSB, DAFB, and open-bus cadence unchanged, and must pass the full
+Disk test before it replaces this baseline.

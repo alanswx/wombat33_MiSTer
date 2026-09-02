@@ -523,9 +523,9 @@ assign LED_DISK = {1'b1, sd_rd[0] | sd_wr[0]};
 // through the ioctl path and read rarely enough that latency is free).
 //
 // rtl/sdram_beat32.sv owns the 16-bit controller and both clock domains:
-// one beat is one burst read (BURST_LENGTH=4 is already in the mode
-// register, so both halves arrive in a single row cycle) or two 16-bit
-// writes, and writes are acked here and drained behind the machine.  The
+// one read captures a complete BL8/16-byte line, returning its critical
+// longword first; a write uses two 16-bit commands and is acknowledged here
+// before it drains behind the machine.  The
 // controller runs at 99 MHz — three times clk_sys, from the same PLL — and
 // derives SDRAM_CLK itself with an altddio_out, so no phase-shifted clock
 // is needed here.

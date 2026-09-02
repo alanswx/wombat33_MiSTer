@@ -52,6 +52,8 @@ sdram_beat32 dut
 	.init(init), .clk_sys(clk_sys), .clk_ram(clk_ram),
 	.req(req), .we(we), .addr(addr), .be(be), .wdata(wdata),
 	.ack(ack), .rdata(rdata), .busy(busy),
+	.line_valid_o(), .line_tag_o(), .line_data_o(),
+	.line_pending_o(), .line_pending_tag_o(),
 	.SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A),
 	.SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH), .SDRAM_BA(SDRAM_BA),
 	.SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
@@ -61,6 +63,18 @@ sdram_beat32 dut
 sdram_model chip
 (
 	.clk(SDRAM_CLK), .cke(SDRAM_CKE), .nCS(SDRAM_nCS),
+	.nRAS(SDRAM_nRAS), .nCAS(SDRAM_nCAS), .nWE(SDRAM_nWE),
+	.ba(SDRAM_BA), .a(SDRAM_A), .dqmh(SDRAM_DQMH), .dqml(SDRAM_DQML),
+	.dq(SDRAM_DQ)
+);
+
+// MiSTer 128 MB modules contain a second 64 MB rank whose chip select is the
+// inverse of the connector's nCS level.  Sharing all other pins here models
+// that board wiring and catches row/refresh state accidentally shared across
+// ranks; on smaller modules this second device is simply absent.
+sdram_model chip_hi
+(
+	.clk(SDRAM_CLK), .cke(SDRAM_CKE), .nCS(~SDRAM_nCS),
 	.nRAS(SDRAM_nRAS), .nCAS(SDRAM_nCAS), .nWE(SDRAM_nWE),
 	.ba(SDRAM_BA), .a(SDRAM_A), .dqmh(SDRAM_DQMH), .dqml(SDRAM_DQML),
 	.dq(SDRAM_DQ)
@@ -147,6 +161,15 @@ task automatic drain;
 	end
 endtask
 
+// A critical-word-first read may already be acknowledged while the BL8 tail
+// is still being installed in the bridge's line buffer.
+task automatic fill_drain;
+	begin
+		@(negedge clk_sys);
+		while (dut.fill_pending) @(negedge clk_sys);
+	end
+endtask
+
 // A beat address that walks all four banks and two rows.  Mind the offsets:
 // the field is addr[26:2], so bank = addr[24:23] sits at value bit 21 and
 // row = addr[22:10] starts at value bit 8.  (addr[26] is the chip select,
@@ -158,8 +181,8 @@ endfunction
 //----------------------------------------------------------------------------
 integer i;
 time    t0, t1, dr, dw;
-integer rd_cycles, wr_cycles;
-integer acts0, pres0;
+integer rd_cycles, page_rd_cycles, wr_cycles, hit_rd_cycles;
+integer acts0, acts1, pres0;
 reg [31:0] exp;
 reg  [3:0] m;
 
@@ -174,9 +197,11 @@ initial begin
 	// the controller's own power-up sequence is ~12100 clk_ram cycles
 	repeat (13000) @(posedge clk_ram);
 	@(posedge clk_sys);
-	check(chip.mode_set, "chip saw LOAD MODE REGISTER during startup");
-	check(chip.cl == 3'd2 && chip.bl == 4,
-	      "mode register programs CAS latency 2, burst length 4");
+	check(chip.mode_set && chip_hi.mode_set,
+	      "both ranks saw LOAD MODE REGISTER during startup");
+	check(chip.cl == 3'd2 && chip.bl == 8 &&
+	      chip_hi.cl == 3'd2 && chip_hi.bl == 8,
+	      "both ranks program CAS latency 2, burst length 8");
 
 	//--------------------------------------------------------------------
 	// 1. round trip, and the two halves the right way round
@@ -196,15 +221,30 @@ initial begin
 	      chip.peek(25'h000100, 1'b1) == 16'h3344,
 	      "in the chip, the high halfword is at the even word address");
 
+	// Start at slot 2 so the sequential BL8 wraps 2,3,0,1.  Every cached
+	// longword must still land in its address-selected slot.
+	wr32(25'h000102, 4'b1111, 32'h99AA_BBCC);
+	wr32(25'h000103, 4'b1111, 32'hDDEE_FF00);
+	drain();
+	rd32(25'h000102);
+	check_eq32(got, 32'h99AA_BBCC, "critical word returns from a wrapped BL8 fill");
+	fill_drain();
+	rd32(25'h000100); check_eq32(got, 32'h1122_3344, "BL8 wrap caches slot 0");
+	rd32(25'h000101); check_eq32(got, 32'h5566_7788, "BL8 wrap caches slot 1");
+	rd32(25'h000103); check_eq32(got, 32'hDDEE_FF00, "BL8 wrap caches slot 3");
+
 	//--------------------------------------------------------------------
 	// 1b. page hits, independent bank rows, and an explicit row conflict
 	//--------------------------------------------------------------------
 	// Keep refresh outside this short directed window so command counts say
 	// exactly what the page scheduler did rather than including maintenance.
 	@(negedge clk_ram); dut.refcnt = 0;
+	rd32(25'h000104); // establish the row even if earlier refresh closed it
+	fill_drain();
+	@(negedge clk_ram); dut.refcnt = 0;
 	acts0 = chip.active_count;
 	pres0 = chip.precharge_count;
-	for (i = 0; i < 4; i = i + 1) rd32(25'h000100 + i);
+	for (i = 0; i < 4; i = i + 1) rd32(25'h000108 + 4*i);
 	check(chip.active_count == acts0 && chip.precharge_count == pres0,
 	      "same-row reads reuse the open page");
 
@@ -218,9 +258,29 @@ initial begin
 	rd32(25'h000200); // bank 0, next row
 	check(chip.active_count == acts0 + 2 && chip.precharge_count == pres0 + 1,
 	      "same-bank row conflict precharges and reactivates");
+
+	// The same bank/row may be open independently in both ranks.  A shared
+	// four-bank tracker would omit rank 1's ACT here and the model would reject
+	// its write; the retained-line tag must distinguish the ranks as well.
+	wr32(25'h000600, 4'b1111, 32'h1357_9BDF);
+	drain();
+	wr32(25'h1000600, 4'b1111, 32'h2468_ACE0);
+	drain();
+	acts0 = chip.active_count;
+	acts1 = chip_hi.active_count;
+	rd32(25'h000600);
+	check_eq32(got, 32'h1357_9BDF, "rank 0 retains its own data");
+	fill_drain();
+	rd32(25'h1000600);
+	check_eq32(got, 32'h2468_ACE0, "rank 1 retains distinct data");
+	fill_drain();
+	check(chip.active_count == acts0 && chip_hi.active_count == acts1,
+	      "same row remains independently open in both ranks");
 	// The refcnt reset above intentionally lengthened one refresh interval.
 	// Exclude only that test-induced gap from the later maintenance report.
-	@(negedge clk_ram); chip.t_refresh = 0; chip.max_refresh_gap = 0;
+	@(negedge clk_ram);
+	chip.t_refresh = 0; chip.max_refresh_gap = 0;
+	chip_hi.t_refresh = 0; chip_hi.max_refresh_gap = 0;
 
 	//--------------------------------------------------------------------
 	// 2. byte enables, all sixteen masks
@@ -266,12 +326,22 @@ initial begin
 	repeat (3000) @(posedge clk_ram);   // ~30 us: several refresh cycles
 	rd32(25'h000100);
 	check_eq32(got, 32'h1122_3344, "data survives auto-refresh");
+	rd32(25'h1000600);
+	check_eq32(got, 32'h2468_ACE0, "rank 1 data survives auto-refresh");
 
 	//--------------------------------------------------------------------
 	// 5. what it all costs
 	//--------------------------------------------------------------------
 	drain();
+	wr32(25'h000500, 4'b1111, 32'hCAFE_BABE); // invalidate the read line
+	drain();
 	rd32(25'h000100);   rd_cycles = last_cycles;
+	fill_drain();
+	rd32(25'h000101);   hit_rd_cycles = last_cycles;
+	wr32(25'h000180, 4'b1111, 32'h0123_4567); // same row, invalidate line
+	drain();
+	rd32(25'h000100);   page_rd_cycles = last_cycles;
+	fill_drain();
 	drain();
 	wr32(25'h000100, 4'b1111, 32'h1122_3344);  wr_cycles = last_cycles;
 	drain();
@@ -298,8 +368,12 @@ initial begin
 	$display("PASS  64-deep sequential write stream reads back intact");
 
 	$display("");
-	$display("  isolated read beat    %0d clk_sys (%0d ns)",
+	$display("  cold read / critical  %0d clk_sys (%0d ns)",
 	         rd_cycles, (rd_cycles * 2 * TS) / 1000);
+	$display("  page-hit read         %0d clk_sys (%0d ns)",
+	         page_rd_cycles, (page_rd_cycles * 2 * TS) / 1000);
+	$display("  buffered line read    %0d clk_sys (%0d ns)",
+	         hit_rd_cycles, (hit_rd_cycles * 2 * TS) / 1000);
 	$display("  isolated write beat   %0d clk_sys (%0d ns)  [posted]",
 	         wr_cycles, (wr_cycles * 2 * TS) / 1000);
 	$display("  64 sequential reads   %0d ns = %0d.%0d MB/s",
@@ -307,13 +381,17 @@ initial begin
 	$display("  64 sequential writes  %0d ns = %0d.%0d MB/s (to drained)",
 	         dw, 256000 / dw, (2560000 / dw) % 10);
 
+	$display("\n  rank 0:");
 	chip.report_timing();
+	$display("  rank 1:");
+	chip_hi.report_timing();
 
 	$display("");
 	$display("tb_sdram: %0d checks, %0d failures, %0d chip protocol errors",
-	         checks, fails, chip.errors);
-	if (fails == 0 && chip.errors == 0) $display("tb_sdram: OK");
-	else                                $display("tb_sdram: FAILED");
+	         checks, fails, chip.errors + chip_hi.errors);
+	if (fails == 0 && chip.errors == 0 && chip_hi.errors == 0)
+		$display("tb_sdram: OK");
+	else $display("tb_sdram: FAILED");
 	$finish;
 end
 
@@ -321,13 +399,13 @@ end
 initial begin
 	#1_000_000_000;                     // 1 ms
 	$display("FAIL  tb_sdram: timeout");
-	$display("  req=%b we=%b busy=%b ack=%b | busy_r=%b acc=%b rd2=%b ready=%b",
-	         req, we, busy, ack, dut.busy_r, dut.acc, dut.rd2, dut.ready);
+	$display("  req=%b we=%b busy=%b ack=%b | busy_r=%b acc=%b rd_burst=%b ready=%b",
+	         req, we, busy, ack, dut.busy_r, dut.acc, dut.rd_burst, dut.ready);
 	$display("  req_tgl=%b req_handoff=%b req_seen=%b | ack_tgl=%b ack_handoff=%b ack_seen=%b posted=%b",
 	         dut.req_tgl, dut.req_handoff, dut.req_seen,
 	         dut.ack_tgl, dut.ack_handoff, dut.ack_seen, dut.posted);
-	$display("  req=%b we=%b busy=%b ack=%b | busy_r=%b acc=%b rd2=%b ready=%b",
-	         req, we, busy, ack, dut.busy_r, dut.acc, dut.rd2, dut.ready);
+	$display("  req=%b we=%b busy=%b ack=%b | busy_r=%b acc=%b rd_burst=%b ready=%b",
+	         req, we, busy, ack, dut.busy_r, dut.acc, dut.rd_burst, dut.ready);
 	$display("  sdram.state=%0d chip=%b nCS=%b cmd=%b | rd=%b wr=%b",
 	         dut.sdram.state, dut.sdram.chip, SDRAM_nCS,
 	         {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE}, dut.rd, dut.wr);
@@ -399,8 +477,8 @@ localparam integer T_RFC = 7;
 
 // read pipeline; a word placed at index cl-1+j is driven j cycles after the
 // first, and reaches the pins CAS-latency cycles after the RD command
-bit        pipe_v [0:7];
-bit [15:0] pipe_d [0:7];
+bit        pipe_v [0:15];
+bit [15:0] pipe_d [0:15];
 bit        dq_drive = 0;
 bit [15:0] dq_val   = 0;
 
@@ -444,7 +522,7 @@ initial begin
 	for (i = 0; i < 4; i = i + 1) begin
 		row_open[i] = 0; t_act[i] = -9999; t_pre[i] = -9999;
 	end
-	for (i = 0; i < 8; i = i + 1) pipe_v[i] = 0;
+	for (i = 0; i < 16; i = i + 1) pipe_v[i] = 0;
 end
 
 wire [2:0] cmd = nCS ? CMD_NOP : {nRAS, nCAS, nWE};
@@ -458,11 +536,11 @@ always @(posedge clk) begin
 		// ---- drive whatever the pipeline says is due, then shift --------
 		dq_drive <= pipe_v[0];
 		dq_val   <= pipe_d[0];
-		for (j = 0; j < 7; j = j + 1) begin
+		for (j = 0; j < 15; j = j + 1) begin
 			pipe_v[j] = pipe_v[j+1];
 			pipe_d[j] = pipe_d[j+1];
 		end
-		pipe_v[7] = 0;
+		pipe_v[15] = 0;
 
 		case (cmd)
 		CMD_LOAD_MODE: begin

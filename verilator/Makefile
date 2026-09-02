@@ -123,5 +123,37 @@ tb_sdram:
 	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST -Wno-DECLFILENAME +define+SIMULATION=1 --top-module tb_sdram --Mdir ./obj_dir_tb -o tb_sdram tb_sdram.sv $(RTL)/sdram_beat32.sv $(RTL)/sdram.sv altddio_out_stub.v
 	./obj_dir_tb/tb_sdram
 
+# Directed timing/data test for the transaction-to-beat adapter's registered
+# one-beat completion and its two-beat misalignment path.
+tb_wombat_bus32:
+	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-DECLFILENAME --top-module tb_wombat_bus32 --Mdir ./obj_dir_tb_bus32 -o tb_wombat_bus32 tb_wombat_bus32.sv $(RTL)/wombat_bus32.sv
+	./obj_dir_tb_bus32/tb_wombat_bus32
+
+# Whole post-cache memory transport (transaction adapter + production RAM
+# service handshake + SDRAM bridge/controller/chip model), including the
+# held-request/one-pulse-per-beat contract used by ap040_cache's refill port.
+tb_memory_path:
+	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST -Wno-DECLFILENAME +define+SIMULATION=1 --top-module tb_memory_path --Mdir ./obj_dir_tb_mempath -o tb_memory_path tb_memory_path.sv tb_sdram.sv $(RTL)/wombat_bus32.sv $(RTL)/sdram_beat32.sv $(RTL)/sdram.sv altddio_out_stub.v
+	./obj_dir_tb_mempath/tb_memory_path
+
+# Same production path with quadra800's experimental pre-adapter line bypass
+# disabled.  Hits still come from sdram_beat32's retained BL8 line, but every
+# CPU request keeps the established wombat_bus32/service-FSM ordering.
+tb_memory_path_safe:
+	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST -Wno-DECLFILENAME +define+SIMULATION=1 --top-module tb_memory_path -GFAST_BYPASS=0 --Mdir ./obj_dir_tb_mempath_safe -o tb_memory_path_safe tb_memory_path.sv tb_sdram.sv $(RTL)/wombat_bus32.sv $(RTL)/sdram_beat32.sv $(RTL)/sdram.sv altddio_out_stub.v
+	./obj_dir_tb_mempath_safe/tb_memory_path_safe
+
+# Intermediate architecture: retain the generic transaction adapter but let
+# its aligned platform beats consume the completed BL8 line directly.
+tb_memory_path_ordered_line:
+	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST -Wno-DECLFILENAME +define+SIMULATION=1 --top-module tb_memory_path -GFAST_BYPASS=0 -GADAPTER_LINE_HIT=1 --Mdir ./obj_dir_tb_mempath_ordered_line -o tb_memory_path_ordered_line tb_memory_path.sv tb_sdram.sv $(RTL)/wombat_bus32.sv $(RTL)/sdram_beat32.sv $(RTL)/sdram.sv altddio_out_stub.v
+	./obj_dir_tb_mempath_ordered_line/tb_memory_path_ordered_line
+
+# Exact established quadra800 completion cadence: SDRAM completion is
+# registered by the machine service FSM before wombat_bus32 sees it.
+tb_memory_path_stock_machine:
+	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST -Wno-DECLFILENAME +define+SIMULATION=1 --top-module tb_memory_path -GFAST_BYPASS=0 -GADAPTER_LINE_HIT=0 -GDIRECT_MEM_ACK=0 --Mdir ./obj_dir_tb_mempath_stock_machine -o tb_memory_path_stock_machine tb_memory_path.sv tb_sdram.sv $(RTL)/wombat_bus32.sv $(RTL)/sdram_beat32.sv $(RTL)/sdram.sv altddio_out_stub.v
+	./obj_dir_tb_mempath_stock_machine/tb_memory_path_stock_machine
+
 clean:
-	rm -rf obj_dir obj_dir_tb
+	rm -rf obj_dir obj_dir_tb obj_dir_tb_bus32 obj_dir_tb_mempath obj_dir_tb_mempath_safe obj_dir_tb_mempath_ordered_line obj_dir_tb_mempath_stock_machine

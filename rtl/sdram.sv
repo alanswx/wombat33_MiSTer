@@ -79,7 +79,7 @@ assign SDRAM_nWE  = command[0];
 assign SDRAM_CKE  = 1;
 assign {SDRAM_DQMH,SDRAM_DQML} = SDRAM_A[12:11];
 
-localparam BURST_LENGTH        = 4;
+localparam BURST_LENGTH        = 8;
 localparam BURST_CODE          = (BURST_LENGTH == 8) ? 3'b011 : (BURST_LENGTH == 4) ? 3'b010 : (BURST_LENGTH == 2) ? 3'b001 : 3'b000;  // 000=1, 001=2, 010=4, 011=8
 localparam ACCESS_TYPE         = 1'b0;     // 0=sequential, 1=interleaved
 localparam CAS_LATENCY         = 3'd2;     // 2 for < 100MHz, 3 for >100MHz
@@ -129,6 +129,8 @@ localparam STATE_CPPRE_3 = 21;
 localparam STATE_RPRE_RAS  = 22;
 localparam STATE_FPRE_RAS  = 23;
 localparam STATE_CPPRE_RAS = 24;
+localparam STATE_FPRE_4    = 25;
+localparam STATE_CPPRE_4   = 26;
 
 
 // These live at module scope rather than inside the always block below.  As
@@ -140,32 +142,43 @@ localparam STATE_CPPRE_RAS = 24;
 // power-up value either way) and it makes the state machine visible to a
 // waveform viewer.
 reg [CAS_LATENCY:0] data_ready_delay = 0;
+reg  [3:0] read_tail = 0;
 reg        saved_wr;
 reg [12:0] cas_addr;
 reg  [1:0] saved_bank;
 reg [12:0] saved_row;
+reg        saved_chip;
 reg [15:0] saved_data;
 reg  [8:0] cpcnt;
 reg        old_cpreq = 0;
 reg  [4:0] state = STATE_STARTUP;
 reg        refresh_old = 0;
-reg  [3:0] row_open = 0;
-reg [12:0] open_row [0:3];
-reg  [2:0] bank_age [0:3];
+// A 128 MB MiSTer module has two 64 MB ranks.  SDRAM_nCS selects rank 0
+// directly and is inverted on the module for rank 1, so open-page state is
+// per {rank,bank}, not merely per bank.
+reg  [7:0] row_open = 0;
+reg [12:0] open_row [0:7];
+reg  [2:0] bank_age [0:7];
 integer age_i;
 
 wire  [1:0] req_bank = addr[24:23];
 wire [12:0] req_row  = addr[22:10];
-wire req_page_hit = row_open[req_bank] && open_row[req_bank] == req_row;
-wire req_tras_ok  = bank_age[req_bank] >= 3'd5;
+wire  [2:0] req_bank_idx = {addr[26], req_bank};
+wire  [2:0] saved_bank_idx = {saved_chip, saved_bank};
+wire req_page_hit = row_open[req_bank_idx] && open_row[req_bank_idx] == req_row;
+wire req_tras_ok  = bank_age[req_bank_idx] >= 3'd5;
 wire all_tras_ok  = (!row_open[0] || bank_age[0] >= 3'd5) &&
 	                 (!row_open[1] || bank_age[1] >= 3'd5) &&
 	                 (!row_open[2] || bank_age[2] >= 3'd5) &&
-	                 (!row_open[3] || bank_age[3] >= 3'd5);
+	                 (!row_open[3] || bank_age[3] >= 3'd5) &&
+	                 (!row_open[4] || bank_age[4] >= 3'd5) &&
+	                 (!row_open[5] || bank_age[5] >= 3'd5) &&
+	                 (!row_open[6] || bank_age[6] >= 3'd5) &&
+	                 (!row_open[7] || bank_age[7] >= 3'd5);
 
 always @(posedge clk) begin
 	refresh_count <= refresh_count+1'b1;
-	for (age_i = 0; age_i < 4; age_i = age_i + 1)
+	for (age_i = 0; age_i < 8; age_i = age_i + 1)
 		if (row_open[age_i] && bank_age[age_i] != 3'd7)
 			bank_age[age_i] <= bank_age[age_i] + 1'b1;
 
@@ -257,7 +270,6 @@ always @(posedge clk) begin
 							command     <= CMD_PRECHARGE;
 							SDRAM_A[10] <= 1;
 							SDRAM_BA    <= 0;
-							row_open    <= 0;
 							state       <= STATE_FPRE_1;
 						end
 						else state <= STATE_FPRE_RAS;
@@ -273,6 +285,7 @@ always @(posedge clk) begin
 					{cas_addr[12:9],saved_bank,saved_row,cas_addr[8:0]} <=
 						{~wr ? 2'b00 : ~bs, 1'b0, addr[25:1]};
 					chip       <= addr[26];
+					saved_chip <= addr[26];
 					saved_data <= din;
 					saved_wr   <= wr;
 					ready      <= 0;
@@ -280,12 +293,12 @@ always @(posedge clk) begin
 						SDRAM_BA <= req_bank;
 						state    <= STATE_RW;
 					end
-					else if (row_open[req_bank]) begin
+					else if (row_open[req_bank_idx]) begin
 						if (req_tras_ok) begin
 							command     <= CMD_PRECHARGE;
 							SDRAM_BA    <= req_bank;
 							SDRAM_A[10] <= 0;
-							row_open[req_bank] <= 0;
+							row_open[req_bank_idx] <= 0;
 							state       <= STATE_RPRE_1;
 						end
 						else state <= STATE_RPRE_RAS;
@@ -294,9 +307,9 @@ always @(posedge clk) begin
 						command            <= CMD_ACTIVE;
 						SDRAM_BA           <= req_bank;
 						SDRAM_A            <= req_row;
-						row_open[req_bank] <= 1;
-						open_row[req_bank] <= req_row;
-						bank_age[req_bank] <= 0;
+						row_open[req_bank_idx] <= 1;
+						open_row[req_bank_idx] <= req_row;
+						bank_age[req_bank_idx] <= 0;
 						state              <= STATE_WAIT;
 					end
 				end
@@ -308,11 +321,13 @@ always @(posedge clk) begin
 						{cas_addr[12:9],saved_bank,saved_row,cas_addr[8:0]} <=
 							{2'b00, 1'b0, cpaddr[25:1]};
 						chip    <= cpaddr[26];
+						saved_chip <= cpaddr[26];
 						cpbusy  <= 1;
 						cpcnt   <= 511;
 						cprd    <= 1;
 						if (row_open == 0) begin
 							command  <= CMD_ACTIVE;
+							chip     <= cpaddr[26];
 							SDRAM_BA <= cpaddr[24:23];
 							SDRAM_A  <= cpaddr[22:10];
 							state    <= STATE_WAITCP;
@@ -321,7 +336,7 @@ always @(posedge clk) begin
 							command     <= CMD_PRECHARGE;
 							SDRAM_A[10] <= 1;
 							SDRAM_BA    <= 0;
-							row_open    <= 0;
+							chip        <= 0;
 							state       <= STATE_CPPRE_1;
 						end
 						else state <= STATE_CPPRE_RAS;
@@ -332,11 +347,12 @@ always @(posedge clk) begin
 			// An explicit precharge may not precede tRAS.  Requests and refresh
 			// remain latched while the saturating per-bank age counters finish.
 			STATE_RPRE_RAS: begin
-				if (bank_age[saved_bank] >= 3'd5) begin
+				if (bank_age[saved_bank_idx] >= 3'd5) begin
 					command                <= CMD_PRECHARGE;
+					chip                   <= saved_chip;
 					SDRAM_BA               <= saved_bank;
 					SDRAM_A[10]            <= 0;
-					row_open[saved_bank]   <= 0;
+					row_open[saved_bank_idx] <= 0;
 					state                  <= STATE_RPRE_1;
 				end
 			end
@@ -346,7 +362,7 @@ always @(posedge clk) begin
 					command     <= CMD_PRECHARGE;
 					SDRAM_A[10] <= 1;
 					SDRAM_BA    <= 0;
-					row_open    <= 0;
+					chip        <= 0;
 					state       <= STATE_FPRE_1;
 				end
 			end
@@ -356,7 +372,7 @@ always @(posedge clk) begin
 					command     <= CMD_PRECHARGE;
 					SDRAM_A[10] <= 1;
 					SDRAM_BA    <= 0;
-					row_open    <= 0;
+					chip        <= 0;
 					state       <= STATE_CPPRE_1;
 				end
 			end
@@ -367,26 +383,47 @@ always @(posedge clk) begin
 			STATE_RPRE_2: state <= STATE_RPRE_3;
 			STATE_RPRE_3: begin
 				command                <= CMD_ACTIVE;
+				chip                   <= saved_chip;
 				SDRAM_BA               <= saved_bank;
 				SDRAM_A                <= saved_row;
-				row_open[saved_bank]   <= 1;
-				open_row[saved_bank]   <= saved_row;
-				bank_age[saved_bank]   <= 0;
+				row_open[saved_bank_idx] <= 1;
+				open_row[saved_bank_idx] <= saved_row;
+				bank_age[saved_bank_idx] <= 0;
 				state                  <= STATE_WAIT;
 			end
 
-			STATE_FPRE_1: state <= STATE_FPRE_2;
+			// PRECHARGE ALL must reach both ranks.  The board inverts nCS for
+			// rank 1, so issue the command once at each level, then leave a full
+			// tRP before the paired refresh commands.
+			STATE_FPRE_1: begin
+				command     <= CMD_PRECHARGE;
+				chip        <= 1;
+				SDRAM_A[10] <= 1;
+				SDRAM_BA    <= 0;
+				row_open    <= 0;
+				state       <= STATE_FPRE_2;
+			end
 			STATE_FPRE_2: state <= STATE_FPRE_3;
-			STATE_FPRE_3: begin
+			STATE_FPRE_3: state <= STATE_FPRE_4;
+			STATE_FPRE_4: begin
 				command <= CMD_AUTO_REFRESH;
 				chip    <= 0;
 				state   <= STATE_RFSH;
 			end
 
-			STATE_CPPRE_1: state <= STATE_CPPRE_2;
+			STATE_CPPRE_1: begin
+				command     <= CMD_PRECHARGE;
+				chip        <= 1;
+				SDRAM_A[10] <= 1;
+				SDRAM_BA    <= 0;
+				row_open    <= 0;
+				state       <= STATE_CPPRE_2;
+			end
 			STATE_CPPRE_2: state <= STATE_CPPRE_3;
-			STATE_CPPRE_3: begin
+			STATE_CPPRE_3: state <= STATE_CPPRE_4;
+			STATE_CPPRE_4: begin
 				command  <= CMD_ACTIVE;
+				chip     <= saved_chip;
 				SDRAM_BA <= saved_bank;
 				SDRAM_A  <= saved_row;
 				state    <= STATE_WAITCP;
@@ -406,11 +443,19 @@ always @(posedge clk) begin
 				else begin
 					command    <= CMD_READ;
 					data_ready_delay[CAS_LATENCY] <= 1;
+					read_tail <= BURST_LENGTH - 1;
 				end
 			end
 
 			STATE_RDWAIT: begin
-				if (data_ready_delay[0]) state <= STATE_IDLE_1;
+				// Keep the command scheduler quiescent until every word of the
+				// programmed burst has left DQ.  With BL8 the bridge retains the
+				// whole 16-byte line; precharge/refresh or a second READ before
+				// the tail completes would terminate or overlap that transfer.
+				if (!data_ready_delay[0] && ready && read_tail != 0) begin
+					read_tail <= read_tail - 1'b1;
+					if (read_tail == 1) state <= STATE_IDLE_1;
+				end
 			end
 
 			STATE_WAITCP: state <= STATE_CP;
@@ -436,6 +481,11 @@ always @(posedge clk) begin
 			bank_age[1]   <= 7;
 			bank_age[2]   <= 7;
 			bank_age[3]   <= 7;
+			bank_age[4]   <= 7;
+			bank_age[5]   <= 7;
+			bank_age[6]   <= 7;
+			bank_age[7]   <= 7;
+			read_tail     <= 0;
 		end
 	end
 	else begin
