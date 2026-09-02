@@ -3,6 +3,7 @@
 module tb_memory_path #(
 	parameter integer FAST_BYPASS = 1,
 	parameter integer DIRECT_FIRST_MISS = FAST_BYPASS,
+	parameter integer REGISTERED_FIRST_MISS = 0,
 	parameter integer ADAPTER_LINE_HIT = FAST_BYPASS,
 	parameter integer DIRECT_MEM_ACK = 1,
 	parameter integer REGISTERED_LINE_HIT = 0
@@ -42,6 +43,8 @@ wire b_ack;
 wire [31:0] b_rdata;
 reg b_ack_r = 0;
 reg [31:0] b_rdata_r = 0;
+reg t_fast_ack_r = 0;
+reg [31:0] t_fast_rdata_r = 0;
 
 reg svc_mem = 0;
 reg svc_fast = 0;
@@ -67,15 +70,16 @@ wire [31:0] line_word = (b_addr[3:2] == 2'd0) ? line_data[127:96] :
 	                         (b_addr[3:2] == 2'd1) ? line_data[95:64]  :
 	                         (b_addr[3:2] == 2'd2) ? line_data[63:32]  :
 	                                                         line_data[31:0];
-wire t_line_match = FAST_BYPASS && !svc_mem && !adapter_active && !adapter_ack &&
-	                t_req && !t_write && t_size == 2'd2 && t_addr[1:0] == 0 &&
-	                line_valid && t_addr[26:4] == line_tag;
+wire t_line_match = FAST_BYPASS && !svc_mem && !t_fast_ack_r &&
+	                !adapter_active && !adapter_ack && t_req && !t_write &&
+	                t_size == 2'd2 && t_addr[1:0] == 0 && line_valid &&
+	                t_addr[26:4] == line_tag;
 reg t_line_ready = 0;
 reg [31:2] t_line_seen = 0;
 wire t_line_ack = t_line_match && t_line_ready && t_addr[31:2] == t_line_seen;
-wire t_line_wait = FAST_BYPASS && !svc_mem && !adapter_active && !adapter_ack &&
-	               t_req && !t_write && t_size == 2'd2 && t_addr[1:0] == 0 &&
-	               line_pending &&
+wire t_line_wait = FAST_BYPASS && !svc_mem && !t_fast_ack_r &&
+	               !adapter_active && !adapter_ack && t_req && !t_write &&
+	               t_size == 2'd2 && t_addr[1:0] == 0 && line_pending &&
 	               t_addr[26:4] == line_pending_tag;
 wire [31:0] t_line_word = (t_addr[3:2] == 2'd0) ? line_data[127:96] :
 	                           (t_addr[3:2] == 2'd1) ? line_data[95:64]  :
@@ -83,12 +87,15 @@ wire [31:0] t_line_word = (t_addr[3:2] == 2'd0) ? line_data[127:96] :
 	                                                           line_data[31:0];
 wire t_fast_eligible = DIRECT_FIRST_MISS && t_req && !t_write && t_size == 2'd2 &&
 	                   t_addr[1:0] == 0;
-wire t_fast_req = t_fast_eligible && !t_line_match && !t_line_wait;
-wire mem_fast_ack = svc_mem && svc_fast && sdr_ack;
+wire t_fast_req = t_fast_eligible && !t_fast_ack_r &&
+	              !t_line_match && !t_line_wait;
+wire mem_fast_ack = REGISTERED_FIRST_MISS ? t_fast_ack_r :
+	                (svc_mem && svc_fast && sdr_ack);
+wire [31:0] mem_fast_rdata = REGISTERED_FIRST_MISS ? t_fast_rdata_r : sdr_rdata;
 
 assign t_ack = t_line_ack || mem_fast_ack || adapter_ack;
 assign t_rdata = t_line_ack ? t_line_word :
-	             mem_fast_ack ? sdr_rdata : adapter_rdata;
+	             mem_fast_ack ? mem_fast_rdata : adapter_rdata;
 
 always @(posedge clk_sys) begin
 	if (!nreset) t_line_ready <= 0;
@@ -124,9 +131,12 @@ always @(posedge clk_sys) begin
 		mem_req <= 0;
 		b_ack_r <= 0;
 		b_rdata_r <= 0;
+		t_fast_ack_r <= 0;
+		t_fast_rdata_r <= 0;
 	end
 	else begin
 		b_ack_r <= 0;
+		t_fast_ack_r <= 0;
 		if (!svc_mem) begin
 			if (REGISTERED_LINE_HIT && line_match && !b_ack) begin
 				b_ack_r <= 1;
@@ -145,7 +155,11 @@ always @(posedge clk_sys) begin
 		else if (sdr_ack) begin
 			svc_mem <= 0;
 			mem_req <= 0;
-			if (!DIRECT_MEM_ACK && !svc_fast) begin
+			if (REGISTERED_FIRST_MISS && svc_fast) begin
+				t_fast_ack_r <= 1;
+				t_fast_rdata_r <= sdr_rdata;
+			end
+			else if (!DIRECT_MEM_ACK && !svc_fast) begin
 				b_ack_r <= 1;
 				b_rdata_r <= sdr_rdata;
 			end
@@ -213,9 +227,9 @@ reg [31:0] got;
 reg [15:0] lfsr;
 
 initial begin
-	$display("tb_memory_path: FAST_BYPASS=%0d DIRECT_FIRST_MISS=%0d ADAPTER_LINE_HIT=%0d DIRECT_MEM_ACK=%0d REGISTERED_LINE_HIT=%0d",
-	         FAST_BYPASS, DIRECT_FIRST_MISS, ADAPTER_LINE_HIT,
-	         DIRECT_MEM_ACK, REGISTERED_LINE_HIT);
+	$display("tb_memory_path: FAST_BYPASS=%0d DIRECT_FIRST_MISS=%0d REGISTERED_FIRST_MISS=%0d ADAPTER_LINE_HIT=%0d DIRECT_MEM_ACK=%0d REGISTERED_LINE_HIT=%0d",
+	         FAST_BYPASS, DIRECT_FIRST_MISS, REGISTERED_FIRST_MISS,
+	         ADAPTER_LINE_HIT, DIRECT_MEM_ACK, REGISTERED_LINE_HIT);
 	repeat (4) @(posedge clk_sys);
 	nreset = 1;
 	init = 0;

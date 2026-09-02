@@ -363,3 +363,48 @@ word path while retaining a registered CPU-visible acknowledgement and the
 adapter's ownership/order checks. Broad direct memory acknowledgement remains
 rejected because it froze the hardware Disk test even when line bypass was
 disabled.
+
+### Registered direct first miss
+
+Aligned longword reads to decoded RAM now bypass `wombat_bus32` on the first
+miss as well as on retained-line hits. The SDRAM completion still enters a
+dedicated register before it reaches the CPU, so this does not restore the
+combinational direct-ack path that failed the Disk test. Writes, byte/word and
+misaligned accesses, page-table walks, and every non-RAM target retain the
+established adapter and service-FSM path.
+
+The integrated post-cache model improves from 43.7 to **52.4 MB/s**, inside the
+real Quadra 800's 50--65 MB/s sequential-RAM range. A 16-byte fill falls from
+365 to **304 ns**. It passes 64 sequential reads and 2,048 mixed
+posted-write/read operations in order; the independent SDRAM test remains
+45/45 with zero chip-protocol errors, the transaction adapter remains 6/6,
+and the complete Verilator machine builds.
+
+| Speedometer 3.23 PR Test | registered bus line | registered first miss | gain |
+|---|---:|---:|---:|
+| CPU | 3.378 | **3.425** | **+1.4%** |
+| Graphics | 4.536 | **4.542** | +0.1% |
+| Disk | 0.681 | **0.682** | +0.1% |
+| Math | 22.639 | **22.957** | **+1.4%** |
+| Old PR | 5.112 | **5.165** | **+1.0%** |
+| New PR | 2.072 | **2.082** | +0.5% |
+
+The RBF is `Wombat33_BL8_regfirstmiss_seed17_20260902.rbf`, MD5
+`4a92a48e907a3f060e0bdae77905d5ba` and SHA-256
+`677c60e85fcd766c59faa026564b511e5433051cb6690078467b11ed68fd30d8`.
+Quartus reports +0.143 ns setup and +0.250 ns hold with zero setup or hold
+TNS. It booted Mac OS 7.5.5, completed one iteration of every PR category,
+including Disk, and shut down cleanly. Against the fresh seed-15 control, the
+cumulative gains are **+17.4% CPU**, **+19.0% Graphics**, and **+26.0% Math**.
+
+The MiSTer auto-mount file points at
+`games/Wombat33/QuadSquad8.hda`; that is the disposable image. Cleanup after
+this run exposed that the previous 9c685... restore command had treated that
+mounted file as the source and copied it over the unmounted MacAtrium copy, so
+the exact 9c685... snapshot is no longer present. A new cleanly shut-down
+golden was established at
+`games/MacIIvi/MacAtrium-7.5.5-fullcolor_speedtest.hda`, MD5
+`0c4f774b4a2eccd5656e92f16119875f`, with a restore-verified compressed copy at
+`games/Wombat33/backup/MacAtrium-7.5.5-fullcolor_speedtest_golden_20260902.hda.gz`.
+Future runs must copy or decompress that golden **to** `QuadSquad8.hda`; the
+golden must never be used as the restore destination or mounted by the core.

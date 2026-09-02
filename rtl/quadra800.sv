@@ -129,9 +129,12 @@ wire        bus_adapter_active;
 wire        bus_req_adapter;
 reg         bus_line_ack;
 reg  [31:0] bus_line_rdata;
+reg         bus_miss_ack;
+reg  [31:0] bus_miss_rdata;
 
-assign bus_ack   = bus_line_ack ? 1'b1           : bus_ack_adapter;
-assign bus_rdata = bus_line_ack ? bus_line_rdata : bus_rdata_adapter;
+assign bus_ack   = bus_line_ack || bus_miss_ack || bus_ack_adapter;
+assign bus_rdata = bus_line_ack ? bus_line_rdata :
+	               bus_miss_ack ? bus_miss_rdata : bus_rdata_adapter;
 
 wire        walker_req, walker_we;
 wire [31:0] walker_addr, walker_wdat;
@@ -365,6 +368,7 @@ localparam S_IDLE = 3'd0, S_MEM = 3'd1, S_IOSB = 3'd2, S_BERR = 3'd3,
            S_DAFB = 3'd4, S_OPEN = 3'd5;
 reg  [2:0] svc;
 reg        svc_walker;                        // owner of the beat in service
+reg        svc_bus_direct;                    // aligned RAM miss bypassed bus32
 reg [31:2] svc_addr;
 
 wire        walker_pend = walker_req && walker_armed;
@@ -384,26 +388,28 @@ wire [31:0] line_cpu_data = (b_addr[3:2] == 2'd0) ? mem_line_data[127:96] :
 	                        (b_addr[3:2] == 2'd2) ? mem_line_data[63:32]  :
 	                                                        mem_line_data[31:0];
 
-// Aligned longword reads are the cache-fill shape before wombat_bus32. Once
-// the adapter has fully retired the critical-word transaction, return later
-// words from the retained BL8 line directly to that transaction port. The ack
-// remains a registered one-cycle pulse; adapter-active and adapter-ack guards
-// prevent the just-completed critical word from being acknowledged twice.
-wire bus_line_eligible = (svc == S_IDLE) && !walker_pend && !cpu_berr &&
-	                     !bus_adapter_active && !bus_ack_adapter && bus_req &&
-	                     !bus_write && (bus_size == 2'd2) &&
-	                     (bus_addr[1:0] == 2'b00) &&
-	                     (decode(bus_addr[31:2]) == 3'd0);
-wire bus_line_match = bus_line_eligible && mem_line_valid &&
+// Aligned RAM longword reads are the cache-fill shape before wombat_bus32.
+// Send a first miss directly into the memory service, which still captures its
+// completion in registers, and return later words from the retained BL8 line
+// through their own registered pulse. Adapter-active/ack and direct-miss-ack
+// guards prevent either word from being launched or acknowledged twice.
+wire bus_ram_eligible = (svc == S_IDLE) && !walker_pend && !cpu_berr &&
+	                    !bus_miss_ack && !bus_adapter_active &&
+	                    !bus_ack_adapter && bus_req && !bus_write &&
+	                    (bus_size == 2'd2) && (bus_addr[1:0] == 2'b00) &&
+	                    (decode(bus_addr[31:2]) == 3'd0);
+wire bus_line_match = bus_ram_eligible && mem_line_valid &&
 	                  (bus_addr[26:4] == mem_line_tag);
-wire bus_line_wait  = bus_line_eligible && mem_line_pending &&
+wire bus_line_wait  = bus_ram_eligible && mem_line_pending &&
 	                  (bus_addr[26:4] == mem_line_pending_tag);
+wire bus_first_miss = bus_ram_eligible && !bus_line_match && !bus_line_wait;
 wire [31:0] bus_line_data = (bus_addr[3:2] == 2'd0) ? mem_line_data[127:96] :
 	                        (bus_addr[3:2] == 2'd1) ? mem_line_data[95:64]  :
 	                        (bus_addr[3:2] == 2'd2) ? mem_line_data[63:32]  :
 	                                                          mem_line_data[31:0];
 
-assign bus_req_adapter = bus_req && !bus_line_match && !bus_line_wait;
+assign bus_req_adapter = bus_req && !bus_line_match && !bus_line_wait &&
+	                     !bus_first_miss && !svc_bus_direct && !bus_miss_ack;
 
 always @(posedge clk) begin
 	if (!nreset) begin
@@ -428,6 +434,7 @@ always @(posedge clk) begin
 		overlay      <= 1;
 		svc          <= S_IDLE;
 		svc_walker   <= 0;
+		svc_bus_direct <= 0;
 		svc_addr     <= 0;
 		walker_armed <= 1;
 		walker_ack   <= 0;
@@ -435,6 +442,8 @@ always @(posedge clk) begin
 		walker_berr  <= 0;
 		b_ack        <= 0;
 		b_rdata      <= 0;
+		bus_miss_ack   <= 0;
+		bus_miss_rdata <= 0;
 		cpu_berr     <= 0;
 		mem_req      <= 0;
 		mem_write    <= 0;
@@ -456,6 +465,7 @@ always @(posedge clk) begin
 		walker_ack  <= 0;
 		walker_berr <= 0;
 		b_ack       <= 0;
+		bus_miss_ack <= 0;
 		cpu_berr    <= 0;
 		if (!walker_req) walker_armed <= 1;
 
@@ -464,11 +474,23 @@ always @(posedge clk) begin
 			// walker first: it only runs mid-translation, never starves the
 			// CPU.  !b_ack/!cpu_berr: the adapter needs a cycle to retire a
 			// just-completed or just-faulted beat before b_req means "next".
-			if (walker_pend ||
+			if (walker_pend || bus_first_miss ||
 			    (b_req && !b_ack && !cpu_berr && !line_cpu_wait)) begin
 				reg [31:2] a;
 				reg        wr;
-				if (!walker_pend && line_cpu_match) begin
+				if (bus_first_miss) begin
+					svc_walker     <= 0;
+					svc_bus_direct <= 1;
+					svc_addr       <= bus_addr[31:2];
+					mem_req        <= 1;
+					mem_write      <= 0;
+					mem_addr       <= bus_addr[31:2];
+					mem_be         <= 4'b1111;
+					mem_wdata      <= 0;
+					mem_memsel     <= MSEL_RAM;
+					svc            <= S_MEM;
+				end
+				else if (!walker_pend && line_cpu_match) begin
 					b_ack   <= 1;
 					b_rdata <= line_cpu_data;
 				end
@@ -476,6 +498,7 @@ always @(posedge clk) begin
 					a  = walker_pend ? walker_addr[31:2] : b_addr;
 					wr = walker_pend ? walker_we : b_write;
 					svc_walker <= walker_pend;
+					svc_bus_direct <= 0;
 					if (walker_pend) walker_armed <= 0;
 					svc_addr   <= a;
 					// the ROM's own window read ends the boot overlay
@@ -518,10 +541,15 @@ always @(posedge clk) begin
 				walker_ack  <= 1;
 				walker_data <= mem_rdata;
 			end
+			else if (svc_bus_direct) begin
+				bus_miss_ack   <= 1;
+				bus_miss_rdata <= mem_rdata;
+			end
 			else begin
 				b_ack   <= 1;
 				b_rdata <= mem_rdata;
 			end
+			svc_bus_direct <= 0;
 			svc <= S_IDLE;
 		end
 		S_IOSB: if (iosb_ack) begin
