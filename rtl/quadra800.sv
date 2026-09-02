@@ -153,6 +153,11 @@ wombat_cpu cpu (
 	.ipl(ipl_n),
 	.ipl_autovector(1'b1),
 	.berr(cpu_berr),
+	// The retained SDRAM line is physical RAM only.  During boot overlay the
+	// same low CPU addresses select ROM, so keep the sideband disabled there.
+	.cache_line_valid(!overlay && mem_line_valid),
+	.cache_line_tag({5'd0, mem_line_tag}),
+	.cache_line_data(mem_line_data),
 
 	.bus_req(bus_req),
 	.bus_write(bus_write),

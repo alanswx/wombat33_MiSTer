@@ -408,3 +408,47 @@ golden was established at
 `games/Wombat33/backup/MacAtrium-7.5.5-fullcolor_speedtest_golden_20260902.hda.gz`.
 Future runs must copy or decompress that golden **to** `QuadSquad8.hda`; the
 golden must never be used as the restore destination or mounted by the core.
+
+## 10. AP040 retained-line cache fill (Speedometer 3.23)
+
+The first CPU-side optimization reuses the 16-byte line already retained by
+`sdram_beat32`. A normal registered RAM read still starts a cache miss. Once the
+complete physical line is valid, `ap040_cache` copies its remaining words into
+the selected cache way locally, one word per CPU clock, instead of issuing three
+more post-cache bus transactions. The tag is validated after all four words are
+written, and the CPU receives its acknowledgement only in the existing
+`C_TAGW` state. This preserves the completion contract that passed every prior
+hardware gate while removing redundant transaction-adapter and service-FSM
+handshakes.
+
+An earlier critical-word early-ack implementation was rejected despite passing
+the AP68040 suite, SingleStepTests, full-machine simulation, and timing. Two
+independent timing-clean all-cacheable builds and a post-overlay physical-RAM-
+only build all produced a black screen, while the unchanged memory baseline
+booted immediately from the same restored disk. Releasing the CPU before its
+cache line is committed is therefore not part of the accepted design.
+
+The accepted seed-17 line-assist build passed the complete AP68040 suite. Its
+directed cache test checks that exactly one external read is issued, the other
+three words come from the completed-line sideband, the requested word is
+correct, and all four later line hits generate no bus traffic. The complete
+Wombat Verilator model builds, and the first 100 SingleStepTests corpus rows
+match all 1,696 architectural field groups with zero real differences.
+
+| Speedometer 3.23 PR Test | registered first miss | AP040 line assist | gain |
+|---|---:|---:|---:|
+| CPU | 3.425 | **3.494** | **+2.0%** |
+| Graphics | 4.542 | **4.707** | **+3.6%** |
+| Disk | 0.682 | 0.679 | -0.4% |
+| Math | 22.957 | **23.477** | **+2.3%** |
+| Old PR | 5.165 | **5.293** | **+2.5%** |
+| New PR | 2.082 | **2.096** | +0.7% |
+
+The RBF is `Wombat33_CPU_lineassist_seed17_20260902.rbf`, MD5
+`cee04efa7c3db4e0539e757fafa1d645` and SHA-256
+`54cf0f7f6d2c8526d8eab44cfe889f0ff63ce8d629ca40848f155efc2ff715a3`.
+Quartus reports +0.348 ns setup and +0.244 ns hold with zero setup or hold TNS.
+It booted Mac OS 7.5.5 and completed every PR category, including Disk. Mac OS
+was shut down to its safe-to-switch-off screen, the MiSTer returned to its menu,
+and the disposable disk was restored from the pristine golden; both images then
+matched MD5 `0c4f774b4a2eccd5656e92f16119875f`.

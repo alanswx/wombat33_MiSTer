@@ -32,6 +32,11 @@ module wombat_cpu
 	input         ipl_autovector,
 	input         berr,
 
+	// Optional completed physical RAM line retained by the platform.
+	input         cache_line_valid,
+	input  [31:4] cache_line_tag,
+	input [127:0] cache_line_data,
+
 	// post-cache 32-bit transaction bus (physical addresses)
 	output        bus_req,
 	output        bus_write,
@@ -302,6 +307,9 @@ if (AP040_ENABLE_CACHE != 0) begin : g_cache
 		.m_fc(bus_fc),
 		.m_ack(bus_ack),
 		.m_rdata(bus_rdata),
+		.m_line_valid(cache_line_valid),
+		.m_line_tag(cache_line_tag),
+		.m_line_data(cache_line_data),
 		.m_err(berr)
 	);
 end
