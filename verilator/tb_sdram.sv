@@ -159,6 +159,7 @@ endfunction
 integer i;
 time    t0, t1, dr, dw;
 integer rd_cycles, wr_cycles;
+integer acts0, pres0;
 reg [31:0] exp;
 reg  [3:0] m;
 
@@ -194,6 +195,32 @@ initial begin
 	check(chip.peek(25'h000100, 1'b0) == 16'h1122 &&
 	      chip.peek(25'h000100, 1'b1) == 16'h3344,
 	      "in the chip, the high halfword is at the even word address");
+
+	//--------------------------------------------------------------------
+	// 1b. page hits, independent bank rows, and an explicit row conflict
+	//--------------------------------------------------------------------
+	// Keep refresh outside this short directed window so command counts say
+	// exactly what the page scheduler did rather than including maintenance.
+	@(negedge clk_ram); dut.refcnt = 0;
+	acts0 = chip.active_count;
+	pres0 = chip.precharge_count;
+	for (i = 0; i < 4; i = i + 1) rd32(25'h000100 + i);
+	check(chip.active_count == acts0 && chip.precharge_count == pres0,
+	      "same-row reads reuse the open page");
+
+	rd32(25'h200100); // bank 1, same row/column
+	check(chip.active_count == acts0 + 1 && chip.precharge_count == pres0,
+	      "a different bank activates without closing bank 0");
+	rd32(25'h000101);
+	check(chip.active_count == acts0 + 1,
+	      "returning to bank 0 reuses its independently open row");
+
+	rd32(25'h000200); // bank 0, next row
+	check(chip.active_count == acts0 + 2 && chip.precharge_count == pres0 + 1,
+	      "same-bank row conflict precharges and reactivates");
+	// The refcnt reset above intentionally lengthened one refresh interval.
+	// Exclude only that test-induced gap from the later maintenance report.
+	@(negedge clk_ram); chip.t_refresh = 0; chip.max_refresh_gap = 0;
 
 	//--------------------------------------------------------------------
 	// 2. byte enables, all sixteen masks
@@ -360,6 +387,15 @@ integer t_refresh = 0;
 
 integer min_trc = 9999, min_trcd = 9999, min_trp = 9999, min_tras = 9999;
 integer max_refresh_gap = 0;
+integer active_count = 0, precharge_count = 0;
+
+// Conservative 99 MHz requirements for the supported MiSTer SDRAM parts.
+// The controller may exceed these; going below one is a protocol failure.
+localparam integer T_RCD = 2;
+localparam integer T_RP  = 3;
+localparam integer T_RAS = 5;
+localparam integer T_RC  = 7;
+localparam integer T_RFC = 7;
 
 // read pipeline; a word placed at index cl-1+j is driven j cycles after the
 // first, and reaches the pins CAS-latency cycles after the RD command
@@ -446,10 +482,15 @@ always @(posedge clk) begin
 		end
 
 		CMD_PRECHARGE: begin
+			precharge_count = precharge_count + 1;
 			for (i = 0; i < 4; i = i + 1)
 				if (a[10] || i == ba) begin
-					if (row_open[i] && (now - t_act[i]) < min_tras)
-						min_tras = now - t_act[i];
+					if (row_open[i]) begin
+						if ((now - t_act[i]) < min_tras) min_tras = now - t_act[i];
+						if ((now - t_act[i]) < T_RAS)
+							err($sformatf("tRAS violation on bank %0d: %0d < %0d",
+							              i, now - t_act[i], T_RAS));
+					end
 					row_open[i] = 0;
 					t_pre[i]    = now;
 				end
@@ -457,11 +498,20 @@ always @(posedge clk) begin
 
 		CMD_ACTIVE: begin
 			b = ba;
+			active_count = active_count + 1;
 			if (row_open[b])
 				err($sformatf("ACTIVE on bank %0d with row %0d still open", b, row[b]));
 			if (!mode_set) err("ACTIVE before the mode register was loaded");
 			if ((now - t_pre[b]) < min_trp) min_trp = now - t_pre[b];
 			if ((now - t_act[b]) < min_trc) min_trc = now - t_act[b];
+			if ((now - t_pre[b]) < T_RP)
+				err($sformatf("tRP violation on bank %0d: %0d < %0d",
+				              b, now - t_pre[b], T_RP));
+			if ((now - t_act[b]) < T_RC)
+				err($sformatf("tRC violation on bank %0d: %0d < %0d",
+				              b, now - t_act[b], T_RC));
+			if (t_refresh > 0 && (now - t_refresh) < T_RFC)
+				err($sformatf("tRFC violation: %0d < %0d", now - t_refresh, T_RFC));
 			row_open[b] = 1;
 			row[b]      = a;
 			t_act[b]    = now;
@@ -475,6 +525,9 @@ always @(posedge clk) begin
 				              cmd == CMD_READ ? "READ" : "WRITE", b));
 			else begin
 				if ((now - t_act[b]) < min_trcd) min_trcd = now - t_act[b];
+				if ((now - t_act[b]) < T_RCD)
+					err($sformatf("tRCD violation on bank %0d: %0d < %0d",
+					              b, now - t_act[b], T_RCD));
 				if (cmd == CMD_READ) begin
 					if (dq_drive) err("READ while the chip is still driving DQ");
 					// sequential burst, wrapping inside the aligned block

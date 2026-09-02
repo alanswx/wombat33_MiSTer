@@ -116,6 +116,19 @@ localparam STATE_IDLE_3  =  8;
 localparam STATE_IDLE_4  =  9;
 localparam STATE_IDLE_5  = 10;
 localparam STATE_RFSH    = 11;
+localparam STATE_RDWAIT  = 12;
+localparam STATE_RPRE_1  = 13;
+localparam STATE_RPRE_2  = 14;
+localparam STATE_RPRE_3  = 15;
+localparam STATE_FPRE_1  = 16;
+localparam STATE_FPRE_2  = 17;
+localparam STATE_FPRE_3  = 18;
+localparam STATE_CPPRE_1 = 19;
+localparam STATE_CPPRE_2 = 20;
+localparam STATE_CPPRE_3 = 21;
+localparam STATE_RPRE_RAS  = 22;
+localparam STATE_FPRE_RAS  = 23;
+localparam STATE_CPPRE_RAS = 24;
 
 
 // These live at module scope rather than inside the always block below.  As
@@ -129,14 +142,32 @@ localparam STATE_RFSH    = 11;
 reg [CAS_LATENCY:0] data_ready_delay = 0;
 reg        saved_wr;
 reg [12:0] cas_addr;
+reg  [1:0] saved_bank;
+reg [12:0] saved_row;
 reg [15:0] saved_data;
 reg  [8:0] cpcnt;
 reg        old_cpreq = 0;
-reg  [3:0] state = STATE_STARTUP;
+reg  [4:0] state = STATE_STARTUP;
 reg        refresh_old = 0;
+reg  [3:0] row_open = 0;
+reg [12:0] open_row [0:3];
+reg  [2:0] bank_age [0:3];
+integer age_i;
+
+wire  [1:0] req_bank = addr[24:23];
+wire [12:0] req_row  = addr[22:10];
+wire req_page_hit = row_open[req_bank] && open_row[req_bank] == req_row;
+wire req_tras_ok  = bank_age[req_bank] >= 3'd5;
+wire all_tras_ok  = (!row_open[0] || bank_age[0] >= 3'd5) &&
+	                 (!row_open[1] || bank_age[1] >= 3'd5) &&
+	                 (!row_open[2] || bank_age[2] >= 3'd5) &&
+	                 (!row_open[3] || bank_age[3] >= 3'd5);
 
 always @(posedge clk) begin
 	refresh_count <= refresh_count+1'b1;
+	for (age_i = 0; age_i < 4; age_i = age_i + 1)
+		if (row_open[age_i] && bank_age[age_i] != 3'd7)
+			bank_age[age_i] <= bank_age[age_i] + 1'b1;
 
 	data_ready_delay <= data_ready_delay>>1;
 	if(data_ready_delay[0]) ready <= 1;
@@ -219,40 +250,152 @@ always @(posedge clk) begin
 
 			STATE_IDLE: begin
 				if (refresh ^ refresh_old) begin
-					state      <= STATE_RFSH;
-					command    <= CMD_AUTO_REFRESH;
-					chip       <= 0;
 					refresh_old<= refresh;
+					chip       <= 0;
+					if (row_open != 0) begin
+						if (all_tras_ok) begin
+							command     <= CMD_PRECHARGE;
+							SDRAM_A[10] <= 1;
+							SDRAM_BA    <= 0;
+							row_open    <= 0;
+							state       <= STATE_FPRE_1;
+						end
+						else state <= STATE_FPRE_RAS;
+					end
+					else begin
+						command <= CMD_AUTO_REFRESH;
+						state   <= STATE_RFSH;
+					end
 				end
 				else if (sel & (rd | wr)) begin
-					{cas_addr[12:9],SDRAM_BA,SDRAM_A,cas_addr[8:0]} <= {~wr ? 2'b00 : ~bs, 1'b1, addr[25:1]};
+					// A10 is deliberately zero: CPU rows stay open.  Row conflicts,
+					// refresh and the copy port close them explicitly below.
+					{cas_addr[12:9],saved_bank,saved_row,cas_addr[8:0]} <=
+						{~wr ? 2'b00 : ~bs, 1'b0, addr[25:1]};
 					chip       <= addr[26];
 					saved_data <= din;
 					saved_wr   <= wr;
-					command    <= CMD_ACTIVE;
-					state      <= STATE_WAIT;
 					ready      <= 0;
+					if (req_page_hit) begin
+						SDRAM_BA <= req_bank;
+						state    <= STATE_RW;
+					end
+					else if (row_open[req_bank]) begin
+						if (req_tras_ok) begin
+							command     <= CMD_PRECHARGE;
+							SDRAM_BA    <= req_bank;
+							SDRAM_A[10] <= 0;
+							row_open[req_bank] <= 0;
+							state       <= STATE_RPRE_1;
+						end
+						else state <= STATE_RPRE_RAS;
+					end
+					else begin
+						command            <= CMD_ACTIVE;
+						SDRAM_BA           <= req_bank;
+						SDRAM_A            <= req_row;
+						row_open[req_bank] <= 1;
+						open_row[req_bank] <= req_row;
+						bank_age[req_bank] <= 0;
+						state              <= STATE_WAIT;
+					end
 				end
 				else begin
 					cpbusy     <= 0;
 					cprd       <= 0;
 					old_cpreq  <= cpreq;
 					if(~old_cpreq & cpreq & cpsel) begin
-						{cas_addr[12:9],SDRAM_BA,SDRAM_A,cas_addr[8:0]} <= {2'b00, 1'b0, cpaddr[25:1]};
+						{cas_addr[12:9],saved_bank,saved_row,cas_addr[8:0]} <=
+							{2'b00, 1'b0, cpaddr[25:1]};
 						chip    <= cpaddr[26];
 						cpbusy  <= 1;
 						cpcnt   <= 511;
-						command <= CMD_ACTIVE;
-						state   <= STATE_WAITCP;
 						cprd    <= 1;
+						if (row_open == 0) begin
+							command  <= CMD_ACTIVE;
+							SDRAM_BA <= cpaddr[24:23];
+							SDRAM_A  <= cpaddr[22:10];
+							state    <= STATE_WAITCP;
+						end
+						else if (all_tras_ok) begin
+							command     <= CMD_PRECHARGE;
+							SDRAM_A[10] <= 1;
+							SDRAM_BA    <= 0;
+							row_open    <= 0;
+							state       <= STATE_CPPRE_1;
+						end
+						else state <= STATE_CPPRE_RAS;
 					end
 				end
 			end
 
+			// An explicit precharge may not precede tRAS.  Requests and refresh
+			// remain latched while the saturating per-bank age counters finish.
+			STATE_RPRE_RAS: begin
+				if (bank_age[saved_bank] >= 3'd5) begin
+					command                <= CMD_PRECHARGE;
+					SDRAM_BA               <= saved_bank;
+					SDRAM_A[10]            <= 0;
+					row_open[saved_bank]   <= 0;
+					state                  <= STATE_RPRE_1;
+				end
+			end
+
+			STATE_FPRE_RAS: begin
+				if (all_tras_ok) begin
+					command     <= CMD_PRECHARGE;
+					SDRAM_A[10] <= 1;
+					SDRAM_BA    <= 0;
+					row_open    <= 0;
+					state       <= STATE_FPRE_1;
+				end
+			end
+
+			STATE_CPPRE_RAS: begin
+				if (all_tras_ok) begin
+					command     <= CMD_PRECHARGE;
+					SDRAM_A[10] <= 1;
+					SDRAM_BA    <= 0;
+					row_open    <= 0;
+					state       <= STATE_CPPRE_1;
+				end
+			end
+
+			// Three command spacings from PRE to ACT give 30.3 ns at 99 MHz,
+			// safely above the 20 ns-class tRP of supported MiSTer SDRAM.
+			STATE_RPRE_1: state <= STATE_RPRE_2;
+			STATE_RPRE_2: state <= STATE_RPRE_3;
+			STATE_RPRE_3: begin
+				command                <= CMD_ACTIVE;
+				SDRAM_BA               <= saved_bank;
+				SDRAM_A                <= saved_row;
+				row_open[saved_bank]   <= 1;
+				open_row[saved_bank]   <= saved_row;
+				bank_age[saved_bank]   <= 0;
+				state                  <= STATE_WAIT;
+			end
+
+			STATE_FPRE_1: state <= STATE_FPRE_2;
+			STATE_FPRE_2: state <= STATE_FPRE_3;
+			STATE_FPRE_3: begin
+				command <= CMD_AUTO_REFRESH;
+				chip    <= 0;
+				state   <= STATE_RFSH;
+			end
+
+			STATE_CPPRE_1: state <= STATE_CPPRE_2;
+			STATE_CPPRE_2: state <= STATE_CPPRE_3;
+			STATE_CPPRE_3: begin
+				command  <= CMD_ACTIVE;
+				SDRAM_BA <= saved_bank;
+				SDRAM_A  <= saved_row;
+				state    <= STATE_WAITCP;
+			end
+
 			STATE_WAIT: state <= STATE_RW;
 			STATE_RW: begin
-				// Wait at least 4 cycles @96MHz (2 CAS_LATENCY + 2 PRECHARGE (tRP 21ns))
-				state         <= STATE_IDLE_4;
+				state         <= saved_wr ? STATE_IDLE_1 : STATE_RDWAIT;
+				SDRAM_BA      <= saved_bank;
 				SDRAM_A       <= cas_addr;
 				if(saved_wr) begin
 					command    <= CMD_WRITE;
@@ -264,6 +407,10 @@ always @(posedge clk) begin
 					command    <= CMD_READ;
 					data_ready_delay[CAS_LATENCY] <= 1;
 				end
+			end
+
+			STATE_RDWAIT: begin
+				if (data_ready_delay[0]) state <= STATE_IDLE_1;
 			end
 
 			STATE_WAITCP: state <= STATE_CP;
@@ -284,6 +431,11 @@ always @(posedge clk) begin
 		if (init) begin
 			state         <= STATE_STARTUP;
 			refresh_count <= startup_refresh_max - sdram_startup_cycles;
+			row_open      <= 0;
+			bank_age[0]   <= 7;
+			bank_age[1]   <= 7;
+			bank_age[2]   <= 7;
+			bank_age[3]   <= 7;
 		end
 	end
 	else begin
