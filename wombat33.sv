@@ -314,6 +314,12 @@ wire [1:0] ram_cfg_osd = (status[4:3] == 2'd3) ? 2'd0 : status[4:3];
 reg [1:0] ram_cfg = 2'd0;
 always @(posedge clk_sys) if (reset) ram_cfg <= ram_cfg_osd;
 
+wire        sdr_line_valid;
+wire [26:4] sdr_line_tag;
+wire [127:0] sdr_line_data;
+wire        sdr_line_pending;
+wire [26:4] sdr_line_pending_tag;
+
 quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.clk(clk_sys),
 	.nreset(~reset),
@@ -330,6 +336,11 @@ quadra800 #(.RAM_ADDR_BITS(RAM_ADDR_BITS)) machine (
 	.mem_memsel(mem_memsel),
 	.mem_rdata(mem_rdata),
 	.mem_ack(mem_ack),
+	.mem_line_valid(sdr_line_valid),
+	.mem_line_tag(sdr_line_tag),
+	.mem_line_data(sdr_line_data),
+	.mem_line_pending(sdr_line_pending),
+	.mem_line_pending_tag(sdr_line_pending_tag),
 
 	.vid_addr(vid_addr),
 	.vid_rdata(vid_rdata),
@@ -553,6 +564,11 @@ sdram_beat32 sdr
 	.ack       (sdr_ack),
 	.rdata     (sdr_rdata),
 	.busy      (),                       // ordering is the bridge's own affair
+	.line_valid_o(sdr_line_valid),
+	.line_tag_o(sdr_line_tag),
+	.line_data_o(sdr_line_data),
+	.line_pending_o(sdr_line_pending),
+	.line_pending_tag_o(sdr_line_pending_tag),
 
 	.SDRAM_DQ  (SDRAM_DQ),
 	.SDRAM_A   (SDRAM_A),

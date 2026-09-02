@@ -297,3 +297,26 @@ open-page controller and isolates the remaining fault to the shortened
 completion path. Future work should shorten RAM completion only, leaving the
 ROM, VRAM, IOSB, DAFB, and open-bus cadence unchanged, and must pass the full
 Disk test before it replaces this baseline.
+
+### Registered retained-line service
+
+The first safe follow-up exposes the retained BL8 line to `quadra800`, but
+serves its words through the existing registered service-FSM acknowledgement.
+It removes three redundant bridge transactions per fill without changing the
+transaction adapter's completion cadence. The integrated model improves from
+19.5 to **25.1 MB/s**, and a 16-byte fill falls from 819 to **636 ns**.
+
+| Speedometer 3.23 PR Test | BL8/open-page | registered line | gain |
+|---|---:|---:|---:|
+| CPU | 3.139 | **3.258** | **+3.8%** |
+| Graphics | 4.159 | **4.373** | **+5.1%** |
+| Disk | 0.684 | 0.679 | -0.7% |
+| Math | 20.843 | **21.694** | **+4.1%** |
+| Old PR | 4.724 | **4.920** | **+4.1%** |
+| New PR | 2.013 | **2.039** | **+1.3%** |
+
+The RBF is `Wombat33_BL8_regline_seed17_20260902.rbf`, MD5
+`628021ac778ef96c45d84d9232e4644a`. Quartus reports +0.289 ns setup and
++0.252 ns hold. It booted Mac OS and completed the full PR suite, including
+Disk. Against the fresh seed-15 control at the start of this section, the
+cumulative CPU gain is **+11.7%** (2.917 to 3.258).

@@ -3,7 +3,8 @@
 module tb_memory_path #(
 	parameter integer FAST_BYPASS = 1,
 	parameter integer ADAPTER_LINE_HIT = FAST_BYPASS,
-	parameter integer DIRECT_MEM_ACK = 1
+	parameter integer DIRECT_MEM_ACK = 1,
+	parameter integer REGISTERED_LINE_HIT = 0
 );
 
 // This bench measures the post-cache transaction port, not instruction-level
@@ -55,8 +56,9 @@ wire [26:4] line_tag;
 wire [127:0] line_data;
 wire line_pending;
 wire [26:4] line_pending_tag;
-wire line_ack = ADAPTER_LINE_HIT && !svc_mem && b_req && !b_write && line_valid &&
-	            b_addr[26:4] == line_tag;
+wire line_match = ADAPTER_LINE_HIT && !svc_mem && b_req && !b_write &&
+	              line_valid && b_addr[26:4] == line_tag;
+wire line_ack = line_match && !REGISTERED_LINE_HIT;
 wire line_wait = ADAPTER_LINE_HIT && !svc_mem && b_req && !b_write && line_pending &&
 	             b_addr[26:4] == line_pending_tag;
 wire [31:0] line_word = (b_addr[3:2] == 2'd0) ? line_data[127:96] :
@@ -121,7 +123,11 @@ always @(posedge clk_sys) begin
 	else begin
 		b_ack_r <= 0;
 		if (!svc_mem) begin
-			if (t_fast_req || (b_req && !b_ack && !line_wait)) begin
+			if (REGISTERED_LINE_HIT && line_match && !b_ack) begin
+				b_ack_r <= 1;
+				b_rdata_r <= line_word;
+			end
+			else if (t_fast_req || (b_req && !b_ack && !line_wait)) begin
 				svc_mem <= 1;
 				svc_fast <= t_fast_req;
 				mem_req <= 1;
@@ -202,8 +208,8 @@ reg [31:0] got;
 reg [15:0] lfsr;
 
 initial begin
-	$display("tb_memory_path: FAST_BYPASS=%0d ADAPTER_LINE_HIT=%0d DIRECT_MEM_ACK=%0d",
-	         FAST_BYPASS, ADAPTER_LINE_HIT, DIRECT_MEM_ACK);
+	$display("tb_memory_path: FAST_BYPASS=%0d ADAPTER_LINE_HIT=%0d DIRECT_MEM_ACK=%0d REGISTERED_LINE_HIT=%0d",
+	         FAST_BYPASS, ADAPTER_LINE_HIT, DIRECT_MEM_ACK, REGISTERED_LINE_HIT);
 	repeat (4) @(posedge clk_sys);
 	nreset = 1;
 	init = 0;

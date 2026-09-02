@@ -50,6 +50,11 @@ module quadra800
 	output reg  [1:0] mem_memsel,             // 0 RAM, 1 ROM, 2 VRAM
 	input      [31:0] mem_rdata,
 	input             mem_ack,
+	input             mem_line_valid,
+	input      [26:4] mem_line_tag,
+	input     [127:0] mem_line_data,
+	input             mem_line_pending,
+	input      [26:4] mem_line_pending_tag,
 
 	// video: DAFB scanout (VRAM fetch port + VGA)
 	output     [21:2] vid_addr,
@@ -355,6 +360,20 @@ reg [31:2] svc_addr;
 wire        walker_pend = walker_req && walker_armed;
 reg         walker_armed;
 
+// A completed BL8 read remains in sdram_beat32 as four longwords. Serve those
+// words through the same registered service-FSM acknowledgement used by every
+// established platform beat. A request for the still-arriving tail waits here
+// instead of launching a redundant SDRAM transaction for the same line.
+wire line_cpu_match = b_req && !b_write && (decode(b_addr) == 3'd0) &&
+	                  mem_line_valid && (b_addr[26:4] == mem_line_tag);
+wire line_cpu_wait  = b_req && !b_write && (decode(b_addr) == 3'd0) &&
+	                  mem_line_pending &&
+	                  (b_addr[26:4] == mem_line_pending_tag);
+wire [31:0] line_cpu_data = (b_addr[3:2] == 2'd0) ? mem_line_data[127:96] :
+	                        (b_addr[3:2] == 2'd1) ? mem_line_data[95:64]  :
+	                        (b_addr[3:2] == 2'd2) ? mem_line_data[63:32]  :
+	                                                        mem_line_data[31:0];
+
 assign dbg_berr      = (svc == S_BERR);
 assign dbg_berr_addr = {svc_addr, 2'b00};
 assign dbg_overlay   = overlay;
@@ -400,17 +419,23 @@ always @(posedge clk) begin
 			// walker first: it only runs mid-translation, never starves the
 			// CPU.  !b_ack/!cpu_berr: the adapter needs a cycle to retire a
 			// just-completed or just-faulted beat before b_req means "next".
-			if (walker_pend || (b_req && !b_ack && !cpu_berr)) begin
+			if (walker_pend ||
+			    (b_req && !b_ack && !cpu_berr && !line_cpu_wait)) begin
 				reg [31:2] a;
 				reg        wr;
-				a  = walker_pend ? walker_addr[31:2] : b_addr;
-				wr = walker_pend ? walker_we : b_write;
-				svc_walker <= walker_pend;
-				if (walker_pend) walker_armed <= 0;
-				svc_addr   <= a;
-				// the ROM's own window read ends the boot overlay
-				if (a[31:28] == 4'h4 && !wr) overlay <= 0;
-				case (decode(a))
+				if (!walker_pend && line_cpu_match) begin
+					b_ack   <= 1;
+					b_rdata <= line_cpu_data;
+				end
+				else begin
+					a  = walker_pend ? walker_addr[31:2] : b_addr;
+					wr = walker_pend ? walker_we : b_write;
+					svc_walker <= walker_pend;
+					if (walker_pend) walker_armed <= 0;
+					svc_addr   <= a;
+					// the ROM's own window read ends the boot overlay
+					if (a[31:28] == 4'h4 && !wr) overlay <= 0;
+					case (decode(a))
 				3'd0, 3'd1, 3'd2: begin
 					mem_req    <= 1;
 					mem_write  <= wr;
@@ -439,6 +464,7 @@ always @(posedge clk) begin
 				3'd6: svc <= S_OPEN;
 				default: svc <= S_BERR;
 				endcase
+				end
 			end
 		end
 		S_MEM: if (mem_ack) begin
