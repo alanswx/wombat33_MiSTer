@@ -86,9 +86,18 @@ reg [11:0] cursor_line, anim_line;
 
 reg  [7:0] pal_addr;
 reg  [1:0] pal_idx;
-reg  [7:0] pal_r [0:255];
-reg  [7:0] pal_g [0:255];
-reg  [7:0] pal_b [0:255];
+// The RAMDAC has independent CPU and scanout reads.  A single inferred array
+// therefore needs three ports (one write plus two reads), which Quartus builds
+// as one M10K read view and a complete 6,144-flop mirror.  Keep the two views
+// explicit instead: both banks receive every palette write, the CPU reads its
+// clk-domain copy, and scanout reads its clk_vid-domain copy.  Each array is a
+// simple-dual-port M10K, preserving the existing registered-read timing.
+(* ramstyle = "M10K, no_rw_check" *) reg [7:0] pal_r_cpu [0:255];
+(* ramstyle = "M10K, no_rw_check" *) reg [7:0] pal_g_cpu [0:255];
+(* ramstyle = "M10K, no_rw_check" *) reg [7:0] pal_b_cpu [0:255];
+(* ramstyle = "M10K, no_rw_check" *) reg [7:0] pal_r_vid [0:255];
+(* ramstyle = "M10K, no_rw_check" *) reg [7:0] pal_g_vid [0:255];
+(* ramstyle = "M10K, no_rw_check" *) reg [7:0] pal_b_vid [0:255];
 reg  [7:0] pbctrl;
 reg  [2:0] mode;                 // 0=1bpp 1=2bpp 2=4bpp 3=8bpp 4=24bpp
 
@@ -202,9 +211,18 @@ always @(posedge clk) begin
 					6'h00: begin pal_addr <= wdata[7:0]; pal_idx <= 0; end
 					6'h04: begin
 						case (pal_idx)
-						2'd0: pal_r[pal_addr] <= wdata[7:0];
-						2'd1: pal_g[pal_addr] <= wdata[7:0];
-						default: pal_b[pal_addr] <= wdata[7:0];
+						2'd0: begin
+							pal_r_cpu[pal_addr] <= wdata[7:0];
+							pal_r_vid[pal_addr] <= wdata[7:0];
+						end
+						2'd1: begin
+							pal_g_cpu[pal_addr] <= wdata[7:0];
+							pal_g_vid[pal_addr] <= wdata[7:0];
+						end
+						default: begin
+							pal_b_cpu[pal_addr] <= wdata[7:0];
+							pal_b_vid[pal_addr] <= wdata[7:0];
+						end
 						endcase
 						if (pal_idx == 2'd2) begin
 							pal_idx  <= 0;
@@ -229,9 +247,9 @@ always @(posedge clk) begin
 					case (rsel)
 					6'h00: begin rdata <= {24'd0, pal_addr}; pal_idx <= 0; end
 					6'h04: begin
-						rdata <= {24'd0, (pal_idx == 2'd0) ? pal_r[pal_addr] :
-						                 (pal_idx == 2'd1) ? pal_g[pal_addr] :
-						                                     pal_b[pal_addr]};
+						rdata <= {24'd0, (pal_idx == 2'd0) ? pal_r_cpu[pal_addr] :
+						                 (pal_idx == 2'd1) ? pal_g_cpu[pal_addr] :
+						                                     pal_b_cpu[pal_addr]};
 						pal_idx <= (pal_idx == 2'd2) ? 2'd0 : pal_idx + 1'b1;
 					end
 					6'h08: rdata <= {24'd0, pbctrl};
@@ -314,13 +332,23 @@ wire [7:0] clut_idx = (mode_v == 3'd3) ? cur[31:24] :
                       (mode_v == 3'd1) ? {6'd0, cur[31:30]} :
                                          {4'd0, cur[31:28]};
 
-reg [7:0] out_r, out_g, out_b;
+reg [7:0] pal_r_vid_q, pal_g_vid_q, pal_b_vid_q;
 reg       hb_r, vb_r;
-assign vga_r = out_r;
-assign vga_g = out_g;
-assign vga_b = out_b;
+assign vga_r = (hb_r || vb_r) ? 8'd0 : pal_r_vid_q;
+assign vga_g = (hb_r || vb_r) ? 8'd0 : pal_g_vid_q;
+assign vga_b = (hb_r || vb_r) ? 8'd0 : pal_b_vid_q;
 assign vga_hb = hb_r;
 assign vga_vb = vb_r;
+
+// Keep the palette reads in their own unconditional clocked process so the
+// three registers can become the output registers of dual-clock M10Ks.  The
+// blanking mux stays after those registers and therefore does not add a pixel
+// of latency relative to the original registered palette lookup.
+always @(posedge clk_vid) begin
+	pal_r_vid_q <= pal_r_vid[clut_idx];
+	pal_g_vid_q <= pal_g_vid[clut_idx];
+	pal_b_vid_q <= pal_b_vid[clut_idx];
+end
 
 // next line's base offset: (vcnt+1) * stride, tracked incrementally
 reg [21:0] line_base_next;
@@ -332,7 +360,6 @@ always @(posedge clk_vid) begin
 		hb_r <= 1; vb_r <= 1;
 		shreg <= 0; shcnt <= 0;
 		fetch_addr <= 0; fetch_word <= 0; fpipe <= 0;
-		out_r <= 0; out_g <= 0; out_b <= 0;
 		line_base_next <= 0;
 	end
 	else begin
@@ -383,14 +410,6 @@ always @(posedge clk_vid) begin
 			end
 		end
 
-		if (hactive && vactive) begin
-			out_r <= pal_r[clut_idx];
-			out_g <= pal_g[clut_idx];
-			out_b <= pal_b[clut_idx];
-		end
-		else begin
-			out_r <= 0; out_g <= 0; out_b <= 0;
-		end
 	end
 end
 
