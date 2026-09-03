@@ -669,3 +669,44 @@ booted, completed every PR category, and shut down normally. The MiSTer then
 returned to its menu and the disposable disk was restored from the compressed
 golden; both disk copies matched MD5
 `0c4f774b4a2eccd5656e92f16119875f` afterward.
+
+## 16. AP040 simple-An effective-address dispatch (Speedometer 3.23)
+
+Simple `(An)`, `(An)+`, and `-(An)` effective addresses previously spent one
+state selecting the address register and a second state consuming it. The
+register file has asynchronous read ports, so `ea_start` now selects An while
+entering the EA engine. On the following clock, `S_EA_DISP` computes the
+address, performs any predecrement or postincrement writeback, and returns
+directly to the requesting pipeline state. Displacement and indexed modes keep
+their existing multi-state paths, and the memory transaction protocol is
+unchanged.
+
+The complete AP68040 suite and Wombat Verilator build pass. The first 100
+SingleStepTests CPU rows match all 1,696 architectural field groups with zero
+real differences. That corpus falls from 36,240,893 to 35,268,206 clocks, a
+**2.68% reduction**. The focused `bench_loop` falls from 263,496 to 250,634
+clocks, a further **4.88% reduction** and a cumulative **13.56%** reduction
+from the branch-refill build's 289,956 clocks. `S_EA_BASE` disappears from the
+profile while the number and latency of data reads remain unchanged.
+
+| Speedometer 3.23 PR Test | prefetched DBcc | simple-An EA dispatch | gain |
+|---|---:|---:|---:|
+| CPU | 4.413 | **4.613** | **+4.5%** |
+| Graphics | 5.224 | **5.287** | +1.2% |
+| Disk | 0.684 | **0.685** | +0.1% |
+| Math | 29.958 | **30.814** | **+2.9%** |
+| Old PR | 6.465 | **6.649** | **+2.8%** |
+| New PR | 2.254 | **2.279** | +1.1% |
+
+The accepted seed-25 image uses 39,810/41,910 ALMs and 4,191/4,191 LABs. It
+closes timing at **+0.368 ns worst setup overall** and **+0.252 ns worst hold
+overall** (+0.433 ns on the CPU clock), with zero setup or hold TNS. The RBF is
+`Wombat33_CPU_eafast_seed25_20260903.rbf`, MD5
+`48adead0b8be54573cbf0d8810e48465` and SHA-256
+`24b66028ea8156ab16b3635309facd36926aef18d49f88f4d0f93499314da1fb`.
+The exact Quartus build is preserved at
+`/home/alans/builds/wombat33_cpu_eafast_seed25_20260903`. Mac OS 7.5.5 booted,
+completed every PR category, and reached its safe-to-switch-off screen. The
+MiSTer then returned to its menu and the disposable disk was restored from the
+compressed golden; both disk copies matched MD5
+`0c4f774b4a2eccd5656e92f16119875f` afterward.
