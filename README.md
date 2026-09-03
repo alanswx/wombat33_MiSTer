@@ -31,10 +31,11 @@ score into the **4.73** range, with the complete AP68040 suite, the Wombat
 Verilator model, the first 100 SingleStepTests rows, Quartus timing, and a full
 hardware PR run used as the acceptance gate.
 
-The current accepted CPU checkpoint is parent commit `a267903` with AP68040
-submodule commit `5aa596f`. Its seed-27 fit uses 40,738/41,910 ALMs and
-4,182/4,191 LABs, so resource headroom is now as important as another local
-fast path. See
+The current accepted CPU checkpoint is parent commit `01cb9a5` with AP68040
+submodule commit `8231eec`. Moving the two-read-port FPU register bank into
+mirrored MLABs cut the seed-27 fit from 40,738 to 39,358 ALMs with no measurable
+speed change. LAB packing remains the constraint: usage improved only from
+4,182 to 4,176 of 4,191 LABs, leaving 15 free. See
 [`docs/PERFORMANCE_MEASUREMENTS.md`](docs/PERFORMANCE_MEASUREMENTS.md) for
 measurements and [`CPU_PERFORMANCE_TASKS.md`](CPU_PERFORMANCE_TASKS.md) for the
 live, power-loss-safe work queue and exact recovery instructions.

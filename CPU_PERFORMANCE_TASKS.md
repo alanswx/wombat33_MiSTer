@@ -7,20 +7,22 @@ screenshots remain in `docs/PERFORMANCE_MEASUREMENTS.md`.
 ## Immediate answer: should area be reduced?
 
 **Yes, before a broad pipeline change.** Reducing ALM/LAB use does not directly
-increase emulated CPU throughput, but the accepted design occupies 97% of ALMs
-and effectively 100% of LABs. Only nine LABs remain. That makes Quartus fits
+increase emulated CPU throughput. The first accepted reclaim pass lowered the
+design from 40,738 to 39,358 ALMs, but it still occupies effectively 100% of
+LABs: only 15 remain. That makes Quartus fits
 slow and seed-sensitive, limits register duplication and useful packing, and
 leaves almost no room for a predecode stage, extra bypass controls, or another
 pipeline register.
 
-LAB availability is the more urgent number. The accepted seed-27 checkpoint is
-40,738/41,910 ALMs and 4,182/4,191 LABs. The final narrow ADD change was 17 ALMs
-and one LAB smaller than its predecessor, which is useful but not meaningful
-headroom. A dedicated area pass should aim to reclaim at least a few percent of
-the device, with an initial practical milestone of **100 LABs and 1,000 ALMs**,
-without disabling the MMU, FPU, caches, video, audio, or other machine features.
+LAB availability remains the more urgent number. The MLAB-backed FPU register
+bank recovered 1,380 ALMs (3.4%) but only six LABs because the two 8x80 mirrors
+consume eight Memory LABs and the remaining logic still packs poorly. Continue
+the area pass toward the initial practical milestone of **100 LABs and 1,000
+ALMs** relative to the old ADD checkpoint, without disabling the MMU, FPU,
+caches, video, audio, or other machine features. The ALM part is met; another
+94 LABs are still needed.
 
-The seed-27 hierarchy report says where to work:
+The pre-reclaim seed-27 hierarchy report says where to work:
 
 | hierarchy | fitted ALMs needed | implication |
 |---|---:|---|
@@ -34,7 +36,7 @@ The seed-27 hierarchy report says where to work:
 | `ap040_regfile` | about 436 | low priority; asynchronous ports buy speed |
 | `ap040_cache` | about 366 plus M10Ks | already mostly in block RAM |
 
-Quartus estimates roughly 493 CPU ALMs could be recovered by denser packing,
+That report estimated roughly 493 CPU ALMs could be recovered by denser packing,
 but also reports roughly 799 ALMs unavailable to that hierarchy. This reinforces
 that routing/packing structure matters alongside raw Boolean count.
 
@@ -42,32 +44,144 @@ that routing/packing structure matters alongside raw Boolean count.
 
 - Parent repository branch: `cpu-sdram-handoff-seed15`
 - Parent remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Parent commit: `a267903` (`Advance AP68040 register ADD fast path`)
+- Parent commit: `01cb9a5` (`Reclaim AP68040 FPU register-bank area`)
 - AP68040 branch: `wombat-retained-line-fill`
 - AP68040 remote: `https://github.com/alanswx/AP68040.git`
-- AP68040 commit: `5aa596f` (`Preselect register ADD operands in decode`)
+- AP68040 commit: `8231eec` (`Infer FPU register bank in MLABs`)
 - Quartus seed: 27
-- Exact preserved build: `/home/alans/builds/wombat33_cpu_adddecode_seed27_20260903`
-- MiSTer RBF: `/media/fat/_Unstable/Wombat33_CPU_adddecode_seed27_20260903.rbf`
-- MD5: `cb83d1a71d262a61af9a5508a443506d`
-- SHA-256: `512558ea68f5bc5e9dfeb79be9bd0860e44f2d2046e4909bb3c6096c6e24816a`
-- Quartus: 40,738/41,910 ALMs; 4,182/4,191 LABs; zero setup/hold TNS
-- Setup slack: +0.070 ns overall, +0.772 ns CPU, +0.070 ns SDRAM
-- Hold slack: +0.245 ns overall, +0.263 ns CPU, +0.430 ns SDRAM
-- Speedometer 3.23 PR: CPU 4.726, Graphics 5.445, Disk 0.680,
-  Math 31.202, Old PR 6.780, New PR 2.288
+- Exact preserved build: `/home/alans/builds/wombat33_cpu_fpu_mlab_seed27_20260903`
+- MiSTer RBF: `/media/fat/_Unstable/Wombat33_CPU_fpu_mlab_seed27_20260903.rbf`
+- MD5: `c4fd9f3140da2658c366156febf8201f`
+- SHA-256: `4a68ab336a31dda029c1de75bcb6bfeee2b58422d1ef9b5d1fa2745e8a28cd5c`
+- Quartus: 39,358/41,910 ALMs; 4,176/4,191 LABs; zero setup/hold TNS
+- Setup slack: +0.290 ns overall, +0.649 ns CPU, +0.591 ns SDRAM
+- Hold slack: +0.244 ns overall, +0.262 ns CPU, +0.434 ns SDRAM
+- Speedometer 3.23 PR: CPU 4.726, Graphics 5.452, Disk 0.685,
+  Math 31.512, Old PR 6.814, New PR 2.301
 - Focused `bench_loop`: 212,238 cycles
 - First 100 SingleStepTests rows: 35,196,127 cycles, 1,696 field groups,
   zero real differences
 
-The prior memory-source MOVE checkpoint remains the known-good fallback at
-parent `1b51e81`, AP68040 `2b3634d`, exact build
-`/home/alans/builds/wombat33_cpu_moveretire_seed27_20260903`, and MiSTer RBF
-`Wombat33_CPU_moveretire_seed27_20260903.rbf` (MD5
-`0416e38b6f2a6bf05f8d1f51532743f0`). Do not overwrite either checkpoint.
+The prior register-ADD checkpoint remains the closest known-good fallback at
+parent `a267903`, AP68040 `5aa596f`, exact build
+`/home/alans/builds/wombat33_cpu_adddecode_seed27_20260903`, and MiSTer RBF
+`Wombat33_CPU_adddecode_seed27_20260903.rbf` (MD5
+`cb83d1a71d262a61af9a5508a443506d`). Do not overwrite either checkpoint.
 Experiments use the disposable remote tree and a separately named RBF. The
 disposable Mac disk is always restored from the compressed golden after a safe
 guest shutdown.
+
+## Completed 2026-09-03: first ALM/LAB reclaim pass
+
+The accepted AP68040 commit `8231eec` contains the cumulative structural work
+below. Intermediate fits are retained here so future work does not repeat the
+same attractive-looking failures.
+
+1. Reset is no longer applied to the instruction/refill payload arrays or the
+   four-word MOVEM16 buffer. Their existing count/valid/state controls prevent
+   consumption until the payload has been written. Quartus infers `m16buf` as
+   a 4x32 simple-dual-port M10K (128 bits). The complete AP68040 suite, focused
+   loop at 212,238 cycles, full-machine Verilator build, and first 100
+   SingleStep rows at 35,196,127 cycles/1,696 matching field groups/zero real
+   differences pass. Seed 27 with the normal speed mapper is timing-clean at
+   40,730 ALMs and 4,177/4,191 LABs, only 8 ALMs and 5 LABs better than the
+   old ADD checkpoint. Setup is +0.195 overall/+0.377 CPU/+0.312 SDRAM; hold
+   is +0.139 overall/+0.250 CPU/+0.434 SDRAM. This is evidence, not yet an
+   accepted commit.
+2. The FPU now captures FPn once at command dispatch, reuses its existing
+   exception shadow for later exception frames, and reuses the corresponding
+   unpacked `b_*` operand through arithmetic/compare. This removes a late
+   80-bit asynchronous destination-bank read. On its own this lowers the
+   synthesis netlist from 80,910 to 80,688 logic cells and the FPU hierarchy
+   from 8,462 to 8,226. AP tests, the 212,238-cycle focused loop, full-machine
+   Verilator, first-100 CPU, all FPU, save/restore, and integration corpora all
+   pass. Its seed-27 fit is timing-clean at 40,044 ALMs but still consumes
+   4,189/4,191 LABs; setup is +0.166 overall/+0.742 CPU/+0.672 SDRAM and hold
+   is +0.175 overall/+0.175 CPU/+0.431 SDRAM. It proves the logic reduction is
+   real but does not by itself improve physical packing.
+3. The next extension makes FMOVEM stores reuse the ordinary FP source-bank
+   read port. `S_FPU_MVM` selects `fpu_srcr` and the existing `S_FPU_MVM2`
+   setup cycle preserves the interface timing; FMOVEM loads retain the
+   independent `fm_sel` write port. Exact local/remote hashes are core
+   `b376c7fd9df452cce9237c6d21fbdb3c` and FPU
+   `7b3bfaa98cb3e73af44ad2ac2399c31b`. Synthesis falls again to 80,475 logic
+   cells and the FPU hierarchy to 8,036, respectively 435 and 426 below the
+   reset-payload baseline. AP tests, focused loop, full-machine build,
+   first-100 CPU (35,196,127 cycles/1,696 matches), all 270 FPU rows (5,000
+   matches), all 8 save/restore rows, and all 1,328 integration rows pass with
+   zero real differences. The seed-27 fit is timing-clean at 39,873 ALMs but
+   still occupies 4,191/4,191 LABs. Setup is +0.091 overall/+0.673 CPU/+0.379
+   SDRAM and hold is +0.254 overall/+0.264 CPU/+0.433 SDRAM. The fitter places
+   40,650 physical ALMs, calls 1,912 recoverable by dense packing, and loses
+   1,135 to packing constraints (115 LAB-wide signal conflicts and 1,020 LAB
+   input limits). Keep this as a useful logical-area result, but it does not
+   pass the physical-headroom gate by itself.
+4. Adding an 8-bit validity mask after reducing the register bank to two read
+   views passes every simulation corpus and lowers synthesis to 80,256 logic
+   cells, with 7,354 in the FPU. Its seed-27 fit is smaller at 39,735 ALMs and
+   4,185/4,191 LABs, but fails timing at -0.033 ns setup overall and -0.205 ns
+   SDRAM hold. This is not the accepted form.
+5. The accepted form mirrors the 8x80 architectural FP bank into two inferred
+   simple-dual-port MLAB memories, giving two asynchronous command-time reads
+   and one shared synchronous write. Quartus uses exactly 1,280 MLAB bits in
+   eight Memory LABs. Synthesis falls to 79,252 logic cells, 1,469 below the
+   prior accepted build; the FPU falls from 8,462 logic cells/2,243 registers
+   to 7,091/1,617. The seed-27 fit is timing-clean at 39,358 ALMs and
+   4,176/4,191 LABs. It places 40,166 physical ALMs, estimates 1,876 recoverable
+   by dense packing, and loses 1,068 to constraints (99 LAB-wide signal
+   conflicts and 969 LAB input limits). Setup is +0.290 ns overall/+0.649 CPU/
+   +0.591 SDRAM; hold is +0.244 overall/+0.262 CPU/+0.434 SDRAM. Exact source
+   hashes are core `b376c7fd9df452cce9237c6d21fbdb3c` and FPU
+   `4491c1186f6e7a09b8dbb507d0ca436d`.
+
+   The AP suite, 212,238-cycle focused loop, full-machine Verilator build,
+   first-100 CPU corpus, all 270 FPU rows, all 8 save/restore rows, and all
+   1,328 integration rows pass with zero real differences. Hardware booted and
+   completed Speedometer 3.23 `Run ALL Tests`; the comparable PR scores are
+   4.726 CPU, 5.452 Graphics, 0.685 Disk, 31.512 Math, 6.814 Old PR, and 2.301
+   New PR. This is no measurable speed change, as expected for area-only work.
+   Mac OS reached the safe shutdown screen, the MiSTer returned to `MENU`, and
+   the disposable and pristine disks were verified at MD5
+   `0c4f774b4a2eccd5656e92f16119875f` after the golden restore.
+
+Rejected tool and structural experiments:
+
+- Removing reset only from `m16buf` reduces the synthesized CPU hierarchy by
+  97 combinational ALUTs, but its seed-27 fit spreads 39,805 ALMs across every
+  LAB (4,191/4,191) and misses HDMI setup by 0.258 ns. Reject that isolated
+  form; the large fitted-ALM swing is placement, not a credible RTL delta.
+- FPU-only `OPTIMIZATION_TECHNIQUE AREA` and global `OPTIMIZATION_MODE
+  BALANCED` both synthesize the exact same 80,910-logic-cell netlist as the
+  normal settings. Reject both as no-ops.
+- Routing all 218 sequencer transitions through one explicit `state_next`
+  carrier passes the AP suite, focused 212,238-cycle loop, full-machine
+  Verilator build, and first 100 SingleStep rows with zero real differences.
+  Reject it anyway: Quartus still does not recognize `state` as an FSM, the
+  complete synthesis netlist grows by 217 logic cells, and the CPU hierarchy
+  grows to 36,505 combinational ALUTs. The working tree has been restored to
+  the pre-experiment payload/M10K form.
+- Adding a `syn_encoding="onehot"` hint to the existing state register is not
+  sufficient either. Quartus still does not extract the main FSM and the
+  complete synthesis netlist grows by 61 logic cells. Reject and remove it.
+- Global `OPTIMIZATION_TECHNIQUE AREA` produces a smaller synthesis netlist
+  (80,166 versus 80,910 logic cells) and a 39,578-ALM fit, 1,160 below the
+  accepted checkpoint. Reject it: packing worsens to 4,190/4,191 LABs and the
+  seed-27 fit misses setup by 0.342 ns. CPU/SDRAM setup is +0.814/+0.109 ns and
+  overall hold is +0.239 ns, but the complete design gate is not met.
+- Raising `ALM_REGISTER_PACKING_EFFORT` from `MEDIUM` to `HIGH` is a complete
+  no-op for this netlist and seed: 40,730 ALMs, 4,177/4,191 LABs, and every
+  reported setup/hold value exactly match the normal-packing fit. Restore
+  `MEDIUM`.
+- Replacing reset writes to the 640-bit FP0--FP7 payload with an 8-bit valid
+  mask passes the AP suite, the 212,238-cycle focused loop, full-machine
+  Verilator, the first 100 CPU rows, all 270 FPU rows, all 8 save/restore rows,
+  and all 1,328 CPU/FPU integration rows with zero real differences. It also
+  lowers the FPU synthesis hierarchy from 8,462 to 7,835 combinational
+  functions. Reject it anyway: its four validity-gated asynchronous read views
+  fit at 40,986 ALMs and 4,190/4,191 LABs, versus 40,730 and 4,177 for the
+  reset-payload candidate. Timing is clean (+0.147 overall/+0.664 CPU/+0.558
+  SDRAM setup, +0.241 hold), but placement density is much worse. A future FP
+  register-bank attempt must reduce/stage read ports, not merely remove reset.
 
 ## Completed 2026-09-03: narrow `ADD.L Dn,Dn` preselection
 
@@ -136,7 +250,9 @@ seed-27 tree and compare both synthesis hierarchy and fitted LAB/ALM totals.
   Explore sharing normalization, rounding, shift, compare, and conversion
   hardware across multi-cycle operations. Trading extra FPU cycles for several
   hundred ALMs may be worthwhile only after measuring Speedometer Math and
-  retaining the complete FPU/FPSP tests.
+  retaining the complete FPU/FPSP tests. The first pass moved FP0--FP7 into
+  MLABs and removed 1,371 FPU logic cells without adding cycles; the arithmetic
+  datapath remains the next target.
 - [ ] Review the 436-ALM asynchronous register file only after larger targets.
   Replicated synchronous RAM could cost instruction cycles; do not sacrifice
   the two combinational read ports without an end-to-end throughput win.
@@ -148,7 +264,8 @@ seed-27 tree and compare both synthesis hierarchy and fitted LAB/ALM totals.
   require repeatable seed results; fitter-only savings do not excuse negative
   timing slack.
 - [ ] Milestone gate: recover at least 1,000 ALMs and 100 LABs with all tests
-  green before undertaking the broad front-end/pipeline work below.
+  green before undertaking the broad front-end/pipeline work below. Current:
+  1,380 ALMs and 6 LABs recovered; the LAB half of this gate remains open.
 
 ## Priority 2: extend only the proven narrow fast-path pattern
 

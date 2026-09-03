@@ -848,3 +848,51 @@ booted, completed every PR category including Disk, and reached its safe-to-
 switch-off screen. The MiSTer then returned to its menu and the disposable disk
 was restored from the compressed golden; both disk copies matched MD5
 `0c4f774b4a2eccd5656e92f16119875f` afterward.
+
+## 20. AP040 FPU register bank in MLABs (area reclaim)
+
+This pass creates headroom for later CPU work; it is not intended to change
+instruction timing. The FPU now captures both command-time operands once and
+uses the existing destination shadow thereafter. FMOVEM stores share the
+ordinary source read port. FP0--FP7 are held in two mirrored 8x80
+simple-dual-port MLAB memories, providing two asynchronous reads and one shared
+synchronous write. An 8-bit valid mask supplies the architectural reset NaN
+without reset muxes on the 640 payload bits.
+
+Quartus infers exactly 1,280 MLAB memory bits in eight Memory LABs. The complete
+synthesis netlist falls from 80,721 to 79,252 logic cells, while the FPU falls
+from 8,462 logic cells/2,243 registers to 7,091/1,617. The seed-27 physical fit
+uses **39,358/41,910 ALMs** and **4,176/4,191 LABs**, respectively 1,380 ALMs
+and six LABs below the preceding checkpoint. LAB packing therefore remains the
+limiting resource even though the 3.4% ALM reduction is substantial. Timing is
+clean at +0.290 ns setup overall (+0.649 ns CPU, +0.591 ns SDRAM) and +0.244 ns
+hold overall (+0.262 ns CPU, +0.434 ns SDRAM), with zero TNS.
+
+The complete AP68040 suite, 212,238-cycle focused loop, full-machine Verilator
+build, first 100 CPU rows, all 270 FPU rows, all 8 save/restore rows, and all
+1,328 CPU/FPU integration rows pass with zero real differences. The hardware
+run used Speedometer 3.23 `Run ALL Tests`, not just the PR shortcut, and
+completed its additional Color and FPU groups at averages 1.615 and 2.446.
+
+| Speedometer 3.23 PR Test | ADD decode checkpoint | FPU MLAB bank | change |
+|---|---:|---:|---:|
+| CPU | 4.726 | **4.726** | 0.0% |
+| Graphics | 5.445 | **5.452** | +0.1% |
+| Disk | 0.680 | **0.685** | +0.7% |
+| Math | 31.202 | **31.512** | +1.0% |
+| Old PR | 6.780 | **6.814** | +0.5% |
+| New PR | 2.288 | **2.301** | +0.6% |
+
+These differences are normal run-to-run variation, so no speed gain is claimed.
+The important hardware result is that the asynchronous MLAB reads and shared
+write port remain stable throughout the exhaustive CPU/FPU workload. The RBF is
+`Wombat33_CPU_fpu_mlab_seed27_20260903.rbf`, MD5
+`c4fd9f3140da2658c366156febf8201f` and SHA-256
+`4a68ab336a31dda029c1de75bcb6bfeee2b58422d1ef9b5d1fa2745e8a28cd5c`.
+The exact Quartus build is preserved at
+`/home/alans/builds/wombat33_cpu_fpu_mlab_seed27_20260903`.
+
+Mac OS reached its safe-to-switch-off screen, the MiSTer returned to `MENU`,
+and only the disposable `QuadSquad8.hda` was restored from the validated
+compressed golden. Both it and the untouched pristine reference then matched
+MD5 `0c4f774b4a2eccd5656e92f16119875f`.
