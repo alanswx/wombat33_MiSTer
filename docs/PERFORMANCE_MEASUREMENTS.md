@@ -896,3 +896,55 @@ Mac OS reached its safe-to-switch-off screen, the MiSTer returned to `MENU`,
 and only the disposable `QuadSquad8.hda` was restored from the validated
 compressed golden. Both it and the untouched pristine reference then matched
 MD5 `0c4f774b4a2eccd5656e92f16119875f`.
+
+## 21. DAFB palette in explicit M10K mirrors (area reclaim)
+
+The DAFB RAMDAC palette needs one CPU read view and one independent scanout
+read view. Quartus implemented the original three arrays as three M10Ks plus a
+6,144-register second read copy. Parent commit `3a960b5` makes the two views
+explicit, writes both, and keeps the video read registered in the `clk_vid`
+domain. Quartus instead infers six simple-dual-port M10Ks and preserves the
+existing one-pixel palette lookup latency.
+
+The complete synthesis netlist falls from 79,252 to 70,386 logic cells. In the
+seed-27 fit, DAFB itself falls from 3,607.5 fitted ALMs/6,782 registers/3 M10Ks
+to 406.9 fitted ALMs/610 registers/6 M10Ks. The complete design uses
+**36,525/41,910 ALMs**, **4,099/4,191 LABs**, 24,187 registers, and 428 M10Ks.
+That is 2,833 ALMs, 77 LABs, and 6,056 registers below the preceding FPU-MLAB
+checkpoint at a cost of three M10Ks and 6,144 block-memory bits. Average/peak
+routing utilization also falls from 58.9%/85.5% to 48.1%/74.8%.
+
+Timing is clean with zero TNS: +0.447 ns setup overall (+0.587 ns CPU,
++0.552 ns SDRAM), and +0.244 ns hold overall (+0.251 ns CPU, +0.442 ns SDRAM).
+The focused independent-clock palette readback/scanout test, full-machine
+Verilator build, and first 100 SingleStepTests CPU rows all pass; the latter
+matches 1,696 architectural field groups over 35,196,127 cycles with zero real
+differences.
+
+The hardware run booted Mac OS 7.5.5 in full color and completed Speedometer
+3.23 `Run ALL Tests`, including FPU and Color averages of 2.446 and 1.618.
+
+| Speedometer 3.23 PR Test | FPU MLAB bank | DAFB palette M10Ks | change |
+|---|---:|---:|---:|
+| CPU | 4.726 | **4.726** | 0.0% |
+| Graphics | 5.452 | **5.430** | -0.4% |
+| Disk | 0.685 | **0.683** | -0.3% |
+| Math | 31.512 | **31.538** | +0.1% |
+| Old PR | 6.814 | **6.810** | -0.1% |
+| New PR | 2.301 | **2.295** | -0.3% |
+
+These movements are ordinary run variance; the reclaim is not a speed change.
+Its value is physical headroom: cumulatively the FPU and palette passes recover
+4,213 ALMs and 83 LABs from the register-ADD checkpoint, leaving 92 LABs free.
+
+![Speedometer 3.23 PR DAFB palette checkpoint](perf/wombat33_dafb_palette_seed27_speedometer323_pr.png)
+
+The exact build is preserved at
+`/home/alans/builds/wombat33_dafb_palette_m10k_seed27_20260903`. The RBF is
+`Wombat33_DAFB_palette_m10k_seed27_20260903.rbf`, MD5
+`c43a310d2c39171e4be7f781904405c4` and SHA-256
+`6dbbd34b30d767a32255049cb0e2dad3a9f75dc6454344ac24da9c881d29037c`.
+Mac OS reached its safe-to-switch-off screen, the MiSTer returned to its menu,
+and the disposable disk was restored from the compressed golden. Both it and
+the untouched pristine reference then matched MD5
+`0c4f774b4a2eccd5656e92f16119875f`.

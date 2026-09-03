@@ -7,20 +7,19 @@ screenshots remain in `docs/PERFORMANCE_MEASUREMENTS.md`.
 ## Immediate answer: should area be reduced?
 
 **Yes, before a broad pipeline change.** Reducing ALM/LAB use does not directly
-increase emulated CPU throughput. The first accepted reclaim pass lowered the
-design from 40,738 to 39,358 ALMs, but it still occupies effectively 100% of
-LABs: only 15 remain. That makes Quartus fits
-slow and seed-sensitive, limits register duplication and useful packing, and
-leaves almost no room for a predecode stage, extra bypass controls, or another
-pipeline register.
+increase emulated CPU throughput. The FPU and DAFB palette reclaim passes lower
+the seed-27 design from 40,738 to 36,525 ALMs and from 4,182 to 4,099 LABs.
+That leaves 92 LABs free instead of nine, makes fits less seed-sensitive, and
+creates useful room for predecode, bypass controls, or another pipeline
+register.
 
 LAB availability remains the more urgent number. The MLAB-backed FPU register
-bank recovered 1,380 ALMs (3.4%) but only six LABs because the two 8x80 mirrors
-consume eight Memory LABs and the remaining logic still packs poorly. Continue
-the area pass toward the initial practical milestone of **100 LABs and 1,000
-ALMs** relative to the old ADD checkpoint, without disabling the MMU, FPU,
-caches, video, audio, or other machine features. The ALM part is met; another
-94 LABs are still needed.
+bank recovered 1,380 ALMs but only six LABs. Explicit CPU/scanout copies of the
+DAFB palette then moved the unintended 6,144-flop read mirror into three more
+M10Ks, recovering another 2,833 ALMs and 77 LABs. Continue toward the initial
+practical milestone of **100 LABs and 1,000 ALMs** relative to the old ADD
+checkpoint, without disabling the MMU, FPU, caches, video, audio, or other
+machine features. The ALM part is comfortably met; another 17 LABs are needed.
 
 The pre-reclaim seed-27 hierarchy report says where to work:
 
@@ -44,32 +43,88 @@ that routing/packing structure matters alongside raw Boolean count.
 
 - Parent repository branch: `cpu-sdram-handoff-seed15`
 - Parent remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Parent commit: `01cb9a5` (`Reclaim AP68040 FPU register-bank area`)
+- Parent commit: `3a960b5` (`Infer DAFB palette mirrors in M10Ks`)
 - AP68040 branch: `wombat-retained-line-fill`
 - AP68040 remote: `https://github.com/alanswx/AP68040.git`
 - AP68040 commit: `8231eec` (`Infer FPU register bank in MLABs`)
 - Quartus seed: 27
-- Exact preserved build: `/home/alans/builds/wombat33_cpu_fpu_mlab_seed27_20260903`
-- MiSTer RBF: `/media/fat/_Unstable/Wombat33_CPU_fpu_mlab_seed27_20260903.rbf`
-- MD5: `c4fd9f3140da2658c366156febf8201f`
-- SHA-256: `4a68ab336a31dda029c1de75bcb6bfeee2b58422d1ef9b5d1fa2745e8a28cd5c`
-- Quartus: 39,358/41,910 ALMs; 4,176/4,191 LABs; zero setup/hold TNS
-- Setup slack: +0.290 ns overall, +0.649 ns CPU, +0.591 ns SDRAM
-- Hold slack: +0.244 ns overall, +0.262 ns CPU, +0.434 ns SDRAM
-- Speedometer 3.23 PR: CPU 4.726, Graphics 5.452, Disk 0.685,
-  Math 31.512, Old PR 6.814, New PR 2.301
+- Exact preserved build: `/home/alans/builds/wombat33_dafb_palette_m10k_seed27_20260903`
+- MiSTer RBF: `/media/fat/_Unstable/Wombat33_DAFB_palette_m10k_seed27_20260903.rbf`
+- MD5: `c43a310d2c39171e4be7f781904405c4`
+- SHA-256: `6dbbd34b30d767a32255049cb0e2dad3a9f75dc6454344ac24da9c881d29037c`
+- Quartus: 36,525/41,910 ALMs; 4,099/4,191 LABs; zero setup/hold TNS
+- Setup slack: +0.447 ns overall, +0.587 ns CPU, +0.552 ns SDRAM
+- Hold slack: +0.244 ns overall, +0.251 ns CPU, +0.442 ns SDRAM
+- Speedometer 3.23 PR: CPU 4.726, Graphics 5.430, Disk 0.683,
+  Math 31.538, Old PR 6.810, New PR 2.295
 - Focused `bench_loop`: 212,238 cycles
 - First 100 SingleStepTests rows: 35,196,127 cycles, 1,696 field groups,
   zero real differences
 
-The prior register-ADD checkpoint remains the closest known-good fallback at
-parent `a267903`, AP68040 `5aa596f`, exact build
-`/home/alans/builds/wombat33_cpu_adddecode_seed27_20260903`, and MiSTer RBF
-`Wombat33_CPU_adddecode_seed27_20260903.rbf` (MD5
-`cb83d1a71d262a61af9a5508a443506d`). Do not overwrite either checkpoint.
+The FPU-MLAB checkpoint remains the closest known-good fallback at parent
+`0e7f250`, AP68040 `8231eec`, exact build
+`/home/alans/builds/wombat33_cpu_fpu_mlab_seed27_20260903`, and MiSTer RBF
+`Wombat33_CPU_fpu_mlab_seed27_20260903.rbf` (MD5
+`c4fd9f3140da2658c366156febf8201f`). Do not overwrite either checkpoint.
 Experiments use the disposable remote tree and a separately named RBF. The
 disposable Mac disk is always restored from the compressed golden after a safe
 guest shutdown.
+
+## Completed 2026-09-03: DAFB palette in explicit M10K mirrors
+
+The DAFB palette formerly presented one write port plus independent CPU and
+scanout read ports through three arrays. Quartus inferred one 6,144-bit M10K
+copy and implemented the second read view as 6,144 flip-flops. The candidate
+uses explicit CPU and video mirrors, writes both, and registers the three video
+outputs in their own `clk_vid` process. Quartus now infers six simple-dual-port
+M10Ks while preserving the existing one-pixel registered lookup.
+
+- Local/remote `rtl/dafb.sv` MD5: `6cea7041a458c2627d26e710ebb17f59`
+- Focused independent-clock palette readback/scanout test: pass
+- Full-machine Verilator build: pass
+- First 100 SingleStepTests rows: 35,196,127 cycles, 1,696 matching field
+  groups, zero real differences
+- Seed-27 fit: 36,525 ALMs, 4,099/4,191 LABs, 24,187 registers, 428 M10Ks,
+  zero setup/hold TNS
+- Change from the FPU-MLAB checkpoint: -2,833 ALMs, -77 LABs, -6,056
+  registers, +3 M10Ks, +6,144 block-memory bits
+- Cumulative change from the old ADD checkpoint: -4,213 ALMs and -83 LABs;
+  17 more LABs remain to the 100-LAB milestone
+- Setup: +0.447 ns overall, +0.587 ns CPU, +0.552 ns SDRAM
+- Hold: +0.244 ns overall, +0.251 ns CPU, +0.442 ns SDRAM
+- Exact preserved build:
+  `/home/alans/builds/wombat33_dafb_palette_m10k_seed27_20260903`
+- RBF: `/media/fat/_Unstable/Wombat33_DAFB_palette_m10k_seed27_20260903.rbf`
+- RBF MD5: `c43a310d2c39171e4be7f781904405c4`
+- RBF SHA-256:
+  `6dbbd34b30d767a32255049cb0e2dad3a9f75dc6454344ac24da9c881d29037c`
+- Hardware: Mac OS and full-color video boot correctly. Speedometer 3.23
+  `Run ALL Tests` completed: CPU 4.726, Graphics 5.430, Disk 0.683, Math
+  31.538, Old PR 6.810, New PR 2.295, FPU average 2.446, and Color average
+  1.618. This is no measurable throughput change, as expected for area-only
+  work.
+- Mac OS reached the safe shutdown screen, the MiSTer returned to its menu,
+  and both disposable and pristine disks matched MD5
+  `0c4f774b4a2eccd5656e92f16119875f` after the golden restore.
+
+The next low-risk area candidate is combining the ten `hparam` and seven
+`vparam` words into one
+power-of-two MLAB-backed timing-register array. They currently consume 204
+scattered registers because Quartus rejects the two small arrays for
+asynchronous reads. A separate candidate already proves the idea physically:
+Quartus infers one 32x12 MLAB, synthesis falls another 319 cells, and seed 28
+fits at 36,592 ALMs and 4,080/4,191 LABs with +0.291 ns setup overall
+(+0.862 ns CPU/+0.291 ns SDRAM) and +0.243 ns hold overall (+0.254 ns CPU/
++0.433 ns SDRAM). That is 102 LABs below the old ADD checkpoint and clears the
+headroom milestone by two LABs. Seed 27 fit even smaller at 36,463 ALMs and
+4,070 LABs but missed SDRAM setup by 0.453 ns, confirming seed sensitivity.
+The candidate MD5 is `c35b8c4155959511b7db06ee2bd169d9`; its seed-28 RBF is
+`Wombat33_DAFB_timing_mlab_seed28_20260903.rbf` (MD5
+`f6db788d637aaf2baf275ef82e015c2a`, SHA-256
+`ae937e62a675a248124e2b065db984e29d16ffc916f840d8a0f6abe2c552fd01`).
+It has passed a focused bus-read/write test and remains isolated from the
+working tree at this checkpoint; full-machine and hardware validation are
+still required.
 
 ## Completed 2026-09-03: first ALM/LAB reclaim pass
 
@@ -172,6 +227,11 @@ Rejected tool and structural experiments:
   no-op for this netlist and seed: 40,730 ALMs, 4,177/4,191 LABs, and every
   reported setup/hold value exactly match the normal-packing fit. Restore
   `MEDIUM`.
+- Changing `QII_AUTO_PACKED_REGISTERS` from `NORMAL` to `MINIMIZE AREA` is
+  likewise a complete no-op on the accepted FPU-MLAB netlist and seed 27:
+  39,358 ALMs, 4,176/4,191 LABs, 30,243 registers, +0.290 ns setup, and
+  +0.244 ns hold all match exactly. Restore `NORMAL`; Quartus is already
+  applying the useful register packing available to this netlist.
 - Replacing reset writes to the 640-bit FP0--FP7 payload with an 8-bit valid
   mask passes the AP suite, the 212,238-cycle focused loop, full-machine
   Verilator, the first 100 CPU rows, all 270 FPU rows, all 8 save/restore rows,
@@ -182,6 +242,46 @@ Rejected tool and structural experiments:
   reset-payload candidate. Timing is clean (+0.147 overall/+0.664 CPU/+0.558
   SDRAM setup, +0.241 hold), but placement density is much worse. A future FP
   register-bank attempt must reduce/stage read ports, not merely remove reset.
+- Removing reset from more than 1,000 validity-gated FPU command, operand,
+  exception-frame, and writeback payload bits passes the complete AP suite but
+  is a synthesis loss. The FPU itself falls from 7,091 to 7,021 ALUTs, while
+  the complete design grows from 79,252 to 79,436 logic cells as optimization
+  moves into the parent core. Reject it before fitting; removing resets is not
+  automatically useful after the architectural FP bank is already in MLABs.
+- Mirroring D0--D7/A0--A6 into two asynchronous 16x32 MLAB banks, while leaving
+  USP/ISP/MSP in registers, passes the AP suite, full-machine Verilator build,
+  the 212,238-cycle focused loop, and first 100 SingleStep rows at 35,196,127
+  cycles/zero real differences. Synthesis looks attractive: 78,837 logic
+  cells, 415 below the accepted checkpoint, and the register-file hierarchy
+  falls from 412 ALUTs/576 registers to 137/104. Reject it after the physical
+  gate: seed 27 fits at 39,312 ALMs but consumes 4,186/4,191 LABs, ten more
+  than the accepted build, and misses the 99 MHz setup constraint by 0.715 ns
+  with -0.965 ns TNS. The four new Memory LABs leave only five LABs free.
+  Preserve the flip-flop register file unless a future design adds a staged
+  read/bypass architecture and can recover the resulting cycle cost elsewhere.
+- Replacing the four parallel ADD/ADDX/SUB/SUBX arithmetic results with one
+  op-controlled 33-bit adder passes the AP suite, full-machine Verilator,
+  first 100 SingleStep rows, and 2.08 billion cycles of an extended CPU corpus
+  before that no-longer-needed run was stopped. The ALU synthesis hierarchy is
+  202 ALUTs smaller and the whole netlist is 103 cells smaller, but the control
+  depth moves ahead of the carry chain. Seed 27 grows to 39,402 ALMs and
+  4,188/4,191 LABs and misses 99 MHz setup by 0.491 ns (-0.897 ns TNS). Reject
+  the fully shared form. A narrower ADD/ADDX and SUB/SUBX pair-sharing test may
+  avoid the 33-bit add/sub input inversion and is the only sensible follow-up.
+- The narrower pair-sharing follow-up passes the AP suite, full-machine build,
+  and first 100 SingleStep rows, and makes the ALU hierarchy 137 ALUTs smaller.
+  It still grows the complete synthesis netlist by 225 cells (79,477 versus
+  79,252) and the core hierarchy by 25 ALUTs as logic crosses the module
+  boundary. Reject it before fitting. Keep the four parallel arithmetic
+  results; Quartus packs that source structure better in this design.
+- Removing reset from the core's validity- and state-gated request, decode,
+  exception, effective-address, bit-field, and multicycle payload registers
+  passes the complete AP suite, full-machine Verilator build, and first 100
+  SingleStep rows. It removes 75 cells from the CPU hierarchy (34,852 to
+  34,777), but cross-boundary optimization grows the complete netlist by 31
+  cells (79,252 to 79,283). Reject it before fitting and retain the explicit
+  architectural reset behavior. Future reset trimming should target one
+  fitted register bank at a time and must win at the complete-design level.
 
 ## Completed 2026-09-03: narrow `ADD.L Dn,Dn` preselection
 
@@ -264,8 +364,9 @@ seed-27 tree and compare both synthesis hierarchy and fitted LAB/ALM totals.
   require repeatable seed results; fitter-only savings do not excuse negative
   timing slack.
 - [ ] Milestone gate: recover at least 1,000 ALMs and 100 LABs with all tests
-  green before undertaking the broad front-end/pipeline work below. Current:
-  1,380 ALMs and 6 LABs recovered; the LAB half of this gate remains open.
+  green before undertaking the broad front-end/pipeline work below. Current
+  accepted hardware checkpoint: 4,213 ALMs and 83 LABs recovered; the LAB half
+  remains open by 17 LABs until one more reclaim pass clears the gate.
 
 ## Priority 2: extend only the proven narrow fast-path pattern
 
