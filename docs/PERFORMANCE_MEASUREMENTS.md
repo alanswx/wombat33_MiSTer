@@ -628,3 +628,44 @@ booted and completed every PR category, then reached its safe-to-switch-off
 screen. The MiSTer returned to its main menu and the disposable disk was
 restored from the compressed golden; both disk copies matched MD5
 `0c4f774b4a2eccd5656e92f16119875f` afterward.
+
+## 15. AP040 prefetched DBcc retirement (Speedometer 3.23)
+
+DBcc occupied two execution states even though its displacement fetch provides
+enough time to select Dn on the combinational register-file port. Decode now
+selects that register before entering `S_IMMF`; `S_DBCC1` therefore performs
+the decrement, writeback, and branch decision together. Odd-target checking
+still happens before the condition, and `go_pc` retains its post-writeback
+interrupt barrier. This is deliberately narrower than the rejected broad
+register/ALU shortcut: it adds no state-dependent register-file address mux and
+does not put the main ALU on the retirement path.
+
+The complete AP68040 suite and Wombat Verilator build pass. The first 100
+SingleStepTests CPU rows again match all 1,696 architectural field groups with
+zero real differences; the corpus contains little DBcc and changes by only 288
+clocks. The focused `bench_loop` falls from 277,158 to 263,496 clocks, a further
+**4.93% reduction** and a cumulative **9.13%** reduction from the accepted
+branch-refill build's 289,956 clocks.
+
+| Speedometer 3.23 PR Test | memory-source retirement | prefetched DBcc | gain |
+|---|---:|---:|---:|
+| CPU | 4.303 | **4.413** | **+2.6%** |
+| Graphics | 5.218 | 5.224 | +0.1% |
+| Disk | 0.685 | 0.684 | -0.1% |
+| Math | 29.958 | 29.958 | 0.0% |
+| Old PR | 6.419 | **6.465** | +0.7% |
+| New PR | 2.244 | **2.254** | +0.4% |
+
+Seed 24 missed CPU setup by 0.188 ns and was rejected without deployment. The
+accepted seed-25 image uses 40,566/41,910 ALMs and 4,180/4,191 LABs. It closes
+timing at **+0.078 ns worst setup overall** (+0.170 ns on the CPU clock) and
+**+0.204 ns hold**, with zero setup or hold TNS. The RBF is
+`Wombat33_CPU_loadretire_dbcc_seed25_20260902.rbf`, MD5
+`6db5e64aee81ccf280b34e23a8247916` and SHA-256
+`a3e84325f3cc1a066afef515eee933c8a74ab51d39f62fb527792b76b89744b5`.
+The exact Quartus build is preserved at
+`/home/alans/builds/wombat33_cpu_loadretire_dbcc_seed25_20260902`. Mac OS 7.5.5
+booted, completed every PR category, and shut down normally. The MiSTer then
+returned to its menu and the disposable disk was restored from the compressed
+golden; both disk copies matched MD5
+`0c4f774b4a2eccd5656e92f16119875f` afterward.
