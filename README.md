@@ -22,6 +22,23 @@ bash scripts/deploy_screenshot.sh   # push + seed boot.rom/SCSI mount + launch
 The core mounts its boot ROM from `games/Wombat33/boot.rom` and its main
 SCSI disk from OSD slot `S0`; `BUILD.md` covers seeding both.
 
+## Performance work
+
+The memory path now measures **52.4 MB/s** for sequential integrated reads and
+**304 ns** for a 16-byte fill, putting bandwidth inside the real Quadra 800's
+50--65 MB/s range. CPU-side work has since raised the Speedometer 3.23 CPU PR
+score into the **4.73** range, with the complete AP68040 suite, the Wombat
+Verilator model, the first 100 SingleStepTests rows, Quartus timing, and a full
+hardware PR run used as the acceptance gate.
+
+The current accepted CPU checkpoint is parent commit `a267903` with AP68040
+submodule commit `5aa596f`. Its seed-27 fit uses 40,738/41,910 ALMs and
+4,182/4,191 LABs, so resource headroom is now as important as another local
+fast path. See
+[`docs/PERFORMANCE_MEASUREMENTS.md`](docs/PERFORMANCE_MEASUREMENTS.md) for
+measurements and [`CPU_PERFORMANCE_TASKS.md`](CPU_PERFORMANCE_TASKS.md) for the
+live, power-loss-safe work queue and exact recovery instructions.
+
 ## Testbench (`SingleStepTests/`)
 
 Per-instruction CPU / FPU / MMU benches captured against MAME's

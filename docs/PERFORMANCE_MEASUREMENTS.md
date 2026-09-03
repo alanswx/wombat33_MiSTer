@@ -803,3 +803,48 @@ booted, completed every PR category, and reached its safe-to-switch-off screen.
 The MiSTer then returned to its menu and the disposable disk was restored from
 the compressed golden; both disk copies matched MD5
 `0c4f774b4a2eccd5656e92f16119875f` afterward.
+
+## 19. AP040 register-ADD decode preselection (Speedometer 3.23)
+
+The common `ADD.L Dn,Dn` form previously entered `S_PIPE_START` only to select
+the two asynchronous register-file ports before continuing to the combined
+operand-capture state. Decode now selects those ports and enters `S_PIPE_REGS`
+directly. Operand capture and `S_EXEC` remain unchanged; other sizes, address-
+register sources, and every other opcode retain the generic path.
+
+The complete AP68040 suite and Wombat Verilator build pass. The first 100
+SingleStepTests CPU rows match all 1,696 architectural field groups with zero
+real differences. That corpus falls from 35,204,643 to 35,196,127 clocks,
+saving 8,516 clocks. The focused `bench_loop` falls from 225,036 to **212,238**
+clocks, a further **5.69% reduction** and a cumulative **26.80% reduction** from
+the branch-refill build's 289,956 clocks. `S_PIPE_START` falls from 25,669 to
+12,868 visits while `S_PIPE_REGS` and `S_EXEC` are intentionally unchanged.
+
+| Speedometer 3.23 PR Test | MOVE read retirement | ADD decode selection | change |
+|---|---:|---:|---:|
+| CPU | 4.739 | **4.726** | -0.3% |
+| Graphics | 5.438 | **5.445** | +0.1% |
+| Disk | 0.683 | **0.680** | -0.4% |
+| Math | 31.228 | **31.202** | -0.1% |
+| Old PR | 6.786 | **6.780** | -0.1% |
+| New PR | 2.297 | **2.288** | -0.4% |
+
+All six hardware scores are within 0.5% of the preceding run. This change is
+therefore accepted as a verified focused-workload improvement with a tiny area
+reduction, but it is **not claimed as a measurable Speedometer gain**.
+
+The seed-27 image uses 40,738/41,910 ALMs and 4,182/4,191 LABs, 17 ALMs and one
+LAB fewer than the preceding checkpoint. It closes timing at **+0.070 ns worst
+setup overall**, +0.772 ns on the 33 MHz CPU clock and +0.070 ns on the 99 MHz
+SDRAM clock. Worst hold is **+0.245 ns overall**, +0.263 ns on the CPU clock and
++0.430 ns on the SDRAM clock, with zero setup or hold TNS.
+
+The RBF is `Wombat33_CPU_adddecode_seed27_20260903.rbf`, MD5
+`cb83d1a71d262a61af9a5508a443506d` and SHA-256
+`512558ea68f5bc5e9dfeb79be9bd0860e44f2d2046e4909bb3c6096c6e24816a`.
+The exact Quartus build is preserved at
+`/home/alans/builds/wombat33_cpu_adddecode_seed27_20260903`. Mac OS 7.5.5
+booted, completed every PR category including Disk, and reached its safe-to-
+switch-off screen. The MiSTer then returned to its menu and the disposable disk
+was restored from the compressed golden; both disk copies matched MD5
+`0c4f774b4a2eccd5656e92f16119875f` afterward.

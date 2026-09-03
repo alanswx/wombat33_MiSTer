@@ -10,6 +10,13 @@ Each entry records the md5 so a core on a MiSTer can be identified without
 guessing, and the timing margin, because a build that fits but violates timing
 must never be flashed (`scripts/deploy_screenshot.sh` refuses one).
 
+Newer CPU-performance checkpoints are preserved outside this dated release
+directory while they remain on the development branch. The current one is
+parent commit `a267903`, AP68040 `5aa596f`, with its exact artifacts and
+recovery procedure recorded in [`../CPU_PERFORMANCE_TASKS.md`](../CPU_PERFORMANCE_TASKS.md).
+Do not infer that the newest file in this directory is the fastest current
+development build.
+
 | build | md5 | timing | notes |
 |---|---|---|---|
 | `wombat33_20260901_2.rbf` | `d1d785de28439d132333a1c9e3aab5c5` | met, **+0.270 ns setup / +0.241 ns hold** | Related-clock SDRAM handoff: 151 ns reads, 22.0 MB/s simulated sequential RAM, Speedometer 3.23 CPU PR 2.917. |

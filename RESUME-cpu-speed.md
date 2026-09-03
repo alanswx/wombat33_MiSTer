@@ -1,4 +1,13 @@
-# Resume prompt — CPU speed: related-clock handoff validated, page mode next
+# Historical resume prompt — superseded
+
+> **Do not use this as the current resume state.** The memory work and several
+> CPU optimizations described here as future work have since landed. Start with
+> [`CPU_PERFORMANCE_TASKS.md`](CPU_PERFORMANCE_TASKS.md), which records the
+> accepted commits, current in-flight experiment, exact build artifacts,
+> validation procedure, rejected paths, and ranked future queue as of
+> 2026-09-03. This file remains only as the historical memory-speed handoff.
+
+# CPU speed: related-clock handoff validated, page mode next (historical)
 
 Paste this file as the opening message of a new session. Repo on `main`
 through `4a29d6c`; the related-clock handoff is hardware-validated in the
