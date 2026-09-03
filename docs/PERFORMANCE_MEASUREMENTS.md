@@ -535,3 +535,55 @@ It booted Mac OS 7.5.5 and completed one iteration of every PR category. Mac OS
 then reached its safe-to-switch-off screen, the MiSTer returned to its menu, and
 the disposable disk was restored from the pristine golden. Both images matched
 MD5 `0c4f774b4a2eccd5656e92f16119875f` after restoration.
+
+## 13. AP040 instruction branch-refill buffer (Speedometer 3.23)
+
+The execution prefetch queue is forward-only, so every taken backwards branch
+previously discarded its words and repeated the instruction-cache/MMU
+handshake. AP040 now retains one 32-byte sector of completed instruction-fetch
+data, tagged by logical address and supervisor context. A redirect can seed the
+queue when all four contiguous words beginning at its target are valid. Normal
+speculative filling resumes after those words drain. Exceptions, CINV, PFLUSH,
+MOVEC, and other architectural prefetch flushes invalidate the sector; ordinary
+control-flow redirects preserve it.
+
+Packing the sector as eight 32-bit words and requiring a complete four-word
+redirect window matters for the target FPGA. Earlier per-word and two-bank
+designs did not fit. A 16-bit version fit at exactly 4,191/4,191 LABs but was
+placement-fragile. The accepted form uses 39,685/41,910 ALMs and 4,185/4,191
+LABs. Placement seed 24 closes timing at **+0.417 ns setup** and **+0.244 ns
+hold**, with zero setup or hold warnings.
+
+The complete AP68040 suite and Wombat Verilator build pass. The first 100
+SingleStepTests CPU rows match all 1,696 architectural field groups with zero
+real differences. The focused `bench_loop` result falls from 326,674 to
+289,956 clocks, an **11.24% reduction**.
+
+| Speedometer 3.23 PR Test | store-hit update | branch refill | gain |
+|---|---:|---:|---:|
+| CPU | 3.878 | **4.282** | **+10.4%** |
+| Graphics | 5.130 | **5.177** | +0.9% |
+| Disk | 0.685 | 0.680 | -0.7% |
+| Math | 29.395 | **29.809** | +1.4% |
+| Old PR | 6.167 | **6.383** | **+3.5%** |
+| New PR | 2.190 | **2.228** | +1.7% |
+
+![Speedometer 3.23 PR branch refill](perf/wombat33_cpu_branchrefill_seed24_speedometer323_pr.png)
+
+The RBF is `Wombat33_CPU_branchrefill_seed24_20260902.rbf`, MD5
+`37eb6c6900e508d52d56baa51980ac82` and SHA-256
+`38bb27f1633965f71323c3ca490dd17b368c7046ecf24bf1d5e16701721d8b47`.
+The exact Quartus build is preserved at
+`/home/alans/builds/wombat33_cpu_branchrefill_seed24_20260902`. Mac OS 7.5.5
+booted, completed every PR category including Disk, and reached its safe-to-
+switch-off screen. The MiSTer then returned to its menu and the disposable disk
+was restored from the compressed pristine golden; both disk copies matched MD5
+`0c4f774b4a2eccd5656e92f16119875f` afterward.
+
+A combined experiment that retired register-to-register ALU operations early
+and collapsed DBcc by one state cut the focused benchmark by a further 15.75%
+in simulation, but its timing-clean hardware image froze at Happy Mac. Neither
+change was retained. This is evidence against a broad execution-state collapse
+as the next step; subsequent pipeline work should be split into small,
+independently hardware-tested changes with exception and interrupt boundaries
+left intact.

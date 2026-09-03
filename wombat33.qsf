@@ -124,7 +124,12 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # open_row -> command[0] crossing (-1.030 ns setup, +0.239 ns hold), with
 # 5.572 ns of routing delay. Seed 19 meets timing at +0.378 ns setup and
 # +0.251 ns hold and passed the full Mac OS 7.5.5 Speedometer 3.23 PR suite.
-set_global_assignment -name SEED 19
+# The AP040 instruction branch-refill buffer is close to the LAB limit. Seeds
+# 19, 20, and 23 missed setup by 0.033, 0.001, and 0.108 ns respectively.
+# Packed 32-bit storage plus complete four-word redirect hits closes at seed 24
+# with +0.417 ns setup and +0.244 ns hold, and passed the full Mac OS 7.5.5
+# Speedometer 3.23 PR suite in hardware.
+set_global_assignment -name SEED 24
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
