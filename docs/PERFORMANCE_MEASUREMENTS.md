@@ -710,3 +710,50 @@ completed every PR category, and reached its safe-to-switch-off screen. The
 MiSTer then returned to its menu and the disposable disk was restored from the
 compressed golden; both disk copies matched MD5
 `0c4f774b4a2eccd5656e92f16119875f` afterward.
+
+## 17. AP040 decode-preselected source EA (Speedometer 3.23)
+
+The previous simple-An optimization still sent generic source-memory operands
+through `S_EA_DISP`, even though decode already knows their address-register
+number. Decode now preselects that An on the asynchronous register-file port;
+special instructions which need a different port-A register override the
+selection in their existing decode branches. When `S_PIPE_START` sees `(An)`,
+`(An)+`, or `-(An)` as its source, it computes the address and any register
+update directly and proceeds to `S_PIPE_SRD`. Displacement, indexed, absolute,
+and PC-relative modes continue through the generic EA engine, and the memory
+transaction and retirement paths are unchanged.
+
+The complete AP68040 suite and Wombat Verilator build pass. The first 100
+SingleStepTests CPU rows match all 1,696 architectural field groups with zero
+real differences. That corpus falls by another 1,387 clocks, from 35,268,206
+to 35,266,819. The focused `bench_loop` falls from 250,634 to 237,836 clocks, a
+further **5.11% reduction** and a cumulative **17.98% reduction** from the
+branch-refill build's 289,956 clocks. `S_EA_DISP` falls from 13,066 visits to
+266 while data-read count and latency remain unchanged.
+
+| Speedometer 3.23 PR Test | simple-An EA dispatch | source-EA bypass | gain |
+|---|---:|---:|---:|
+| CPU | 4.613 | **4.688** | **+1.6%** |
+| Graphics | 5.287 | **5.350** | +1.2% |
+| Disk | 0.685 | 0.676 | -1.3% |
+| Math | 30.814 | **31.049** | +0.8% |
+| Old PR | 6.649 | **6.720** | +1.1% |
+| New PR | 2.279 | 2.271 | -0.4% |
+
+Seed 25 was rejected without deployment because HDMI setup missed by 0.140 ns,
+although the CPU clock had +0.389 ns setup margin. Seed 26 fixed HDMI but was
+also rejected without deployment because CPU setup missed by 0.433 ns. The
+accepted seed-27 image uses 40,599/41,910 ALMs and 4,186/4,191 LABs. It closes
+timing at **+0.502 ns worst setup overall** (+0.631 ns on the CPU clock) and
+**+0.243 ns worst hold overall** (+0.431 ns on the CPU clock), with zero setup
+or hold TNS.
+
+The RBF is `Wombat33_CPU_sourceea_seed27_20260903.rbf`, MD5
+`2ef2aa130fd04fa6da4dc0f938d06c69` and SHA-256
+`f36a85b1373384a605e84925a08ec081c66fab2b5da3777768be73629c769c4f`.
+The exact Quartus build is preserved at
+`/home/alans/builds/wombat33_cpu_sourceea_seed27_20260903`. Mac OS 7.5.5
+booted, completed every PR category, and reached its safe-to-switch-off screen.
+The MiSTer then returned to its menu and the disposable disk was restored from
+the compressed golden; both disk copies matched MD5
+`0c4f774b4a2eccd5656e92f16119875f` afterward.
