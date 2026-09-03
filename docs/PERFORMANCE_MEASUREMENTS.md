@@ -757,3 +757,49 @@ booted, completed every PR category, and reached its safe-to-switch-off screen.
 The MiSTer then returned to its menu and the disposable disk was restored from
 the compressed golden; both disk copies matched MD5
 `0c4f774b4a2eccd5656e92f16119875f` afterward.
+
+## 18. AP040 memory-source MOVE retirement (Speedometer 3.23)
+
+The common non-page-crossing `MOVE`/`MOVEA` from memory to a register now
+retires on the successful data-read acknowledgement. The source-EA path has
+already selected the destination register on register-file port B while the
+read is in flight, so ordinary `MOVE` can merge byte/word results and update
+NZVC directly, while `MOVEA.W` applies its required sign extension. The
+existing `fetch_next` boundary still handles trace and interrupts after the
+registered writeback. Faulted reads, split page-crossing reads, memory
+destinations, and non-MOVE users of the MOVE ALU operation retain the generic
+pipeline and `S_EXEC` path.
+
+The complete AP68040 suite and Wombat Verilator build pass. The first 100
+SingleStepTests CPU rows match all 1,696 architectural field groups with zero
+real differences. That corpus falls from 35,266,819 to 35,204,643 clocks,
+saving 62,176 clocks. The focused `bench_loop` falls from 237,836 to 225,036
+clocks, a further **5.38% reduction** and a cumulative **22.39% reduction**
+from the branch-refill build's 289,956 clocks. All 12,800 eligible loads leave
+`S_EXEC`; its occupancy falls from 25,668 to 12,872 while data-read count and
+latency remain unchanged.
+
+| Speedometer 3.23 PR Test | source-EA bypass | MOVE read retirement | gain |
+|---|---:|---:|---:|
+| CPU | 4.688 | **4.739** | **+1.1%** |
+| Graphics | 5.350 | **5.438** | **+1.6%** |
+| Disk | 0.676 | **0.683** | +1.0% |
+| Math | 31.049 | **31.228** | +0.6% |
+| Old PR | 6.720 | **6.786** | +1.0% |
+| New PR | 2.271 | **2.297** | +1.1% |
+
+The accepted seed-27 image uses 40,755/41,910 ALMs and 4,183/4,191 LABs. It
+closes timing at **+0.026 ns worst setup overall** (HDMI), +0.830 ns on the CPU
+clock and +0.813 ns on the 99 MHz SDRAM clock. Worst hold is **+0.245 ns
+overall**, +0.257 ns on the CPU clock and +0.432 ns on the SDRAM clock, with
+zero setup or hold TNS.
+
+The RBF is `Wombat33_CPU_moveretire_seed27_20260903.rbf`, MD5
+`0416e38b6f2a6bf05f8d1f51532743f0` and SHA-256
+`b840435b33eb76fef411d844979b52c63e077bfde6b4e7d20926346381b2288d`.
+The exact Quartus build is preserved at
+`/home/alans/builds/wombat33_cpu_moveretire_seed27_20260903`. Mac OS 7.5.5
+booted, completed every PR category, and reached its safe-to-switch-off screen.
+The MiSTer then returned to its menu and the disposable disk was restored from
+the compressed golden; both disk copies matched MD5
+`0c4f774b4a2eccd5656e92f16119875f` afterward.
