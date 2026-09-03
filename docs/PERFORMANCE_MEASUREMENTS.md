@@ -587,3 +587,44 @@ change was retained. This is evidence against a broad execution-state collapse
 as the next step; subsequent pipeline work should be split into small,
 independently hardware-tested changes with exception and interrupt boundaries
 left intact.
+
+## 14. AP040 memory-source operand retirement (Speedometer 3.23)
+
+Profiling the accepted branch-refill core showed that external read latency was
+no longer the dominant cost in the focused loop: 12,784 of 12,801 data reads
+completed in two clocks. The remaining memory-source path nevertheless spent a
+separate `S_PIPE_SDONE` clock copying the completed read into the operand
+registers. For the common memory-source/register-destination case, port B has
+already been parked on the destination register by `S_PIPE_SRD`. The read
+acknowledgement now captures both operands directly and enters `S_EXEC`, while
+page-crossing reads and every other return path retain the original sequence.
+This does not add the long register-file-to-ALU combinational path that made the
+earlier broad pipeline experiment unsafe.
+
+The complete AP68040 suite and Wombat Verilator build pass. The first 100
+SingleStepTests CPU rows match all 1,696 architectural field groups with zero
+real differences. That corpus falls from 36,531,511 to 36,241,181 clocks
+(-0.79%). The focused `bench_loop` falls from 289,956 to 277,158 clocks, a
+**4.41% reduction**, and `S_PIPE_SDONE` disappears from its steady-state
+profile as expected.
+
+| Speedometer 3.23 PR Test | branch refill | memory-source retirement | gain |
+|---|---:|---:|---:|
+| CPU | 4.282 | **4.303** | +0.5% |
+| Graphics | 5.177 | **5.218** | +0.8% |
+| Disk | 0.680 | **0.685** | +0.7% |
+| Math | 29.809 | **29.958** | +0.5% |
+| Old PR | 6.383 | **6.419** | +0.6% |
+| New PR | 2.228 | **2.244** | +0.7% |
+
+The seed-24 image uses 39,705/41,910 ALMs and 4,187/4,191 LABs. It closes
+timing at **+0.536 ns setup** and **+0.246 ns hold**, with zero setup or hold
+TNS. The RBF is `Wombat33_CPU_loadretire_seed24_20260902.rbf`, MD5
+`4df7fe6317ef39330e02b44c6408d35f` and SHA-256
+`c0fc37bbcde912b78964b2d4a21d07b2536b109355d3054e034b324d03ec835c`.
+The exact Quartus build is preserved at
+`/home/alans/builds/wombat33_cpu_loadretire_seed24_20260902`. Mac OS 7.5.5
+booted and completed every PR category, then reached its safe-to-switch-off
+screen. The MiSTer returned to its main menu and the disposable disk was
+restored from the compressed golden; both disk copies matched MD5
+`0c4f774b4a2eccd5656e92f16119875f` afterward.
