@@ -126,10 +126,10 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # +0.251 ns hold and passed the full Mac OS 7.5.5 Speedometer 3.23 PR suite.
 # The AP040 instruction branch-refill buffer is close to the LAB limit. Seeds
 # 19, 20, and 23 missed setup by 0.033, 0.001, and 0.108 ns respectively.
-# Packed 32-bit storage plus complete four-word redirect hits closes at seed 24
-# with +0.417 ns setup and +0.244 ns hold, and passed the full Mac OS 7.5.5
-# Speedometer 3.23 PR suite in hardware.
-set_global_assignment -name SEED 24
+# Packed 32-bit branch-refill storage plus the memory-source and DBcc retirement
+# shortcuts close at seed 25 with +0.078 ns worst setup (+0.170 ns CPU setup)
+# and +0.204 ns hold, and passed the full Mac OS 7.5.5 Speedometer 3.23 PR suite.
+set_global_assignment -name SEED 25
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
