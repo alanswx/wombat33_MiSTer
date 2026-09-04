@@ -31,12 +31,13 @@ score into the **4.73** range, with the complete AP68040 suite, the Wombat
 Verilator model, the first 100 SingleStepTests rows, Quartus timing, and a full
 hardware PR run used as the acceptance gate.
 
-The current accepted checkpoint is parent commit `3a960b5` with AP68040
+The current accepted checkpoint is parent commit `cec2f3f` with AP68040
 submodule commit `8231eec`. Moving the two-read-port FPU register bank into
 mirrored MLABs, then replacing the DAFB palette's unintended 6,144-register
-read mirror with explicit M10K views, cut the seed-27 fit from 40,738 to 36,525
-ALMs and from 4,182 to 4,099 of 4,191 LABs. That leaves 92 LABs free for CPU
-fast paths and later pipelining, with no measurable speed change. See
+read mirror with explicit M10K views, and finally consolidating DAFB's 17
+timing words in one MLAB, cut the timing-clean fit from 40,738 to 36,592 ALMs
+and from 4,182 to 4,080 of 4,191 LABs. That leaves 111 LABs free for CPU fast
+paths and later pipelining, with no measurable speed change. See
 [`docs/PERFORMANCE_MEASUREMENTS.md`](docs/PERFORMANCE_MEASUREMENTS.md) for
 measurements and [`CPU_PERFORMANCE_TASKS.md`](CPU_PERFORMANCE_TASKS.md) for the
 live, power-loss-safe work queue and exact recovery instructions.

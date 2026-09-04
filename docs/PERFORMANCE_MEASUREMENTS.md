@@ -948,3 +948,54 @@ Mac OS reached its safe-to-switch-off screen, the MiSTer returned to its menu,
 and the disposable disk was restored from the compressed golden. Both it and
 the untouched pristine reference then matched MD5
 `0c4f774b4a2eccd5656e92f16119875f`.
+
+## 22. DAFB timing registers in one MLAB (area reclaim)
+
+Parent commit `cec2f3f` combines Swatch's ten horizontal and seven vertical
+12-bit timing words in one power-of-two 32x12 MLAB. Their CPU-visible register
+addresses remain unchanged. Quartus previously rejected the two small arrays
+for memory inference and implemented 204 scattered registers.
+
+The fair comparison is seed 28 on both forms:
+
+| seed-28 metric | palette control | timing MLAB | change |
+|---|---:|---:|---:|
+| fitted ALMs | 36,659 | **36,592** | **-67** |
+| LABs used | 4,096 | **4,080** | **-16** |
+| registers | 24,141 | **23,944** | **-197** |
+| MLAB bits | 1,280 | 1,664 | +384 |
+| routing average/peak | 49.1%/77.1% | **48.4%/76.2%** | lower |
+
+The accepted seed-28 fit leaves 111 of 4,191 LABs free and closes timing with
+zero TNS: +0.291 ns setup overall (+0.862 ns CPU, +0.291 ns SDRAM) and +0.243
+ns hold overall (+0.254 ns CPU, +0.433 ns SDRAM). Seed 27 fits in 36,463 ALMs
+and 4,070 LABs but is rejected because SDRAM setup is -0.453 ns with -0.692 ns
+TNS. This is why the committed QSF changes its default seed to 28.
+
+The focused first/boundary/last timing-register and palette test passes. The
+full-machine Verilator build passes, and the first 100 SingleStepTests CPU rows
+remain exactly 35,196,127 cycles with 1,696 matching architectural field groups
+and zero real differences.
+
+Mac OS 7.5.5 booted in full color and completed Speedometer 3.23 `Run ALL
+Tests`, including the full Benchmark, PR, Disk, Math, FPU, and Color groups.
+Progress screenshots were mistakenly taken while Graphics and Disk were being
+timed, contrary to the method in section 6, so the run is accepted as a
+functional soak but not as a controlled speed comparison. Its results were CPU
+4.726, Graphics 5.204, Disk 0.676, Math 31.565, Old PR 6.743, New PR 2.267,
+FPU average 2.453, and Color average 1.613. CPU and the later untouched groups
+remain consistent with the prior run; the unperturbed palette checkpoint
+remains the performance reference.
+
+![Speedometer 3.23 timing-MLAB completion](perf/wombat33_dafb_timing_mlab_seed28_speedometer323_complete.png)
+
+![Speedometer 3.23 timing-MLAB PR](perf/wombat33_dafb_timing_mlab_seed28_speedometer323_pr.png)
+
+The exact build is preserved at
+`/home/alans/builds/wombat33_dafb_timing_mlab_seed28_20260903`. The RBF is
+`Wombat33_DAFB_timing_mlab_seed28_20260903.rbf`, MD5
+`f6db788d637aaf2baf275ef82e015c2a` and SHA-256
+`ae937e62a675a248124e2b065db984e29d16ffc916f840d8a0f6abe2c552fd01`.
+Mac OS reached its safe-to-switch-off screen, the MiSTer returned to its menu,
+and both the restored disposable disk and untouched pristine reference matched
+MD5 `0c4f774b4a2eccd5656e92f16119875f`.

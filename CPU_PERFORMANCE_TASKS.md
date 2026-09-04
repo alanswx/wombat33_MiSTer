@@ -1,17 +1,18 @@
 # CPU performance task list and recovery record
 
-Last updated: 2026-09-03. This is the authoritative CPU-speed queue and the
+Last updated: 2026-09-04. This is the authoritative CPU-speed queue and the
 first file to read after a power loss or a new session. Measurements and
 screenshots remain in `docs/PERFORMANCE_MEASUREMENTS.md`.
 
 ## Immediate answer: should area be reduced?
 
-**Yes, before a broad pipeline change.** Reducing ALM/LAB use does not directly
-increase emulated CPU throughput. The FPU and DAFB palette reclaim passes lower
-the seed-27 design from 40,738 to 36,525 ALMs and from 4,182 to 4,099 LABs.
-That leaves 92 LABs free instead of nine, makes fits less seed-sensitive, and
-creates useful room for predecode, bypass controls, or another pipeline
-register.
+**Completed before a broad pipeline change.** Reducing ALM/LAB use does not
+directly increase emulated CPU throughput. The FPU and two DAFB reclaim passes
+lower the timing-clean design from 40,738 to 36,592 ALMs and from 4,182 to
+4,080 LABs. That leaves 111 LABs free instead of nine, makes fits less
+seed-sensitive, and creates useful room for predecode, bypass controls, or
+another pipeline register. The endpoints use seeds 27 and 28 respectively, so
+same-seed deltas are recorded for each pass below.
 
 LAB availability remains the more urgent number. The MLAB-backed FPU register
 bank recovered 1,380 ALMs but only six LABs. Explicit CPU/scanout copies of the
@@ -19,7 +20,10 @@ DAFB palette then moved the unintended 6,144-flop read mirror into three more
 M10Ks, recovering another 2,833 ALMs and 77 LABs. Continue toward the initial
 practical milestone of **100 LABs and 1,000 ALMs** relative to the old ADD
 checkpoint, without disabling the MMU, FPU, caches, video, audio, or other
-machine features. The ALM part is comfortably met; another 17 LABs are needed.
+machine features. Combining the 17 DAFB timing words in one MLAB then saves 67
+ALMs and 16 LABs against the same-seed palette control. The milestone is met:
+the accepted seed-28 fit is 4,146 ALMs and 102 LABs below the old seed-27 ADD
+checkpoint, with 111 LABs free.
 
 The pre-reclaim seed-27 hierarchy report says where to work:
 
@@ -43,29 +47,29 @@ that routing/packing structure matters alongside raw Boolean count.
 
 - Parent repository branch: `cpu-sdram-handoff-seed15`
 - Parent remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Parent commit: `3a960b5` (`Infer DAFB palette mirrors in M10Ks`)
+- Parent commit: `cec2f3f` (`Infer DAFB timing registers in MLAB`)
 - AP68040 branch: `wombat-retained-line-fill`
 - AP68040 remote: `https://github.com/alanswx/AP68040.git`
 - AP68040 commit: `8231eec` (`Infer FPU register bank in MLABs`)
-- Quartus seed: 27
-- Exact preserved build: `/home/alans/builds/wombat33_dafb_palette_m10k_seed27_20260903`
-- MiSTer RBF: `/media/fat/_Unstable/Wombat33_DAFB_palette_m10k_seed27_20260903.rbf`
-- MD5: `c43a310d2c39171e4be7f781904405c4`
-- SHA-256: `6dbbd34b30d767a32255049cb0e2dad3a9f75dc6454344ac24da9c881d29037c`
-- Quartus: 36,525/41,910 ALMs; 4,099/4,191 LABs; zero setup/hold TNS
-- Setup slack: +0.447 ns overall, +0.587 ns CPU, +0.552 ns SDRAM
-- Hold slack: +0.244 ns overall, +0.251 ns CPU, +0.442 ns SDRAM
-- Speedometer 3.23 PR: CPU 4.726, Graphics 5.430, Disk 0.683,
-  Math 31.538, Old PR 6.810, New PR 2.295
+- Quartus seed: 28
+- Exact preserved build: `/home/alans/builds/wombat33_dafb_timing_mlab_seed28_20260903`
+- MiSTer RBF: `/media/fat/_Unstable/Wombat33_DAFB_timing_mlab_seed28_20260903.rbf`
+- MD5: `f6db788d637aaf2baf275ef82e015c2a`
+- SHA-256: `ae937e62a675a248124e2b065db984e29d16ffc916f840d8a0f6abe2c552fd01`
+- Quartus: 36,592/41,910 ALMs; 4,080/4,191 LABs; zero setup/hold TNS
+- Setup slack: +0.291 ns overall, +0.862 ns CPU, +0.291 ns SDRAM
+- Hold slack: +0.243 ns overall, +0.254 ns CPU, +0.433 ns SDRAM
+- Stable performance reference remains the unperturbed palette run: CPU 4.726,
+  Graphics 5.430, Disk 0.683, Math 31.538, Old PR 6.810, New PR 2.295
 - Focused `bench_loop`: 212,238 cycles
 - First 100 SingleStepTests rows: 35,196,127 cycles, 1,696 field groups,
   zero real differences
 
-The FPU-MLAB checkpoint remains the closest known-good fallback at parent
-`0e7f250`, AP68040 `8231eec`, exact build
-`/home/alans/builds/wombat33_cpu_fpu_mlab_seed27_20260903`, and MiSTer RBF
-`Wombat33_CPU_fpu_mlab_seed27_20260903.rbf` (MD5
-`c4fd9f3140da2658c366156febf8201f`). Do not overwrite either checkpoint.
+The palette checkpoint remains the closest known-good fallback at parent
+`3a960b5`, AP68040 `8231eec`, exact build
+`/home/alans/builds/wombat33_dafb_palette_m10k_seed27_20260903`, and MiSTer RBF
+`Wombat33_DAFB_palette_m10k_seed27_20260903.rbf` (MD5
+`c43a310d2c39171e4be7f781904405c4`). Do not overwrite either checkpoint.
 Experiments use the disposable remote tree and a separately named RBF. The
 disposable Mac disk is always restored from the compressed golden after a safe
 guest shutdown.
@@ -107,24 +111,29 @@ M10Ks while preserving the existing one-pixel registered lookup.
   and both disposable and pristine disks matched MD5
   `0c4f774b4a2eccd5656e92f16119875f` after the golden restore.
 
-The next low-risk area candidate is combining the ten `hparam` and seven
-`vparam` words into one
-power-of-two MLAB-backed timing-register array. They currently consume 204
-scattered registers because Quartus rejects the two small arrays for
-asynchronous reads. A separate candidate already proves the idea physically:
-Quartus infers one 32x12 MLAB, synthesis falls another 319 cells, and seed 28
-fits at 36,592 ALMs and 4,080/4,191 LABs with +0.291 ns setup overall
-(+0.862 ns CPU/+0.291 ns SDRAM) and +0.243 ns hold overall (+0.254 ns CPU/
-+0.433 ns SDRAM). That is 102 LABs below the old ADD checkpoint and clears the
-headroom milestone by two LABs. Seed 27 fit even smaller at 36,463 ALMs and
-4,070 LABs but missed SDRAM setup by 0.453 ns, confirming seed sensitivity.
-The candidate MD5 is `c35b8c4155959511b7db06ee2bd169d9`; its seed-28 RBF is
-`Wombat33_DAFB_timing_mlab_seed28_20260903.rbf` (MD5
-`f6db788d637aaf2baf275ef82e015c2a`, SHA-256
-`ae937e62a675a248124e2b065db984e29d16ffc916f840d8a0f6abe2c552fd01`).
-It has passed a focused bus-read/write test and remains isolated from the
-working tree at this checkpoint; full-machine and hardware validation are
-still required.
+## Completed 2026-09-04: DAFB timing registers in one MLAB
+
+The ten `hparam` and seven `vparam` words are now one power-of-two 32x12
+MLAB-backed array. Register selectors `$09` through `$19` retain the same bus
+addresses and map contiguously into it. Against the palette-only seed-28
+control, synthesis falls 319 cells and the fit saves 67 ALMs, 16 LABs, and 197
+registers for 384 additional MLAB bits. The accepted fit is 36,592 ALMs,
+4,080/4,191 LABs, 23,944 registers, 428 M10Ks, and 1,664 MLAB bits.
+
+Seed 28 is timing-clean at +0.291 ns setup overall (+0.862 ns CPU/+0.291 ns
+SDRAM) and +0.243 ns hold overall (+0.254 ns CPU/+0.433 ns SDRAM), with zero
+TNS. Seed 27 is rejected despite its smaller 36,463-ALM/4,070-LAB fit because
+SDRAM setup is -0.453 ns with -0.692 ns TNS.
+
+The focused timing/palette test, full-machine Verilator build, and first 100
+SingleStepTests rows all pass; the CPU corpus remains 35,196,127 cycles with
+1,696 matching field groups and zero real differences. Hardware booted Mac OS
+7.5.5 in full color and completed every Speedometer 3.23 `Run ALL Tests`
+category. Progress screenshots perturbed Graphics and Disk, so that run is a
+functional soak rather than a controlled speed comparison; CPU remained 4.726
+and the later untouched Math/FPU/Color results remained at 31.565/2.453/1.613.
+Mac OS then reached the safe shutdown screen, the MiSTer returned to its menu,
+and both disk copies matched `0c4f774b4a2eccd5656e92f16119875f` after restore.
 
 ## Completed 2026-09-03: first ALM/LAB reclaim pass
 
@@ -363,10 +372,11 @@ seed-27 tree and compare both synthesis hierarchy and fitted LAB/ALM totals.
   unchanged netlist. Keep tool-setting changes separate from RTL changes and
   require repeatable seed results; fitter-only savings do not excuse negative
   timing slack.
-- [ ] Milestone gate: recover at least 1,000 ALMs and 100 LABs with all tests
-  green before undertaking the broad front-end/pipeline work below. Current
-  accepted hardware checkpoint: 4,213 ALMs and 83 LABs recovered; the LAB half
-  remains open by 17 LABs until one more reclaim pass clears the gate.
+- [x] Milestone gate: recover at least 1,000 ALMs and 100 LABs with all tests
+  green before undertaking broader front-end/pipeline work. The accepted
+  seed-28 checkpoint is 4,146 ALMs and 102 LABs below the old seed-27 ADD fit,
+  leaving 111 LABs free. Same-seed deltas remain the authoritative measure for
+  each individual RTL change.
 
 ## Priority 2: extend only the proven narrow fast-path pattern
 

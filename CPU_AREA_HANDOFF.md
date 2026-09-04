@@ -1,14 +1,13 @@
-# CPU/area optimization handoff — 2026-09-03
+# CPU/area optimization handoff — 2026-09-04
 
-Read this file first, then `CPU_PERFORMANCE_TASKS.md`. Work stopped here to
-preserve usage; do not start a fresh investigation or repeat the completed
-hardware run.
+Read this file first, then `CPU_PERFORMANCE_TASKS.md`. The area milestone is
+complete; do not repeat either completed DAFB hardware run.
 
 ## Safe stop state
 
 - Branch: `cpu-sdram-handoff-seed15`
 - Fork remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Accepted parent RTL commit: `3a960b5` (`Infer DAFB palette mirrors in M10Ks`)
+- Accepted parent RTL commit: `cec2f3f` (`Infer DAFB timing registers in MLAB`)
 - AP68040 submodule: clean at `8231eec` on `wombat-retained-line-fill`
 - MiSTer `192.168.1.75`: Mac OS was shut down through MacAtrium and the menu
   core was loaded. It is safe to deploy another RBF.
@@ -47,23 +46,20 @@ Preserved artifacts:
 - Result screenshot:
   `docs/perf/wombat33_dafb_palette_seed27_speedometer323_pr.png`
 
-## Next prepared change: DAFB timing registers in one MLAB
+## Newly accepted DAFB timing-register reclaim
 
-This is the next action. Do not redo its discovery or seed sweep. Combine the
-ten 12-bit `hparam` entries and seven 12-bit `vparam` entries in `rtl/dafb.sv`
-into one `(* ramstyle = "MLAB, no_rw_check" *) reg [11:0]
-crtc_param[0:31]`. Map register selectors `6'h09` through `6'h19` to index
-`rsel - 6'h09` for both reads and writes. Use seed 28 for the accepted build;
-seed 27 fails SDRAM timing.
+Commit `cec2f3f` combines the ten 12-bit `hparam` entries and seven 12-bit
+`vparam` entries into one 32x12 MLAB. Register selectors `6'h09` through
+`6'h19` map to `rsel - 6'h09` for both reads and writes. Seed 28 is the
+accepted default; seed 27 fails SDRAM timing.
 
-The exact candidate source is preserved remotely in:
+The exact source and build are preserved remotely in:
 
 `/home/alans/builds/wombat33_dafb_timing_mlab_seed28_20260903/rtl/dafb.sv`
 
-Its MD5 is `c35b8c4155959511b7db06ee2bd169d9`. A local scratch copy may still be at
-`/private/tmp/dafb_timing_candidate.sv`, but the preserved remote tree is the
-authority. The candidate's focused first/boundary/last timing-register test and
-palette test already pass.
+The source MD5 is `c35b8c4155959511b7db06ee2bd169d9`. The focused timing and
+palette test, full-machine Verilator build, and first 100 SingleStepTests rows
+pass with zero real differences.
 
 Measured same-seed comparison against palette-only seed 28:
 
@@ -78,7 +74,7 @@ Measured same-seed comparison against palette-only seed 28:
 | setup SDRAM | +0.928 ns | +0.291 ns | pass |
 | hold overall | +0.241 ns | +0.243 ns | pass |
 
-The seed-27 candidate fit is smaller (36,463 ALMs/4,070 LABs) but has -0.453
+The seed-27 fit is smaller (36,463 ALMs/4,070 LABs) but has -0.453
 ns SDRAM setup slack and -0.692 ns TNS, so reject that seed. The accepted
 seed-28 candidate RBF already exists at:
 
@@ -86,32 +82,22 @@ seed-28 candidate RBF already exists at:
 
 It has MD5 `f6db788d637aaf2baf275ef82e015c2a` and SHA-256
 `ae937e62a675a248124e2b065db984e29d16ffc916f840d8a0f6abe2c552fd01`.
-The preserved Quartus fitter report records seed 28 even though the saved QSF
-may still name seed 27; change the working-tree QSF seed to 28 when accepting
-the candidate so a default rebuild is reproducible.
+The working-tree QSF now records seed 28. Hardware booted Mac OS 7.5.5 with
+correct full-color output and completed Speedometer 3.23 `Run ALL Tests`.
+Progress captures perturbed Graphics and Disk, so retain the prior unperturbed
+palette scores as the performance baseline; this run is accepted as a full
+functional soak. CPU remained 4.726 and the untouched later Math/FPU/Color
+groups read 31.565/2.453/1.613. The guest reached the safe shutdown screen,
+the menu core was loaded, and both disk copies matched the golden MD5 after
+restore.
 
-Next-session sequence:
-
-1. Confirm this documentation/handoff commit is pushed and the user-owned dirty
-   files below are untouched.
-2. Recover the candidate `dafb.sv` from the preserved remote tree, review its
-   diff against `3a960b5`, apply only the timing-array change, and set the QSF
-   seed to 28.
-3. Run `make -C verilator -j8`; rerun the focused timing/palette test and first
-   100 SingleStepTests rows. The timing change is outside AP68040, but keep the
-   same acceptance gate.
-4. Deploy the already timing-clean seed-28 RBF, boot the disposable disk, and
-   check video modes plus a full Speedometer `Run ALL Tests` pass.
-5. Shut down through MacAtrium, wait for the safe screen, load
-   `/media/fat/menu.rbf`, restore only the disposable disk from the golden, and
-   verify both disk MD5s again before committing the timing change.
-
-That timing-array pass gives 111 free LABs in its seed-28 fit and clears the
-100-LAB headroom milestone. Afterward, either test the small eight-entry ADB
-keyboard FIFO as explicit mirrored MLAB read views (small, hardware-sensitive
-area experiment) or return to CPU speed work. The preferred CPU experiment is
-to extend the proven decode-time dual-register selection from `ADD.L Dn,Dn` to
-`SUB.L Dn,Dn`, one opcode family at a time. Do not start broad pipelining yet.
+The area milestone is now complete: the seed-28 fit leaves 111 LABs free. Do
+not force the eight-entry ADB keyboard FIFO into two Memory LABs without first
+proving a real fitted-LAB win; its two asynchronous reads make it a weak
+candidate. The next action is CPU speed work: extend the proven decode-time
+dual-register selection from `ADD.L Dn,Dn` to `SUB.L Dn,Dn`, measure corpus and
+focused-loop cycle changes, then run the complete AP68040 and hardware gates.
+Do not start broad pipelining yet.
 
 ## Working-tree ownership
 
@@ -127,7 +113,8 @@ rewritten, cleaned, or deleted:
 - generated `verilator/obj_dir_tb_*` directories
 
 Only `README.md`, `CPU_PERFORMANCE_TASKS.md`,
-`docs/PERFORMANCE_MEASUREMENTS.md`, this handoff, and the named performance
-screenshot belong in the documentation checkpoint following `3a960b5`.
+`docs/PERFORMANCE_MEASUREMENTS.md`, this handoff, and the named timing-MLAB
+performance screenshots belong in the documentation checkpoint following
+`cec2f3f`.
 
 There is no `CLAUDE.md` in this repository or its git history at this stop.
