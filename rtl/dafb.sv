@@ -74,8 +74,9 @@ reg [13:0] stride;               // bytes
 assign vid_stride = stride;
 reg  [2:0] sense_drive;          // last value written to the sense register
 reg [11:0] timing_ctrl, config_r, swatch_mode, test_r, swatch_test;
-reg [11:0] hparam [0:9];
-reg [11:0] vparam [0:6];
+// Swatch exposes 17 consecutive timing words.  A power-of-two backing array
+// lets Quartus place the otherwise scattered 204-bit register file in MLAB.
+(* ramstyle = "MLAB, no_rw_check" *) reg [11:0] crtc_param [0:31];
 // MAME's DAFB has VBL on status bit 0 (clear at +$114); QEMU's macfb has
 // it on bit 2 (clear at +$10C, irq masked by +$104).  The ROM boots on
 // both, so serve both conventions: VBL raises bits {2,0} as enabled,
@@ -183,10 +184,8 @@ always @(posedge clk) begin
 					6'h07: anim_line   <= wdata[11:0];
 					6'h08: swatch_test <= wdata[11:0];
 					default: begin
-						if (rsel >= 6'h09 && rsel <= 6'h12)
-							hparam[rsel - 6'h09] <= wdata[11:0];
-						if (rsel >= 6'h13 && rsel <= 6'h19)
-							vparam[rsel - 6'h13] <= wdata[11:0];
+						if (rsel >= 6'h09 && rsel <= 6'h19)
+							crtc_param[rsel - 6'h09] <= wdata[11:0];
 					end
 					endcase
 				end
@@ -197,10 +196,8 @@ always @(posedge clk) begin
 					6'h05: begin rdata <= 0; int_status <= 0; end
 					6'h08: rdata <= {20'd0, swatch_test};
 					default: begin
-						if (rsel >= 6'h09 && rsel <= 6'h12)
-							rdata <= {20'd0, hparam[rsel - 6'h09]};
-						if (rsel >= 6'h13 && rsel <= 6'h19)
-							rdata <= {20'd0, vparam[rsel - 6'h13]};
+						if (rsel >= 6'h09 && rsel <= 6'h19)
+							rdata <= {20'd0, crtc_param[rsel - 6'h09]};
 					end
 					endcase
 				end

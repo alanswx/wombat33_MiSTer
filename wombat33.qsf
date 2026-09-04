@@ -138,7 +138,11 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # (+0.263 ns CPU and +0.430 ns SDRAM). It uses 40,738 ALMs and 4,182 LABs and
 # passed the full Speedometer PR suite; scores were within 0.5% of the prior
 # build, so its measured benefit remains workload-specific.
-set_global_assignment -name SEED 27
+# The DAFB palette M10K mirrors and combined timing-register MLAB close at seed
+# 28 with 36,592 ALMs, 4,080/4,191 LABs, +0.291 ns worst setup (+0.862 ns CPU,
+# +0.291 ns SDRAM), and +0.243 ns worst hold. Seed 27 is smaller but rejected:
+# its SDRAM setup slack is -0.453 ns with -0.692 ns TNS.
+set_global_assignment -name SEED 28
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
