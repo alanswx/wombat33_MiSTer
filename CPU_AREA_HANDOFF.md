@@ -97,8 +97,11 @@ proving a real fitted-LAB win; its two asynchronous reads make it a weak
 candidate. `SUB.L Dn,Dn` decode preselection passed simulation and saved 715
 cycles (0.002%) in the first 100 SingleStepTests rows, but was absent from the
 focused loop and its same-seed fit missed 99 MHz SDRAM setup by 0.296 ns with
--0.324 ns TNS. It was reverted without a hardware run. The next action is to
-profile and test `AND.L Dn,Dn` as the next isolated family; reject it before
+-0.324 ns TNS. It was reverted without a hardware run. `AND.L Dn,Dn` then
+passed the complete AP suite but was also absent from the focused loop and
+saved only 746 cycles (0.0021%) in the first 100 SingleStepTests rows, with all
+1,696 field groups matching. It was rejected before fitting. The next action is
+to profile and test `OR.L Dn,Dn` as the next isolated family; reject it before
 hardware unless its dynamic benefit and physical fit justify carrying it.
 Do not start broad pipelining yet.
 

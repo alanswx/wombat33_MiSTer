@@ -384,11 +384,13 @@ seed-27 tree and compare both synthesis hierarchy and fitted LAB/ALM totals.
   register-register forms. Do not optimize ISA families merely because their
   decode looks similar.
 - [ ] The ADD candidate passed hardware. Continue extending decode-time
-  dual-register selection one family at a time: AND, OR, EOR, CMP, then
+  dual-register selection one family at a time: OR, EOR, CMP, then
   address-register forms. Re-run every gate after each family. SUB.L was
   tested and rejected: it saved only 715 cycles (0.002%) in the first 100
   SingleStepTests rows, was absent from the focused loop, and its same-seed fit
-  missed 99 MHz SDRAM setup by 0.296 ns with -0.324 ns TNS.
+  missed 99 MHz SDRAM setup by 0.296 ns with -0.324 ns TNS. AND.L was rejected
+  before fitting: it was also absent from the focused loop and saved only 746
+  cycles (0.0021%) in the same corpus.
 - [ ] Evaluate byte/word register forms separately. Their merge and condition-
   code behavior differs from longword operations and can erase the simplicity
   of the ADD.L path.

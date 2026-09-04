@@ -1019,3 +1019,10 @@ Because the dynamic benefit is negligible and timing no longer closes, the RTL
 was reverted without producing or deploying a hardware candidate. Do not
 seed-walk this form unless a representative workload later shows substantial
 SUB.L register-register traffic.
+
+The analogous `AND.L Dn,Dn` experiment passed the complete AP68040 suite and
+left the focused `bench_loop` exactly at 212,238 cycles, again with no eligible
+instances. It reduced the first 100 SingleStepTests rows from 35,196,127 to
+35,195,381 cycles, saving only 746 cycles (about 0.0021%), with all 1,696 field
+groups matching. Since this is the same negligible dynamic benefit as SUB and
+cannot move application-level performance, it was reverted before Quartus.
