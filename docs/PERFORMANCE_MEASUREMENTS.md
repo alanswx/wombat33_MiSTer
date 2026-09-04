@@ -1036,3 +1036,65 @@ cycles, only 39 cycles (about 0.00011%) below the accepted checkpoint, with all
 focused loop remained 212,238 cycles, and the first 100 SingleStepTests rows
 measured 35,196,088 cycles with all 1,696 field groups matching. Its 39-cycle
 gain was rejected before Quartus.
+
+## 24. AP040 register-CMP decode preselection (Speedometer 3.23)
+
+AP68040 commit `d543f2d` extends the narrow, accepted ADD technique to only
+`CMP.L Dn,Dn`: decode selects both asynchronous register-file ports and enters
+`S_PIPE_REGS`, skipping `S_PIPE_START` while retaining operand capture and
+`S_EXEC`. Other CMP sizes and addressing modes are unchanged. Parent RTL
+commit `b0e6174` records the submodule pointer.
+
+The complete AP68040 suite and full-machine Verilator build pass. The focused
+loop stays at 212,238 cycles because it contains no eligible CMP. In contrast,
+the first 100 SingleStepTests rows fall from 35,196,127 to 35,168,444 cycles,
+saving 27,683 cycles (0.0787%), with all 1,696 architectural field groups
+matching and zero real differences.
+
+The same-seed physical comparison is also favorable:
+
+| seed-28 metric | timing-MLAB control | CMP preselection | change |
+|---|---:|---:|---:|
+| fitted ALMs | 36,592 | **36,446** | **-146** |
+| LABs used | 4,080 | **4,063** | **-17** |
+| LABs free | 111 | **128** | **+17** |
+| registers | 23,944 | **23,938** | **-6** |
+| MLAB bits | 1,664 | 1,664 | 0 |
+| setup overall/SDRAM | +0.291 ns | +0.133 ns | pass |
+| setup CPU | +0.862 ns | **+1.192 ns** | pass |
+| hold overall | +0.243 ns | +0.242 ns | pass |
+
+All setup and hold domains have zero TNS. The complete `Run ALL Tests`
+hardware pass produced:
+
+| Speedometer 3.23 PR Test | unperturbed control | CMP preselection | change |
+|---|---:|---:|---:|
+| CPU | 4.726 | **4.765** | **+0.83%** |
+| Graphics | 5.430 | 5.394 | -0.66% |
+| Disk | 0.683 | 0.676 | -1.02% |
+| Math | 31.538 | 31.480 | -0.18% |
+| Old PR | 6.810 | 6.808 | -0.03% |
+| New PR | 2.295 | 2.280 | -0.65% |
+
+The CPU increase is accepted as a measurable benefit: the PR tests ran without
+screen captures or remote input during their timed intervals, the RTL change
+is confined to CPU CMP decoding, and the corpus independently predicts a
+cycle reduction. The smaller unrelated-category movements are treated as run
+variance. FPU average was 2.432 and Color average 1.614. A progress capture was
+taken while the final Color group was still running, but only after every PR
+test had completed; the completion dialog below was captured after all groups
+finished.
+
+![Speedometer 3.23 CMP completion](perf/wombat33_cpu_cmpdecode_seed28_speedometer323_complete.png)
+
+![Speedometer 3.23 CMP PR](perf/wombat33_cpu_cmpdecode_seed28_speedometer323_pr.png)
+
+The exact build is preserved at
+`/home/alans/builds/wombat33_cpu_cmpdecode_seed28_20260904`. The RBF is
+`Wombat33_CPU_cmpdecode_seed28_20260904.rbf`, MD5
+`40ba7971e90a2af461276bee0f2159ae`, SHA-256
+`44fba87ab5864a42cd4fe0ad6022c01e8f2905272fd03a9da9e4a5d673207f3e`.
+Mac OS reached its safe-to-switch-off screen, MiSTer returned to `MENU`, and
+the disposable disk was restored to MD5
+`0c4f774b4a2eccd5656e92f16119875f`. The untouched golden gzip remains at MD5
+`671894be51b1cd1e0c0c8fb4ec39173e`.

@@ -27,17 +27,19 @@ SCSI disk from OSD slot `S0`; `BUILD.md` covers seeding both.
 The memory path now measures **52.4 MB/s** for sequential integrated reads and
 **304 ns** for a 16-byte fill, putting bandwidth inside the real Quadra 800's
 50--65 MB/s range. CPU-side work has since raised the Speedometer 3.23 CPU PR
-score into the **4.73** range, with the complete AP68040 suite, the Wombat
+score to **4.765**, with the complete AP68040 suite, the Wombat
 Verilator model, the first 100 SingleStepTests rows, Quartus timing, and a full
 hardware PR run used as the acceptance gate.
 
-The current accepted checkpoint is parent commit `cec2f3f` with AP68040
-submodule commit `8231eec`. Moving the two-read-port FPU register bank into
+The current accepted RTL checkpoint is parent commit `b0e6174` with AP68040
+submodule commit `d543f2d`. Moving the two-read-port FPU register bank into
 mirrored MLABs, then replacing the DAFB palette's unintended 6,144-register
 read mirror with explicit M10K views, and finally consolidating DAFB's 17
-timing words in one MLAB, cut the timing-clean fit from 40,738 to 36,592 ALMs
-and from 4,182 to 4,080 of 4,191 LABs. That leaves 111 LABs free for CPU fast
-paths and later pipelining, with no measurable speed change. See
+timing words in one MLAB, created the room needed for CPU work. Decode-time
+operand selection for `CMP.L Dn,Dn` then cut the timing-clean fit further,
+from 40,738 to 36,446 ALMs and from 4,182 to 4,063 of 4,191 LABs. That leaves
+128 LABs free for CPU fast paths and later pipelining. The CMP change also
+raised the controlled hardware CPU score from 4.726 to 4.765. See
 [`docs/PERFORMANCE_MEASUREMENTS.md`](docs/PERFORMANCE_MEASUREMENTS.md) for
 measurements and [`CPU_PERFORMANCE_TASKS.md`](CPU_PERFORMANCE_TASKS.md) for the
 live, power-loss-safe work queue and exact recovery instructions.

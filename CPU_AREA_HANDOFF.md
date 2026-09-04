@@ -7,14 +7,15 @@ complete; do not repeat either completed DAFB hardware run.
 
 - Branch: `cpu-sdram-handoff-seed15`
 - Fork remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Accepted parent RTL commit: `cec2f3f` (`Infer DAFB timing registers in MLAB`)
-- AP68040 submodule: clean at `8231eec` on `wombat-retained-line-fill`
+- Accepted parent RTL commit: `b0e6174` (`Preselect CMP.L register operands in decode`)
+- AP68040 submodule: clean at `d543f2d` on `wombat-retained-line-fill`
 - MiSTer `192.168.1.75`: Mac OS was shut down through MacAtrium and the menu
   core was loaded. It is safe to deploy another RBF.
-- Disposable disk and untouched pristine reference both currently match MD5
+- Disposable disk currently matches MD5
   `0c4f774b4a2eccd5656e92f16119875f`.
 - Golden restore source:
   `/media/fat/games/Wombat33/backup/MacAtrium-7.5.5-fullcolor_speedtest_golden_20260902.hda.gz`
+- Untouched golden gzip MD5: `671894be51b1cd1e0c0c8fb4ec39173e`
 
 ## Newly accepted DAFB palette reclaim
 
@@ -91,7 +92,7 @@ groups read 31.565/2.453/1.613. The guest reached the safe shutdown screen,
 the menu core was loaded, and both disk copies matched the golden MD5 after
 restore.
 
-The area milestone is now complete: the seed-28 fit leaves 111 LABs free. Do
+The area milestone is now complete: the timing-MLAB seed-28 fit leaves 111 LABs free. Do
 not force the eight-entry ADB keyboard FIFO into two Memory LABs without first
 proving a real fitted-LAB win; its two asynchronous reads make it a weak
 candidate. `SUB.L Dn,Dn` decode preselection passed simulation and saved 715
@@ -103,11 +104,39 @@ saved only 746 cycles (0.0021%) in the first 100 SingleStepTests rows, with all
 1,696 field groups matching. It was rejected before fitting. `OR.L Dn,Dn` then
 passed the complete AP suite but was absent from the focused loop and saved
 only 39 corpus cycles (0.00011%); it too was reverted before fitting. EOR.L
-produced the same 39-cycle result and was also reverted before fit. The next
-action is the final cheap family check, `CMP.L Dn,Dn`, at the same
-dynamic-benefit gate. Unless it has substantially more coverage, move to a
-higher-occupancy front-end target rather than continuing opcode-by-opcode.
-Do not start broad pipelining yet.
+produced the same 39-cycle result and was also reverted before fit.
+
+## Newly accepted CMP decode fast path
+
+AP68040 `d543f2d` and parent `b0e6174` preselect both register-file operands
+for `CMP.L Dn,Dn` and skip only `S_PIPE_START`. Unlike the rejected opcode
+families, CMP has useful coverage: the first 100 SingleStepTests rows fall from
+35,196,127 to 35,168,444 cycles, saving 27,683 cycles (0.0787%), with all
+1,696 architectural field groups matching. The complete AP suite,
+full-machine Verilator build, and focused loop also pass; the focused loop is
+unchanged at 212,238 cycles because it contains no eligible CMP.
+
+Seed 28 fits in 36,446 ALMs and 4,063/4,191 LABs, 146 ALMs and 17 LABs below
+the timing-MLAB control. It leaves 128 LABs free. Setup is +0.133 ns
+overall/SDRAM and +1.192 ns CPU; hold is +0.242 ns overall and +0.245 ns CPU,
+with zero TNS. The exact tree is
+`/home/alans/builds/wombat33_cpu_cmpdecode_seed28_20260904` and the deployed
+RBF is `/media/fat/_Unstable/Wombat33_CPU_cmpdecode_seed28_20260904.rbf`, MD5
+`40ba7971e90a2af461276bee0f2159ae`, SHA-256
+`44fba87ab5864a42cd4fe0ad6022c01e8f2905272fd03a9da9e4a5d673207f3e`.
+
+The full Speedometer 3.23 run completed. Controlled PR results are CPU 4.765,
+Graphics 5.394, Disk 0.676, Math 31.480, Old 6.808, and New 2.280. CPU is
+0.83% above the unperturbed 4.726 control; the small non-CPU movements are run
+variance. FPU averages 2.432 and Color 1.614. Mac OS reached its safe shutdown
+screen, MiSTer returned to `MENU`, and the disposable disk was restored to
+MD5 `0c4f774b4a2eccd5656e92f16119875f`. The golden gzip remains untouched at
+MD5 `671894be51b1cd1e0c0c8fb4ec39173e`.
+
+Return to speed work now. Use the collected full-machine profile/opcode data
+to choose a higher-occupancy decode or front-end path; do not continue copying
+the fast path across unranked instruction families. Keep broad pipelining as
+the subsequent step after one more evidence-driven narrow target.
 
 ## Working-tree ownership
 
@@ -123,8 +152,7 @@ rewritten, cleaned, or deleted:
 - generated `verilator/obj_dir_tb_*` directories
 
 Only `README.md`, `CPU_PERFORMANCE_TASKS.md`,
-`docs/PERFORMANCE_MEASUREMENTS.md`, this handoff, and the named timing-MLAB
-performance screenshots belong in the documentation checkpoint following
-`cec2f3f`.
+`docs/PERFORMANCE_MEASUREMENTS.md`, this handoff, and the named CMP performance
+screenshots belong in the documentation checkpoint following `b0e6174`.
 
 There is no `CLAUDE.md` in this repository or its git history at this stop.

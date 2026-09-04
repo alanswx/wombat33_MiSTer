@@ -6,13 +6,14 @@ screenshots remain in `docs/PERFORMANCE_MEASUREMENTS.md`.
 
 ## Immediate answer: should area be reduced?
 
-**Completed before a broad pipeline change.** Reducing ALM/LAB use does not
-directly increase emulated CPU throughput. The FPU and two DAFB reclaim passes
-lower the timing-clean design from 40,738 to 36,592 ALMs and from 4,182 to
-4,080 LABs. That leaves 111 LABs free instead of nine, makes fits less
-seed-sensitive, and creates useful room for predecode, bypass controls, or
-another pipeline register. The endpoints use seeds 27 and 28 respectively, so
-same-seed deltas are recorded for each pass below.
+**Completed; return to speed work.** Reducing ALM/LAB use does not directly
+increase emulated CPU throughput. The FPU and two DAFB reclaim passes lowered
+the timing-clean design from 40,738 to 36,592 ALMs and from 4,182 to 4,080
+LABs. The first accepted post-reclaim CPU fast path lowers it again to 36,446
+ALMs and 4,063 LABs. That leaves 128 LABs free instead of nine and creates
+useful room for predecode, bypass controls, or another pipeline register. The
+endpoints use seeds 27 and 28 respectively, so same-seed deltas are recorded
+for each pass below.
 
 LAB availability remains the more urgent number. The MLAB-backed FPU register
 bank recovered 1,380 ALMs but only six LABs. Explicit CPU/scanout copies of the
@@ -23,7 +24,8 @@ checkpoint, without disabling the MMU, FPU, caches, video, audio, or other
 machine features. Combining the 17 DAFB timing words in one MLAB then saves 67
 ALMs and 16 LABs against the same-seed palette control. The milestone is met:
 the accepted seed-28 fit is 4,146 ALMs and 102 LABs below the old seed-27 ADD
-checkpoint, with 111 LABs free.
+checkpoint. The accepted CMP fit extends that cumulative result to 4,292 ALMs
+and 119 LABs, with 128 LABs free.
 
 The pre-reclaim seed-27 hierarchy report says where to work:
 
@@ -47,22 +49,22 @@ that routing/packing structure matters alongside raw Boolean count.
 
 - Parent repository branch: `cpu-sdram-handoff-seed15`
 - Parent remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Parent commit: `cec2f3f` (`Infer DAFB timing registers in MLAB`)
+- Parent RTL commit: `b0e6174` (`Preselect CMP.L register operands in decode`)
 - AP68040 branch: `wombat-retained-line-fill`
 - AP68040 remote: `https://github.com/alanswx/AP68040.git`
-- AP68040 commit: `8231eec` (`Infer FPU register bank in MLABs`)
+- AP68040 commit: `d543f2d` (`Preselect CMP.L register operands in decode`)
 - Quartus seed: 28
-- Exact preserved build: `/home/alans/builds/wombat33_dafb_timing_mlab_seed28_20260903`
-- MiSTer RBF: `/media/fat/_Unstable/Wombat33_DAFB_timing_mlab_seed28_20260903.rbf`
-- MD5: `f6db788d637aaf2baf275ef82e015c2a`
-- SHA-256: `ae937e62a675a248124e2b065db984e29d16ffc916f840d8a0f6abe2c552fd01`
-- Quartus: 36,592/41,910 ALMs; 4,080/4,191 LABs; zero setup/hold TNS
-- Setup slack: +0.291 ns overall, +0.862 ns CPU, +0.291 ns SDRAM
-- Hold slack: +0.243 ns overall, +0.254 ns CPU, +0.433 ns SDRAM
-- Stable performance reference remains the unperturbed palette run: CPU 4.726,
-  Graphics 5.430, Disk 0.683, Math 31.538, Old PR 6.810, New PR 2.295
+- Exact preserved build: `/home/alans/builds/wombat33_cpu_cmpdecode_seed28_20260904`
+- MiSTer RBF: `/media/fat/_Unstable/Wombat33_CPU_cmpdecode_seed28_20260904.rbf`
+- MD5: `40ba7971e90a2af461276bee0f2159ae`
+- SHA-256: `44fba87ab5864a42cd4fe0ad6022c01e8f2905272fd03a9da9e4a5d673207f3e`
+- Quartus: 36,446/41,910 ALMs; 4,063/4,191 LABs; zero setup/hold TNS
+- Setup slack: +0.133 ns overall/SDRAM, +1.192 ns CPU
+- Hold slack: +0.242 ns overall, +0.245 ns CPU; all paths pass
+- Controlled hardware PR: CPU 4.765, Graphics 5.394, Disk 0.676, Math
+  31.480, Old PR 6.808, New PR 2.280
 - Focused `bench_loop`: 212,238 cycles
-- First 100 SingleStepTests rows: 35,196,127 cycles, 1,696 field groups,
+- First 100 SingleStepTests rows: 35,168,444 cycles, 1,696 field groups,
   zero real differences
 
 The palette checkpoint remains the closest known-good fallback at parent
@@ -134,6 +136,36 @@ functional soak rather than a controlled speed comparison; CPU remained 4.726
 and the later untouched Math/FPU/Color results remained at 31.565/2.453/1.613.
 Mac OS then reached the safe shutdown screen, the MiSTer returned to its menu,
 and both disk copies matched `0c4f774b4a2eccd5656e92f16119875f` after restore.
+
+## Completed 2026-09-04: narrow `CMP.L Dn,Dn` preselection
+
+AP68040 commit `d543f2d` selects both asynchronous register-file ports while
+decoding the longword data-register form of CMP and enters `S_PIPE_REGS`,
+bypassing only `S_PIPE_START`. All other CMP sizes and addressing modes retain
+the original path. Parent RTL commit `b0e6174` records the submodule pointer.
+
+- Complete AP68040 suite and full-machine Verilator build: pass
+- Focused `bench_loop`: unchanged at 212,238 cycles; that loop contains no
+  eligible CMP instructions
+- First 100 SingleStepTests rows: 35,168,444 cycles, saving 27,683 cycles
+  (0.0787%), with 1,696 matching field groups and zero real differences
+- Same-seed fit versus the timing-MLAB checkpoint: 36,446 ALMs (-146),
+  4,063 LABs (-17), 23,938 registers (-6), and 1,664 MLAB bits (unchanged)
+- Timing: +0.133 ns setup overall/SDRAM and +1.192 ns CPU; +0.242 ns hold
+  overall and +0.245 ns CPU; zero setup/hold TNS
+- Hardware `Run ALL Tests`: pass; controlled PR scores are CPU 4.765,
+  Graphics 5.394, Disk 0.676, Math 31.480, Old 6.808, and New 2.280
+- CPU improves 0.83% from the unperturbed 4.726 control. The small changes in
+  non-CPU categories are treated as run variance because the RTL change is
+  confined to CPU register CMP decoding.
+- Mac OS reached the safe shutdown screen, the MiSTer returned to `MENU`, and
+  the disposable disk was restored to MD5
+  `0c4f774b4a2eccd5656e92f16119875f`; the untouched golden gzip remains
+  `671894be51b1cd1e0c0c8fb4ec39173e`.
+
+This is the new accepted checkpoint. Area trimming is no longer the active
+goal. Profile and improve higher-occupancy CPU paths next; do not spend more
+builds on unranked opcode-family copies.
 
 ## Completed 2026-09-03: first ALM/LAB reclaim pass
 
@@ -374,18 +406,19 @@ seed-27 tree and compare both synthesis hierarchy and fitted LAB/ALM totals.
   timing slack.
 - [x] Milestone gate: recover at least 1,000 ALMs and 100 LABs with all tests
   green before undertaking broader front-end/pipeline work. The accepted
-  seed-28 checkpoint is 4,146 ALMs and 102 LABs below the old seed-27 ADD fit,
-  leaving 111 LABs free. Same-seed deltas remain the authoritative measure for
-  each individual RTL change.
+  CMP seed-28 checkpoint is 4,292 ALMs and 119 LABs below the old seed-27 ADD
+  fit, leaving 128 LABs free. Same-seed deltas remain the authoritative measure
+  for each individual RTL change.
 
 ## Priority 2: extend only the proven narrow fast-path pattern
 
 - [ ] Use opcode histograms from the focused bench and a boot workload to rank
   register-register forms. Do not optimize ISA families merely because their
   decode looks similar.
-- [ ] The ADD candidate passed hardware. Continue extending decode-time
-  dual-register selection with CMP, then
-  address-register forms. Re-run every gate after each family. SUB.L was
+- [x] Extend the proven ADD decode-time dual-register selection to CMP. The
+  `CMP.L Dn,Dn` form is accepted at `d543f2d`: it saves 27,683 first-100 corpus
+  cycles, improves hardware CPU PR by 0.83%, saves 146 ALMs/17 LABs at seed
+  28, and closes timing. Re-run every gate after each family. SUB.L was
   tested and rejected: it saved only 715 cycles (0.002%) in the first 100
   SingleStepTests rows, was absent from the focused loop, and its same-seed fit
   missed 99 MHz SDRAM setup by 0.296 ns with -0.324 ns TNS. AND.L was rejected
@@ -393,6 +426,10 @@ seed-27 tree and compare both synthesis hierarchy and fitted LAB/ALM totals.
   cycles (0.0021%) in the same corpus. OR.L was likewise absent from the loop
   and saved just 39 corpus cycles (0.00011%), so it was rejected before fit.
   EOR.L produced the same 39-cycle result and was likewise rejected.
+- [ ] Use the full-machine profile and opcode histogram to rank address-register
+  forms and other simple decode bypasses. Require meaningful dynamic coverage
+  before editing RTL; the rejected SUB/AND/OR/EOR trials show that visual
+  similarity to ADD is not enough.
 - [ ] Evaluate byte/word register forms separately. Their merge and condition-
   code behavior differs from longword operations and can erase the simplicity
   of the ADD.L path.
