@@ -1098,3 +1098,68 @@ Mac OS reached its safe-to-switch-off screen, MiSTer returned to `MENU`, and
 the disposable disk was restored to MD5
 `0c4f774b4a2eccd5656e92f16119875f`. The untouched golden gzip remains at MD5
 `671894be51b1cd1e0c0c8fb4ec39173e`.
+
+## 25. Rejected AP040 register-MOVE decode preselection
+
+A full-machine profile after the accepted CMP checkpoint covered 125 million
+CPU clocks and 11,126,598 dispatches, or 11.23 clocks per dispatch. The largest
+state occupancies were `S_MRD` 35.2%, fetch 13.2%, decode 8.9%, `S_IMMF` 7.3%,
+and `S_MWR` 5.5%. In a bounded 71,209-instruction trace, `MOVE.L` accounted for
+33,874 instructions. The exact `MOVE.L (A1),(A2)+` copy form alone accounted
+for 29,254, while `MOVE.L Dn,Dn` accounted for only 1,494 (2.1% of the trace).
+
+The low-risk register form was nevertheless tested as a calibration point.
+Decode selected both register-file ports for only `MOVE.L Dn,Dn` and entered
+`S_PIPE_REGS`, skipping `S_PIPE_START`. The complete AP68040 suite and
+full-machine Verilator build passed. The focused loop stayed at 212,238 cycles
+because it contains no eligible instruction. The first 100 SingleStepTests rows
+fell from the CMP checkpoint's 35,168,444 cycles to 35,099,648, saving 68,796
+cycles (0.1956%), with all 1,696 architectural field groups matching and zero
+real differences.
+
+Seeds 28 and 29 failed unrelated SDRAM hold/setup paths. Seed 30 closed all
+domains with the following result. Because the accepted and candidate fits use
+different seeds, the physical deltas below describe the deployable images, not
+a controlled same-seed netlist comparison. At the same seed 28, the candidate
+actually used 44 fewer ALMs and 21 fewer LABs, but failed SDRAM hold by 0.449 ns
+with -0.887 ns TNS.
+
+| metric | CMP checkpoint, seed 28 | register MOVE, seed 30 | change |
+|---|---:|---:|---:|
+| fitted ALMs | 36,446 | 36,453 | +7 |
+| LABs used | 4,063 | 4,070 | +7 |
+| LABs free | 128 | 121 | -7 |
+| registers | 23,938 | 23,974 | +36 |
+| MLAB bits | 1,664 | 1,664 | 0 |
+| setup overall/SDRAM | +0.133 ns | +0.183 ns | pass |
+| setup CPU | +1.192 ns | +0.954 ns | pass |
+| hold overall | +0.242 ns | +0.242 ns | pass |
+| hold CPU/SDRAM | +0.245 ns / pass | +0.266 ns / +0.450 ns | pass |
+
+Mac OS 7.5.5 booted normally and completed Speedometer 3.23 `Run ALL Tests`
+without screenshots or remote input during the timed interval:
+
+| Speedometer 3.23 PR Test | CMP checkpoint | register MOVE | change |
+|---|---:|---:|---:|
+| CPU | **4.765** | 4.752 | -0.27% |
+| Graphics | 5.394 | 5.190 | -3.78% |
+| Disk | 0.676 | 0.681 | +0.74% |
+| Math | 31.480 | 31.862 | +1.21% |
+| Old PR | 6.808 | 6.780 | -0.41% |
+| New PR | 2.280 | 2.280 | 0.00% |
+
+FPU averaged 2.487 and Color averaged 1.611. The category movement is broader
+than this CPU-only RTL change can explain and is treated as run variance. Most
+importantly, CPU PR did not improve. The small synthetic saving therefore does
+not justify retaining a timing-clean image with seven fewer free LABs, so the
+RTL was reverted and the CMP checkpoint remains accepted.
+
+The exact rejected build is preserved at
+`/home/alans/builds/wombat33_cpu_movedecode_seed30_20260904`. Its RBF is
+`Wombat33_CPU_movedecode_seed30_20260904.rbf`, MD5
+`811c543776171cb3139096ca61614257`, SHA-256
+`eb335a042534e741751a438bff29b2924f69ae22a54d26e6e6c8755a3c5d82af`.
+Mac OS reached the safe-to-switch-off screen and the disposable disk was
+restored to MD5 `0c4f774b4a2eccd5656e92f16119875f`. No further Wombat core was
+loaded. The user reserved the MiSTer for another project, and future Wombat
+deployments now require immediate confirmation.

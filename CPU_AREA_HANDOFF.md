@@ -138,6 +138,27 @@ to choose a higher-occupancy decode or front-end path; do not continue copying
 the fast path across unranked instruction families. Keep broad pipelining as
 the subsequent step after one more evidence-driven narrow target.
 
+The next profiled experiment tested `MOVE.L Dn,Dn` decode preselection. It
+passed the complete AP suite, full-machine build, and first-100 differential
+corpus, saving 68,796 cycles (0.1956%) with no mismatches. A seed-30 fit closed
+timing at 36,453 ALMs and 4,070 LABs (121 free), but the complete hardware run
+scored CPU 4.752 versus the accepted CMP checkpoint's 4.765. Because this is
+not a measurable hardware improvement and the timing-clean fit leaves seven
+fewer free LABs, the RTL was reverted. The exact rejected fit remains at
+`/home/alans/builds/wombat33_cpu_movedecode_seed30_20260904`; see measurement
+section 25 for hashes and all scores.
+
+The same trace explains the better next target: `MOVE.L (A1),(A2)+` accounts
+for 29,254 of 71,209 bounded traced instructions, versus only 1,494
+`MOVE.L Dn,Dn` instances. Investigate overlapping the distinct destination-An
+read/postincrement with the outstanding source read, while keeping store issue
+registered and preserving fault restart behavior.
+
+Operational constraint added 2026-09-04: the user is using the MiSTer for
+another FPGA project. **Ask immediately before every future deployment or
+`load_core` operation.** The disposable Wombat test disk was restored to MD5
+`0c4f774b4a2eccd5656e92f16119875f`; no further MiSTer access is required.
+
 ## Working-tree ownership
 
 These pre-existing changes are user-owned and were deliberately not staged,

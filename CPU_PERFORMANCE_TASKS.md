@@ -426,10 +426,26 @@ seed-27 tree and compare both synthesis hierarchy and fitted LAB/ALM totals.
   cycles (0.0021%) in the same corpus. OR.L was likewise absent from the loop
   and saved just 39 corpus cycles (0.00011%), so it was rejected before fit.
   EOR.L produced the same 39-cycle result and was likewise rejected.
-- [ ] Use the full-machine profile and opcode histogram to rank address-register
-  forms and other simple decode bypasses. Require meaningful dynamic coverage
-  before editing RTL; the rejected SUB/AND/OR/EOR trials show that visual
-  similarity to ADD is not enough.
+- [x] Use the full-machine profile and opcode histogram before selecting another
+  decode bypass. Over 125 million profiled clocks, the machine retired
+  11,126,598 instructions at 11.23 clocks per dispatch. A bounded 71,209-
+  instruction trace contains 29,254 `MOVE.L (A1),(A2)+` operations, but only
+  1,494 `MOVE.L Dn,Dn` operations. A narrow longword register-MOVE bypass was
+  still evaluated because it was low risk: all tests passed and it saved 68,796
+  first-100 corpus cycles (0.1956%), but its timing-clean seed-30 fit left seven
+  fewer free LABs than the accepted fit and hardware CPU PR moved from 4.765 to
+  4.752. With no measurable hardware gain, the RTL was reverted. See
+  measurement section 25.
+- [ ] Optimize the profiled hot `MOVE.L (An),(Am)+` copy form next. Investigate
+  preselecting the destination address register while the source read is in
+  flight, then latching the destination address/postincrement at registered
+  read completion. Start with distinct source/destination address registers,
+  preserve restartable address-register updates, and retain a registered memory
+  write request; prior direct-acknowledgement experiments froze in hardware.
+- [ ] Rank remaining address-register forms and simple decode bypasses from the
+  full-machine profile. Require meaningful dynamic coverage before editing RTL;
+  the rejected SUB/AND/OR/EOR and register-MOVE trials show that visual
+  simplicity is not enough.
 - [ ] Evaluate byte/word register forms separately. Their merge and condition-
   code behavior differs from longword operations and can erase the simplicity
   of the ADD.L path.
@@ -540,6 +556,10 @@ return the MiSTer to its menu, and restore:
 
 Never load a core while the guest is booting or running. It hard-resets the
 FPGA while HFS is mounted writable.
+
+As of 2026-09-04 the MiSTer is also being used for another FPGA project. Ask
+the user immediately before every future core deployment or `load_core`
+operation, even if a candidate has already passed simulation and Quartus.
 
 ## Working-tree cautions
 
