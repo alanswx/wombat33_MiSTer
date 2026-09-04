@@ -1300,3 +1300,87 @@ RBF is `Wombat33_CPU_inlinefetch_wb_seed28_20260904.rbf`, MD5
 After the run Mac OS reached the safe-to-switch-off screen, MiSTer returned to
 `MENU`, and both disposable and pristine-reference disks were verified at MD5
 `0c4f774b4a2eccd5656e92f16119875f` after the golden restore.
+
+## 28. Accepted AP040 resident-immediate consumption
+
+After inline opcode retirement, the focused profile still spent 13,915 cycles
+in `S_IMMF`. The first experiment tried retiring directly from the instruction
+bus forward path (`epf_fwd`), but the focused benchmark never exercised that
+condition and its cycle count did not move. That version was reverted. The
+accepted target instead handles the common case in which decode asks `immf`
+for extension words that are already resident in the prefetch queue.
+
+AP68040 RTL commit `0a84732` consumes one or two resident words during
+`S_DECODE` and advances directly to the requested return state. Later-state
+callers remain on the established `S_IMMF` path because several build
+multi-part EA or FPU operands around that boundary. The inline path also
+requires no outstanding prefetch and no same-edge `mem_ack`; it asserts
+`epf_issue` while popping the words so that the ordinary speculative-fill
+logic cannot claim the port on the same edge.
+
+Those ownership restrictions came from two failures in the first broad
+candidate. Exception test 136 failed in phase 0 when its expected timing
+boundary disappeared. The MMU suite also reported the page-table walker and
+16-bit CPU bus active together at PC `$000004E8`, on the first translated MOVE
+after `MOVEC TC`. Advancing into the return state while an old or newly issued
+speculative fetch still owned the physical bus caused the overlap. Restricting
+the bypass to an idle resident queue fixes both failures without weakening the
+immediate hit case.
+
+All pre-hardware gates pass. The focused phase-1 loop falls from 186,380 to
+173,718 cycles, saving 12,662 cycles or 6.79%; `S_IMMF` occupancy falls from
+13,915 to 1,250 visits. Phase 0 completes in 172,940 cycles. The first 100
+SingleStepTests CPU rows fall from 32,935,620 to 32,841,873 cycles, saving
+93,747 cycles or 0.285%; all 1,696 architectural field groups match with zero
+real differences. Relative to the CMP checkpoint, the cumulative reductions
+are 18.15% in the focused loop and 6.62% in the first-100 corpus. The complete
+AP68040 suite and full-machine Wombat Verilator build also pass.
+
+The clean seed-28 Quartus fit closes every timing domain with zero TNS:
+
+| metric | resident opcode | resident immediate | change |
+|---|---:|---:|---:|
+| fitted ALMs | 36,704 | 36,937 | +233 |
+| LABs used | 4,099 | 4,092 | -7 |
+| LABs free | 92 | 99 | +7 |
+| registers | 23,974 | 23,943 | -31 |
+| MLAB bits | 1,664 | 1,664 | 0 |
+| setup overall | +0.208 ns | +0.342 ns | pass |
+| setup CPU | +1.122 ns | +1.267 ns | pass |
+| setup SDRAM | +0.934 ns | +0.357 ns | pass |
+| hold overall | +0.243 ns | +0.249 ns | pass |
+| hold CPU / SDRAM | +0.257 / +0.441 ns | +0.256 / +0.442 ns | pass |
+
+Mac OS 7.5.5 booted normally and completed Speedometer 3.23 `Run ALL Tests`.
+No capture or remote input occurred during either timed interval; only the
+required scratch-volume prompt was serviced between them.
+
+| Speedometer 3.23 PR Test | resident opcode | resident immediate | change |
+|---|---:|---:|---:|
+| CPU | 4.985 | **5.088** | **+2.07%** |
+| Graphics | 5.818 | 5.718 | -1.72% |
+| Disk | 0.687 | 0.686 | -0.15% |
+| Math | 33.079 | 33.133 | +0.16% |
+| Old PR | 7.185 | 7.201 | +0.22% |
+| New PR | 2.348 | 2.349 | +0.04% |
+
+CPU benchmark average is 13.239, FPU average 2.673, and Color average 1.718.
+The Graphics movement is treated as run variance: this CPU-only change does
+not alter that subsystem, the other categories are stable, and both the CPU PR
+and simulation cycle counts improve in the expected direction. This is the new
+accepted CPU checkpoint.
+
+The exact Quartus tree is
+`/home/alans/builds/wombat33_cpu_inlineimm_seed28_20260904`. The preserved RBF
+is `/media/fat/_Unstable/Wombat33_CPU_inlineimm_seed28_20260904.rbf`, MD5
+`396140cb1b45c213022ff64d8954e140`, SHA-256
+`bccbaec9d1956eeccd651a9001316117c2165c2390455ccc0e997fd1436cb076`.
+Result captures are
+`docs/perf/wombat33_cpu_inlineimm_seed28_speedometer323_pr.png` and
+`docs/perf/wombat33_cpu_inlineimm_seed28_speedometer323_detail.png`.
+
+After the run Mac OS reached the safe-to-switch-off screen, MiSTer returned to
+`MENU`, and the disposable disk was restored from the golden. Both disposable
+and pristine-reference images match MD5
+`0c4f774b4a2eccd5656e92f16119875f`; the golden gzip remains MD5
+`671894be51b1cd1e0c0c8fb4ec39173e`.

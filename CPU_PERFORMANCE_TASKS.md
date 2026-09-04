@@ -11,8 +11,10 @@ use did not directly increase emulated CPU throughput. The FPU and two DAFB
 reclaim passes lowered the timing-clean design from 40,738 to 36,592 ALMs and
 from 4,182 to 4,080 LABs. The CMP checkpoint then reached 36,446 ALMs and 4,063
 LABs, leaving 128 LABs free. The accepted inline-retirement front end consumes
-36 of those LABs but improves Speedometer CPU PR by 4.62%, so the trade is
-worthwhile: the current fit is 36,704 ALMs and 4,099 LABs, with 92 LABs free.
+36 of those LABs and improves Speedometer CPU PR by 4.62%. Resident-immediate
+consumption then adds 233 ALMs but recovers seven LABs relative to that fit and
+improves CPU PR by another 2.07%. The trade remains worthwhile: the current fit
+is 36,937 ALMs and 4,092 LABs, with 99 LABs free.
 
 LAB availability remains the more urgent number. The MLAB-backed FPU register
 bank recovered 1,380 ALMs but only six LABs. Explicit CPU/scanout copies of the
@@ -48,24 +50,25 @@ that routing/packing structure matters alongside raw Boolean count.
 
 - Parent repository branch: `cpu-sdram-handoff-seed15`
 - Parent remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Parent RTL commit: `9d0cad0` (`Advance AP68040 to inline opcode retirement`)
-- AP68040 branch: `wombat-inline-fetch-retire`
+- Parent RTL commit: `9a81035` (`Advance AP68040 to resident immediate fast path`)
+- AP68040 branch: `wombat-inline-imm-resident`
 - AP68040 remote: `https://github.com/alanswx/AP68040.git`
-- AP68040 commit: `8ab1057` (`Retire queued opcodes directly into decode`)
+- AP68040 commit: `c897d77` (`Document resident immediate fast path`; RTL is
+  `0a84732`)
 - Quartus seed: 28
 - Exact preserved build:
-  `/home/alans/builds/wombat33_cpu_inlinefetch_wb_seed28_20260904`
+  `/home/alans/builds/wombat33_cpu_inlineimm_seed28_20260904`
 - MiSTer RBF:
-  `/media/fat/_Unstable/Wombat33_CPU_inlinefetch_wb_seed28_20260904.rbf`
-- MD5: `73568cd19f467334e149a77b3b6c9ecd`
-- SHA-256: `d82388d8b4f71dc42c8cb188befc3998f3cadda21e1e37ef3e375d5dfe020f13`
-- Quartus: 36,704/41,910 ALMs; 4,099/4,191 LABs; zero setup/hold TNS
-- Setup slack: +0.208 ns overall, +0.934 ns SDRAM, +1.122 ns CPU
-- Hold slack: +0.243 ns overall, +0.257 ns CPU, +0.441 ns SDRAM
-- Controlled hardware PR: CPU 4.985, Graphics 5.818, Disk 0.687, Math
-  33.079, Old PR 7.185, New PR 2.348
-- Focused `bench_loop`: 186,380 cycles, 12.18% below the CMP checkpoint
-- First 100 SingleStepTests rows: 32,935,620 cycles, 1,696 field groups,
+  `/media/fat/_Unstable/Wombat33_CPU_inlineimm_seed28_20260904.rbf`
+- MD5: `396140cb1b45c213022ff64d8954e140`
+- SHA-256: `bccbaec9d1956eeccd651a9001316117c2165c2390455ccc0e997fd1436cb076`
+- Quartus: 36,937/41,910 ALMs; 4,092/4,191 LABs; zero setup/hold TNS
+- Setup slack: +0.342 ns overall, +0.357 ns SDRAM, +1.267 ns CPU
+- Hold slack: +0.249 ns overall, +0.256 ns CPU, +0.442 ns SDRAM
+- Controlled hardware PR: CPU 5.088, Graphics 5.718, Disk 0.686, Math
+  33.133, Old PR 7.201, New PR 2.349
+- Focused `bench_loop`: 173,718 cycles, 18.15% below the CMP checkpoint
+- First 100 SingleStepTests rows: 32,841,873 cycles, 1,696 field groups,
   zero real differences
 
 The palette checkpoint remains the closest known-good fallback at parent
@@ -457,10 +460,13 @@ seed-27 tree and compare both synthesis hierarchy and fitted LAB/ALM totals.
   operations only with a staged operand/result path. Directly placing a full ALU
   and flag calculation on `d_ack` risks both a new critical path and imprecise
   fault/trace behavior.
-- [ ] Investigate immediate operands already resident in the instruction queue.
-  `S_IMMF` accounts for about 13.9k visits in the focused profile. A narrow
-  immediate fast path must preserve extension-word PC accounting and exception
-  restart state.
+- [x] Consume immediate operands already resident in the instruction queue.
+  The accepted decode-only path removes 12,662 focused-loop cycles (6.79%) and
+  93,747 first-100 cycles (0.285%). It preserves extension-word PC accounting,
+  refuses an outstanding fill or same-edge `mem_ack`, and suppresses a new
+  speculative fill while popping the queue. The initial broader version failed
+  exception timing and allowed the MMU walker and CPU bus to overlap; these
+  conservative ownership guards fix both failures. See measurement section 28.
 - [ ] Revisit DBcc only with a clearly isolated change. Its decrement state is
   already collapsed and prefetched; approximately 13.1k remaining visits are
   branch/retirement work, not the old redundant state.
@@ -485,6 +491,17 @@ retiring directly from `fetch_next` into `S_DECODE` removes the standalone
   `MOVE USP,Am` each require forwarding from the registered write strobe.
   Directed tests fail without their respective bypass and pass in all three
   memory phases with it.
+- [x] Remove the resident-immediate `S_IMMF` bubble from decode. Both one-word
+  and two-word resident operands can advance directly to the requested return
+  state. Later-state callers retain the old boundary, and any outstanding or
+  completing speculative fetch keeps the old path. Hardware CPU PR improves
+  from 4.985 to 5.088 (+2.07%).
+- [ ] Target the remaining taken-branch/refill boundary only after adding a
+  focused branch-buffer test. `S_FETCH` still accounts for about 14.8k visits
+  in the new focused profile, so decoding an already resident redirect target
+  could approach another 7% synthetic win. Preserve IRQ/trace priority, kill
+  stale speculative fills, and keep DBcc writeback registered; the earlier
+  broad DBcc collapse froze at the Happy Mac.
 - [ ] Audit every remaining direct architectural view used in `S_DECODE`
   before removing another boundary state. Register RAW/WAW and CCR operands
   consumed in later states already see committed data; prove this again for

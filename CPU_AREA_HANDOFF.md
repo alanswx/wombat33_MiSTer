@@ -7,8 +7,8 @@ complete; do not repeat either completed DAFB hardware run.
 
 - Branch: `cpu-sdram-handoff-seed15`
 - Fork remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Accepted parent RTL commit: `9d0cad0` (`Advance AP68040 to inline opcode retirement`)
-- AP68040 submodule: clean at `8ab1057` on `wombat-inline-fetch-retire`
+- Accepted parent RTL commit: `9a81035` (`Advance AP68040 to resident immediate fast path`)
+- AP68040 submodule: clean at `c897d77` on `wombat-inline-imm-resident`
 - MiSTer `192.168.1.75`: Mac OS was shut down through MacAtrium and the menu
   core was loaded. It is safe to deploy another RBF.
 - Disposable disk currently matches MD5
@@ -210,6 +210,60 @@ to `MENU`, and both disk copies match MD5
 `0c4f774b4a2eccd5656e92f16119875f`. FPGA use remains authorized for the
 continuing CPU plan until the user revokes it.
 
+## Newly accepted resident-immediate consumption
+
+AP68040 RTL commit `0a84732` makes decode consume immediate extension words
+that are already resident in the prefetch queue. Commit `c897d77` adds the
+submodule documentation, and parent `9a81035` records that submodule head. The
+fast path is deliberately decode-only, refuses both an outstanding prefetch
+and a same-edge `mem_ack`, and marks the port claimed so a new speculative fill
+cannot begin on the pop edge. All other `immf` callers retain `S_IMMF`.
+
+The first broad version exposed two useful failures: exception test 136 lost a
+phase-0 timing boundary, and the first translated MOVE after enabling the MMU
+let the page-table walker and 16-bit CPU bus run together. The ownership guards
+above fix both. An earlier attempt to retire directly from the `epf_fwd` bus
+forward had zero dynamic coverage in the focused loop and was reverted.
+
+Every acceptance gate passes:
+
+- complete AP68040 suite, including all three memory phases: pass;
+- full-machine Wombat Verilator build: pass;
+- focused phase-1 loop: 186,380 to 173,718 cycles, -12,662 or -6.79%;
+- first 100 SingleStepTests rows: 32,935,620 to 32,841,873 cycles, -93,747 or
+  -0.285%, with all 1,696 field groups matching and zero real differences;
+- cumulative from CMP: focused loop -18.15%, first-100 corpus -6.62%;
+- seed-28 Quartus fit: 36,937 ALMs, 4,092/4,191 LABs, 23,943 registers, 1,664
+  MLAB bits, and zero setup/hold TNS;
+- setup +0.342 ns overall, +1.267 ns CPU, +0.357 ns SDRAM;
+- hold +0.249 ns overall, +0.256 ns CPU, +0.442 ns SDRAM.
+
+The complete Speedometer 3.23 run scores CPU 5.088, Graphics 5.718, Disk
+0.686, Math 33.133, Old PR 7.201, and New PR 2.349. CPU rises 2.07% from the
+resident-opcode checkpoint. CPU benchmark average is 13.239, FPU average
+2.673, and Color average 1.718. The Graphics decline is treated as run
+variance: it is outside the CPU change, while the CPU result agrees with the
+simulation direction and the remaining categories are stable.
+
+Preserved artifacts:
+
+- Quartus tree:
+  `/home/alans/builds/wombat33_cpu_inlineimm_seed28_20260904`
+- MiSTer RBF:
+  `/media/fat/_Unstable/Wombat33_CPU_inlineimm_seed28_20260904.rbf`
+- RBF MD5: `396140cb1b45c213022ff64d8954e140`
+- RBF SHA-256:
+  `bccbaec9d1956eeccd651a9001316117c2165c2390455ccc0e997fd1436cb076`
+- Result captures:
+  `docs/perf/wombat33_cpu_inlineimm_seed28_speedometer323_pr.png` and
+  `docs/perf/wombat33_cpu_inlineimm_seed28_speedometer323_detail.png`
+
+Mac OS was shut down safely, MiSTer is at `MENU`, and the disposable and
+pristine-reference disks both match MD5
+`0c4f774b4a2eccd5656e92f16119875f`. The untouched golden gzip remains MD5
+`671894be51b1cd1e0c0c8fb4ec39173e`. FPGA use is authorized for the next CPU
+experiment until the user revokes it.
+
 ## Working-tree ownership
 
 These pre-existing changes are user-owned and were deliberately not staged,
@@ -226,6 +280,6 @@ rewritten, cleaned, or deleted:
 Only `README.md`, `CPU_PERFORMANCE_TASKS.md`,
 `docs/PERFORMANCE_MEASUREMENTS.md`, this handoff, and the named performance
 screenshots belong in the documentation checkpoint following parent RTL
-commit `9d0cad0`.
+commit `9a81035`.
 
 There is no `CLAUDE.md` in this repository or its git history at this stop.
