@@ -1026,3 +1026,8 @@ instances. It reduced the first 100 SingleStepTests rows from 35,196,127 to
 35,195,381 cycles, saving only 746 cycles (about 0.0021%), with all 1,696 field
 groups matching. Since this is the same negligible dynamic benefit as SUB and
 cannot move application-level performance, it was reverted before Quartus.
+
+`OR.L Dn,Dn` also passed the complete AP68040 suite and left the focused loop
+at 212,238 cycles. The first 100 SingleStepTests rows measured 35,196,088
+cycles, only 39 cycles (about 0.00011%) below the accepted checkpoint, with all
+1,696 field groups matching. It was reverted without a Quartus build.
