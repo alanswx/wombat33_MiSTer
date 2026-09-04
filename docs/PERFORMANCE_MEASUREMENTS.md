@@ -999,3 +999,23 @@ The exact build is preserved at
 Mac OS reached its safe-to-switch-off screen, the MiSTer returned to its menu,
 and both the restored disposable disk and untouched pristine reference matched
 MD5 `0c4f774b4a2eccd5656e92f16119875f`.
+
+## 23. Rejected SUB.L register preselection
+
+The next isolated experiment extended the accepted decode-time register-port
+selection from `ADD.L Dn,Dn` to `SUB.L Dn,Dn`. It passed the complete AP68040
+suite and full-machine Verilator build. The focused `bench_loop` remained
+exactly 212,238 cycles and contained no eligible SUB form. The first 100
+SingleStepTests rows fell from 35,196,127 to 35,195,412 cycles, a saving of only
+715 cycles (about 0.002%), with all 1,696 architectural field groups matching.
+
+The exact rejected fit is preserved at
+`/home/alans/builds/wombat33_cpu_subdecode_seed28_20260904`. At the same seed as
+the accepted timing-MLAB checkpoint it used 36,560 ALMs and 4,083 LABs, versus
+36,592 ALMs and 4,080 LABs: 32 fewer ALMs but three more LABs. More importantly,
+the 99 MHz SDRAM setup path fell from +0.291 ns to -0.296 ns with -0.324 ns TNS.
+The CPU setup path remained positive at +1.074 ns and all hold paths passed.
+Because the dynamic benefit is negligible and timing no longer closes, the RTL
+was reverted without producing or deploying a hardware candidate. Do not
+seed-walk this form unless a representative workload later shows substantial
+SUB.L register-register traffic.

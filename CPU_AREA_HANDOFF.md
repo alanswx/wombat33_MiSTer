@@ -94,9 +94,12 @@ restore.
 The area milestone is now complete: the seed-28 fit leaves 111 LABs free. Do
 not force the eight-entry ADB keyboard FIFO into two Memory LABs without first
 proving a real fitted-LAB win; its two asynchronous reads make it a weak
-candidate. The next action is CPU speed work: extend the proven decode-time
-dual-register selection from `ADD.L Dn,Dn` to `SUB.L Dn,Dn`, measure corpus and
-focused-loop cycle changes, then run the complete AP68040 and hardware gates.
+candidate. `SUB.L Dn,Dn` decode preselection passed simulation and saved 715
+cycles (0.002%) in the first 100 SingleStepTests rows, but was absent from the
+focused loop and its same-seed fit missed 99 MHz SDRAM setup by 0.296 ns with
+-0.324 ns TNS. It was reverted without a hardware run. The next action is to
+profile and test `AND.L Dn,Dn` as the next isolated family; reject it before
+hardware unless its dynamic benefit and physical fit justify carrying it.
 Do not start broad pipelining yet.
 
 ## Working-tree ownership
