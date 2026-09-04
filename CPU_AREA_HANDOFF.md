@@ -7,8 +7,8 @@ complete; do not repeat either completed DAFB hardware run.
 
 - Branch: `cpu-sdram-handoff-seed15`
 - Fork remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Accepted parent RTL commit: `b0e6174` (`Preselect CMP.L register operands in decode`)
-- AP68040 submodule: clean at `d543f2d` on `wombat-retained-line-fill`
+- Accepted parent RTL commit: `9d0cad0` (`Advance AP68040 to inline opcode retirement`)
+- AP68040 submodule: clean at `8ab1057` on `wombat-inline-fetch-retire`
 - MiSTer `192.168.1.75`: Mac OS was shut down through MacAtrium and the menu
   core was loaded. It is safe to deploy another RBF.
 - Disposable disk currently matches MD5
@@ -148,16 +148,67 @@ fewer free LABs, the RTL was reverted. The exact rejected fit remains at
 `/home/alans/builds/wombat33_cpu_movedecode_seed30_20260904`; see measurement
 section 25 for hashes and all scores.
 
-The same trace explains the better next target: `MOVE.L (A1),(A2)+` accounts
-for 29,254 of 71,209 bounded traced instructions, versus only 1,494
-`MOVE.L Dn,Dn` instances. Investigate overlapping the distinct destination-An
-read/postincrement with the outstanding source read, while keeping store issue
-registered and preserving fault restart behavior.
+That `MOVE.L (A1),(A2)+` target has now also been tested and rejected. The
+candidate removed five sequencer states, passed directed write-fault restart,
+the complete AP suite, full-machine Verilator, and a timing-clean seed-28 fit.
+It cost 218 ALMs and 16 LABs, then scored CPU 4.726 versus the accepted 4.765
+on a complete hardware run. The boot trace was real but not representative of
+the timed CPU workload. RTL and directed tests were reverted; the AP submodule
+is clean at accepted commit `d543f2d`. The exact rejected build is preserved at
+`/home/alans/builds/wombat33_cpu_movemempostinc_seed28_20260904`; see
+measurement section 26.
 
-Operational constraint added 2026-09-04: the user is using the MiSTer for
-another FPGA project. **Ask immediately before every future deployment or
-`load_core` operation.** The disposable Wombat test disk was restored to MD5
-`0c4f774b4a2eccd5656e92f16119875f`; no further MiSTer access is required.
+The Priority-3 front-end target was then implemented and accepted as the new
+checkpoint described below.
+
+The user explicitly released the earlier MiSTer reservation and authorized the
+ongoing CPU plan to use the FPGA again. After the rejected copy-loop run, Mac OS
+reached its safe shutdown screen, MiSTer returned to `MENU`, and both disposable
+and pristine-reference disks were verified at MD5
+`0c4f774b4a2eccd5656e92f16119875f`; the golden gzip remains
+`671894be51b1cd1e0c0c8fb4ec39173e`.
+
+## Newly accepted resident-opcode inline retirement
+
+AP68040 `8ab1057` removes the standalone `S_FETCH` retirement cycle whenever
+the next opcode is already resident in the prefetch queue. IRQ/trace checks and
+flushes retain priority. Forwarding covers the two direct decode consumers
+whose register-file writes otherwise commit one edge late: A7 for short
+`BSR.B`, and USP for `MOVE USP,An`. Both hazards have permanent directed tests
+which fail when their individual bypass is removed.
+
+All pre-hardware gates pass. The focused loop falls from 212,238 to 186,380
+cycles (-12.18%), and the first 100 SingleStepTests rows fall from 35,168,444
+to 32,935,620 (-6.35%) with 1,696 matching field groups and zero real
+differences. The complete AP suite and full-machine Verilator build pass.
+
+Seed 28 fits at 36,704 ALMs, 4,099/4,191 LABs, 23,974 registers, and 1,664
+MLAB bits. Every timing domain has zero TNS: setup is +0.208 ns overall,
++0.934 ns SDRAM, and +1.122 ns CPU; hold is +0.243 ns overall, +0.257 ns CPU,
+and +0.441 ns SDRAM. This leaves 92 LABs free.
+
+The complete hardware run scores CPU 4.985, Graphics 5.818, Disk 0.687, Math
+33.079, Old PR 7.185, and New PR 2.348. Against the CMP checkpoint, CPU rises
+4.62% and Old PR rises 5.54%. FPU averages 2.664 and Color averages 1.707.
+This is the new accepted speed checkpoint.
+
+Preserved artifacts:
+
+- Quartus tree:
+  `/home/alans/builds/wombat33_cpu_inlinefetch_wb_seed28_20260904`
+- MiSTer RBF:
+  `/media/fat/_Unstable/Wombat33_CPU_inlinefetch_wb_seed28_20260904.rbf`
+- RBF MD5: `73568cd19f467334e149a77b3b6c9ecd`
+- RBF SHA-256:
+  `d82388d8b4f71dc42c8cb188befc3998f3cadda21e1e37ef3e375d5dfe020f13`
+- Result captures:
+  `docs/perf/wombat33_cpu_inlinefetch_wb_seed28_speedometer323_pr.png` and
+  `docs/perf/wombat33_cpu_inlinefetch_wb_seed28_speedometer323_detail.png`
+
+Mac OS reached the safe shutdown screen after the measurement, MiSTer returned
+to `MENU`, and both disk copies match MD5
+`0c4f774b4a2eccd5656e92f16119875f`. FPGA use remains authorized for the
+continuing CPU plan until the user revokes it.
 
 ## Working-tree ownership
 
@@ -173,7 +224,8 @@ rewritten, cleaned, or deleted:
 - generated `verilator/obj_dir_tb_*` directories
 
 Only `README.md`, `CPU_PERFORMANCE_TASKS.md`,
-`docs/PERFORMANCE_MEASUREMENTS.md`, this handoff, and the named CMP performance
-screenshots belong in the documentation checkpoint following `b0e6174`.
+`docs/PERFORMANCE_MEASUREMENTS.md`, this handoff, and the named performance
+screenshots belong in the documentation checkpoint following parent RTL
+commit `9d0cad0`.
 
 There is no `CLAUDE.md` in this repository or its git history at this stop.

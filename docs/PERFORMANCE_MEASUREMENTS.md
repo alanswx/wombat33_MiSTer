@@ -1161,5 +1161,142 @@ The exact rejected build is preserved at
 `eb335a042534e741751a438bff29b2924f69ae22a54d26e6e6c8755a3c5d82af`.
 Mac OS reached the safe-to-switch-off screen and the disposable disk was
 restored to MD5 `0c4f774b4a2eccd5656e92f16119875f`. No further Wombat core was
-loaded. The user reserved the MiSTer for another project, and future Wombat
-deployments now require immediate confirmation.
+loaded. The user then reserved the MiSTer for another project; that reservation
+was explicitly lifted before the following experiment.
+
+## 26. Rejected AP040 memory-to-memory MOVE retirement
+
+The next experiment targeted the boot profile's dominant exact form,
+`MOVE.L (An),(Am)+` with distinct address registers. While the source read was
+outstanding, register-file port B held the destination address register. On a
+successful non-page-crossing read, the core updated and rollback-recorded the
+destination register, updated MOVE condition codes, and entered the existing
+registered `S_MWR` path directly. This removed `S_PIPE_SDONE`, `S_PIPE_DST`,
+`S_EA_DISP`, `S_PIPE_DEA`, and `S_EXEC` without reintroducing the unsafe direct
+bus-acknowledgement path.
+
+The complete AP68040 suite passed, including new exact cache-hot data/address/
+CCR checks and a destination write-protection fault whose handler repairs the
+mapping and restarts the instruction. The restarted store incremented the
+destination register exactly once. Full-machine Verilator also passed. The
+focused loop stayed at 212,238 cycles and the first 100 SingleStepTests rows
+stayed at 35,168,444 because neither contains the form. An expanded corpus ran
+406 complete rows before the harness's 2.5-billion-cycle timeout; all 6,740
+completed field groups matched with zero real differences.
+
+Seed 28 met every timing domain with zero TNS:
+
+| metric | CMP checkpoint | memory-to-memory MOVE | change |
+|---|---:|---:|---:|
+| fitted ALMs | 36,446 | 36,664 | +218 |
+| LABs used | 4,063 | 4,079 | +16 |
+| LABs free | 128 | 112 | -16 |
+| registers | 23,938 | 23,946 | +8 |
+| MLAB bits | 1,664 | 1,664 | 0 |
+| setup overall | +0.133 ns | +0.323 ns | pass |
+| setup SDRAM | +0.133 ns | +0.758 ns | pass |
+| setup CPU | +1.192 ns | +1.067 ns | pass |
+| hold overall | +0.242 ns | +0.243 ns | pass |
+| hold CPU / SDRAM | +0.245 / +0.431 ns | +0.262 / +0.434 ns | pass |
+
+Mac OS 7.5.5 booted normally and completed every Speedometer 3.23 `Run ALL
+Tests` category. No capture or input occurred during either timed interval;
+the only interruption was Speedometer's required scratch-drive prompt, where
+the disposable `Mac7-5-5` volume was selected before the quiet run resumed.
+
+| Speedometer 3.23 PR Test | CMP checkpoint | memory-to-memory MOVE | change |
+|---|---:|---:|---:|
+| CPU | **4.765** | 4.726 | -0.82% |
+| Graphics | 5.394 | 5.438 | +0.82% |
+| Disk | 0.676 | 0.690 | +2.07% |
+| Math | 31.480 | 31.486 | +0.02% |
+| Old PR | 6.808 | 6.808 | 0.00% |
+| New PR | 2.280 | 2.311 | +1.36% |
+
+FPU averaged 2.446 and Color averaged 1.615. The CPU score did not improve and
+the other movements are within the cross-category variance seen in prior runs.
+The candidate therefore does not justify 218 ALMs and 16 LABs. Its RTL and
+directed tests were reverted; accepted AP68040 commit `d543f2d` remains the
+checkpoint.
+
+The exact rejected build is preserved at
+`/home/alans/builds/wombat33_cpu_movemempostinc_seed28_20260904`. Its RBF is
+`Wombat33_CPU_movemempostinc_seed28_20260904.rbf`, MD5
+`ca44e2cfcf5a364b2b0dcf1073a0c1c6`, SHA-256
+`9ecec53f26e50ad250dfd3deaada1c3527ea1a31fd844350c54482fb0da84c02`.
+Mac OS reached the safe-to-switch-off screen, MiSTer returned to `MENU`, and
+both the disposable and pristine-reference disks were restored/verified at
+MD5 `0c4f774b4a2eccd5656e92f16119875f`. The untouched golden gzip remains MD5
+`671894be51b1cd1e0c0c8fb4ec39173e`. The user has re-authorized FPGA use for
+the continuing CPU plan.
+
+## 27. Accepted AP040 resident-opcode inline retirement
+
+The first broader front-end experiment removed the normal `S_FETCH` retirement
+bubble when `fetch_next` already has the next opcode resident in the prefetch
+queue. IRQ and trace checks still run first, queue flushes still win, and a
+queue miss still uses the original fetch state. The focused phase-1 loop fell
+from 212,238 to 186,380 cycles, saving 25,858 cycles or 12.18%. The first 100
+SingleStepTests CPU rows fell from 35,168,444 to 32,935,620 cycles, saving
+2,232,824 cycles or 6.35%; all 1,696 architectural field groups match with zero
+real differences. The complete AP68040 suite and full-machine Verilator build
+also pass.
+
+The first timing-clean implementation failed its hardware boot immediately
+with Sad Mac `0000000F / 00000003`, an illegal-instruction system error. This
+was a real retirement-order bug, not a fitter or disk failure. The core's main
+and auxiliary register-file write strobes commit inside `ap040_regfile` on the
+following qualified edge. The removed `S_FETCH` state had implicitly hidden
+that latency. Most instructions only select asynchronous read ports in decode
+and consume them later, but two paths use architectural values immediately:
+short `BSR.B` begins its push from A7, and `MOVE USP,An` reads USP directly.
+
+Two narrow forwarding paths now cover those consumers. Permanent directed
+tests warm the fetch queue and exercise `MOVE.L A0,A7; BSR.B` plus
+`MOVE A0,USP; MOVE USP,A1`. Removing either bypass makes its corresponding test
+fail in all three memory phases; restoring it passes. AP68040 commit `8ab1057`
+contains the accepted RTL and tests, and parent RTL checkpoint `9d0cad0`
+advances the submodule to it.
+
+The repaired seed-28 fit closes every timing domain with zero TNS:
+
+| metric | CMP checkpoint | inline retirement | change |
+|---|---:|---:|---:|
+| fitted ALMs | 36,446 | 36,704 | +258 |
+| LABs used | 4,063 | 4,099 | +36 |
+| LABs free | 128 | 92 | -36 |
+| registers | 23,938 | 23,974 | +36 |
+| MLAB bits | 1,664 | 1,664 | 0 |
+| setup overall | +0.133 ns | +0.208 ns | pass |
+| setup SDRAM | +0.133 ns | +0.934 ns | pass |
+| setup CPU | +1.192 ns | +1.122 ns | pass |
+| hold overall | +0.242 ns | +0.243 ns | pass |
+| hold CPU / SDRAM | +0.245 / +0.431 ns | +0.257 / +0.441 ns | pass |
+
+Mac OS 7.5.5 then booted past the exact point where the unfixed image failed
+and completed Speedometer 3.23 `Run ALL Tests`. No screenshots or input
+occurred during either timed interval; only the required `Mac7-5-5` scratch
+volume prompt was serviced between them.
+
+| Speedometer 3.23 PR Test | CMP checkpoint | inline retirement | change |
+|---|---:|---:|---:|
+| CPU | 4.765 | **4.985** | **+4.62%** |
+| Graphics | 5.394 | **5.818** | **+7.86%** |
+| Disk | 0.676 | **0.687** | **+1.63%** |
+| Math | 31.480 | **33.079** | **+5.08%** |
+| Old PR | 6.808 | **7.185** | **+5.54%** |
+| New PR | 2.280 | **2.348** | **+2.98%** |
+
+The CPU benchmark average is 13.185, FPU average 2.664, and Color average
+1.707. Result captures are
+`docs/perf/wombat33_cpu_inlinefetch_wb_seed28_speedometer323_pr.png` and
+`docs/perf/wombat33_cpu_inlinefetch_wb_seed28_speedometer323_detail.png`.
+
+The exact Quartus tree is
+`/home/alans/builds/wombat33_cpu_inlinefetch_wb_seed28_20260904`. The preserved
+RBF is `Wombat33_CPU_inlinefetch_wb_seed28_20260904.rbf`, MD5
+`73568cd19f467334e149a77b3b6c9ecd`, SHA-256
+`d82388d8b4f71dc42c8cb188befc3998f3cadda21e1e37ef3e375d5dfe020f13`.
+After the run Mac OS reached the safe-to-switch-off screen, MiSTer returned to
+`MENU`, and both disposable and pristine-reference disks were verified at MD5
+`0c4f774b4a2eccd5656e92f16119875f` after the golden restore.

@@ -6,14 +6,13 @@ screenshots remain in `docs/PERFORMANCE_MEASUREMENTS.md`.
 
 ## Immediate answer: should area be reduced?
 
-**Completed; return to speed work.** Reducing ALM/LAB use does not directly
-increase emulated CPU throughput. The FPU and two DAFB reclaim passes lowered
-the timing-clean design from 40,738 to 36,592 ALMs and from 4,182 to 4,080
-LABs. The first accepted post-reclaim CPU fast path lowers it again to 36,446
-ALMs and 4,063 LABs. That leaves 128 LABs free instead of nine and creates
-useful room for predecode, bypass controls, or another pipeline register. The
-endpoints use seeds 27 and 28 respectively, so same-seed deltas are recorded
-for each pass below.
+**Completed; the recovered headroom is now buying speed.** Reducing ALM/LAB
+use did not directly increase emulated CPU throughput. The FPU and two DAFB
+reclaim passes lowered the timing-clean design from 40,738 to 36,592 ALMs and
+from 4,182 to 4,080 LABs. The CMP checkpoint then reached 36,446 ALMs and 4,063
+LABs, leaving 128 LABs free. The accepted inline-retirement front end consumes
+36 of those LABs but improves Speedometer CPU PR by 4.62%, so the trade is
+worthwhile: the current fit is 36,704 ALMs and 4,099 LABs, with 92 LABs free.
 
 LAB availability remains the more urgent number. The MLAB-backed FPU register
 bank recovered 1,380 ALMs but only six LABs. Explicit CPU/scanout copies of the
@@ -49,22 +48,24 @@ that routing/packing structure matters alongside raw Boolean count.
 
 - Parent repository branch: `cpu-sdram-handoff-seed15`
 - Parent remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Parent RTL commit: `b0e6174` (`Preselect CMP.L register operands in decode`)
-- AP68040 branch: `wombat-retained-line-fill`
+- Parent RTL commit: `9d0cad0` (`Advance AP68040 to inline opcode retirement`)
+- AP68040 branch: `wombat-inline-fetch-retire`
 - AP68040 remote: `https://github.com/alanswx/AP68040.git`
-- AP68040 commit: `d543f2d` (`Preselect CMP.L register operands in decode`)
+- AP68040 commit: `8ab1057` (`Retire queued opcodes directly into decode`)
 - Quartus seed: 28
-- Exact preserved build: `/home/alans/builds/wombat33_cpu_cmpdecode_seed28_20260904`
-- MiSTer RBF: `/media/fat/_Unstable/Wombat33_CPU_cmpdecode_seed28_20260904.rbf`
-- MD5: `40ba7971e90a2af461276bee0f2159ae`
-- SHA-256: `44fba87ab5864a42cd4fe0ad6022c01e8f2905272fd03a9da9e4a5d673207f3e`
-- Quartus: 36,446/41,910 ALMs; 4,063/4,191 LABs; zero setup/hold TNS
-- Setup slack: +0.133 ns overall/SDRAM, +1.192 ns CPU
-- Hold slack: +0.242 ns overall, +0.245 ns CPU; all paths pass
-- Controlled hardware PR: CPU 4.765, Graphics 5.394, Disk 0.676, Math
-  31.480, Old PR 6.808, New PR 2.280
-- Focused `bench_loop`: 212,238 cycles
-- First 100 SingleStepTests rows: 35,168,444 cycles, 1,696 field groups,
+- Exact preserved build:
+  `/home/alans/builds/wombat33_cpu_inlinefetch_wb_seed28_20260904`
+- MiSTer RBF:
+  `/media/fat/_Unstable/Wombat33_CPU_inlinefetch_wb_seed28_20260904.rbf`
+- MD5: `73568cd19f467334e149a77b3b6c9ecd`
+- SHA-256: `d82388d8b4f71dc42c8cb188befc3998f3cadda21e1e37ef3e375d5dfe020f13`
+- Quartus: 36,704/41,910 ALMs; 4,099/4,191 LABs; zero setup/hold TNS
+- Setup slack: +0.208 ns overall, +0.934 ns SDRAM, +1.122 ns CPU
+- Hold slack: +0.243 ns overall, +0.257 ns CPU, +0.441 ns SDRAM
+- Controlled hardware PR: CPU 4.985, Graphics 5.818, Disk 0.687, Math
+  33.079, Old PR 7.185, New PR 2.348
+- Focused `bench_loop`: 186,380 cycles, 12.18% below the CMP checkpoint
+- First 100 SingleStepTests rows: 32,935,620 cycles, 1,696 field groups,
   zero real differences
 
 The palette checkpoint remains the closest known-good fallback at parent
@@ -436,12 +437,15 @@ seed-27 tree and compare both synthesis hierarchy and fitted LAB/ALM totals.
   fewer free LABs than the accepted fit and hardware CPU PR moved from 4.765 to
   4.752. With no measurable hardware gain, the RTL was reverted. See
   measurement section 25.
-- [ ] Optimize the profiled hot `MOVE.L (An),(Am)+` copy form next. Investigate
-  preselecting the destination address register while the source read is in
-  flight, then latching the destination address/postincrement at registered
-  read completion. Start with distinct source/destination address registers,
-  preserve restartable address-register updates, and retain a registered memory
-  write request; prior direct-acknowledgement experiments froze in hardware.
+- [x] Test the profiled hot `MOVE.L (An),(Am)+` copy form. The narrow candidate
+  preselected the distinct destination address register during the source read
+  and retired directly into the ordinary registered write path, removing five
+  sequencer states. Directed cache-hot and destination-write-fault/restart tests,
+  the complete AP suite, full-machine Verilator, and hardware all passed. Seed
+  28 met timing but cost 218 ALMs/16 LABs; the complete Speedometer run scored
+  CPU 4.726 versus 4.765 for the accepted checkpoint. It was reverted because
+  a boot-hot trace was not representative of the CPU benchmark and the larger
+  fit produced no end-to-end CPU gain. See measurement section 26.
 - [ ] Rank remaining address-register forms and simple decode bypasses from the
   full-machine profile. Require meaningful dynamic coverage before editing RTL;
   the rejected SUB/AND/OR/EOR and register-MOVE trials show that visual
@@ -467,14 +471,29 @@ The core is a correct multi-cycle sequencer, not a throughput pipeline. Narrow
 state bypasses help, but reaching much closer to a real 68040 eventually needs
 overlap. Start this only after area headroom exists.
 
-- [ ] Add a predecode/dispatch record for the next queued opcode so fetch/decode
-  work can overlap execution of the current instruction.
-- [ ] Separate architectural retirement from execution. Exceptions, trace,
-  interrupts, bus faults, and restartable write faults must remain precise; no
-  later instruction may update architectural state early.
-- [ ] Define hazards explicitly: register RAW/WAW, CCR dependencies, address-
-  register auto-update, control-register changes, cache/MMU serialization,
-  branches, and self-modifying-code flushes.
+The first broad front-end step is accepted. The existing prefetch queue already
+held a next-opcode candidate often enough that a new queue was unnecessary:
+retiring directly from `fetch_next` into `S_DECODE` removes the standalone
+`S_FETCH` boundary whenever that word is resident.
+
+- [x] Remove the normal resident-opcode `S_FETCH` retirement bubble. The
+  accepted implementation keeps IRQ/trace checks ahead of dispatch, refuses a
+  same-cycle flushed queue, and leaves extension-word and bus-miss paths on
+  their existing states. Hardware CPU PR improves 4.62%.
+- [x] Cover the direct retirement consumers exposed by the removed boundary.
+  `MOVE.L ...,A7` followed by short `BSR.B` and `MOVE An,USP` followed by
+  `MOVE USP,Am` each require forwarding from the registered write strobe.
+  Directed tests fail without their respective bypass and pass in all three
+  memory phases with it.
+- [ ] Audit every remaining direct architectural view used in `S_DECODE`
+  before removing another boundary state. Register RAW/WAW and CCR operands
+  consumed in later states already see committed data; prove this again for
+  address auto-update, control-register changes, and any new decode-time
+  consumer.
+- [ ] Separate architectural retirement from execution before overlapping two
+  independently executing instructions. Exceptions, trace, interrupts, bus
+  faults, and restartable write faults must remain precise; no later
+  instruction may update architectural state early.
 - [ ] Start with a two-stage in-order front end and only simple register ALU
   instructions. Flush on every unsupported or serializing instruction. Measure
   before widening coverage.
@@ -557,9 +576,10 @@ return the MiSTer to its menu, and restore:
 Never load a core while the guest is booting or running. It hard-resets the
 FPGA while HFS is mounted writable.
 
-As of 2026-09-04 the MiSTer is also being used for another FPGA project. Ask
-the user immediately before every future core deployment or `load_core`
-operation, even if a candidate has already passed simulation and Quartus.
+The earlier temporary reservation of the MiSTer for another FPGA project was
+explicitly lifted on 2026-09-04. FPGA use is authorized for the continuing CPU
+plan until the user revokes it; still perform the timing, safe-shutdown, and
+disk-restore gates above before every deployment.
 
 ## Working-tree cautions
 
