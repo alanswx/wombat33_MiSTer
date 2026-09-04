@@ -102,9 +102,10 @@ passed the complete AP suite but was also absent from the focused loop and
 saved only 746 cycles (0.0021%) in the first 100 SingleStepTests rows, with all
 1,696 field groups matching. It was rejected before fitting. `OR.L Dn,Dn` then
 passed the complete AP suite but was absent from the focused loop and saved
-only 39 corpus cycles (0.00011%); it too was reverted before fitting. The next
-action is to profile and test `EOR.L Dn,Dn`, then `CMP.L Dn,Dn`, at the same
-dynamic-benefit gate. Unless either has substantially more coverage, move to a
+only 39 corpus cycles (0.00011%); it too was reverted before fitting. EOR.L
+produced the same 39-cycle result and was also reverted before fit. The next
+action is the final cheap family check, `CMP.L Dn,Dn`, at the same
+dynamic-benefit gate. Unless it has substantially more coverage, move to a
 higher-occupancy front-end target rather than continuing opcode-by-opcode.
 Do not start broad pipelining yet.
 

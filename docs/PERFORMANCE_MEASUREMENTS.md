@@ -1031,3 +1031,8 @@ cannot move application-level performance, it was reverted before Quartus.
 at 212,238 cycles. The first 100 SingleStepTests rows measured 35,196,088
 cycles, only 39 cycles (about 0.00011%) below the accepted checkpoint, with all
 1,696 field groups matching. It was reverted without a Quartus build.
+
+`EOR.L Dn,Dn` produced the same result: the complete AP68040 suite passed, the
+focused loop remained 212,238 cycles, and the first 100 SingleStepTests rows
+measured 35,196,088 cycles with all 1,696 field groups matching. Its 39-cycle
+gain was rejected before Quartus.
