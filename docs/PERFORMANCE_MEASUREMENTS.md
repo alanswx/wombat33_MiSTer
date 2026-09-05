@@ -1384,3 +1384,153 @@ After the run Mac OS reached the safe-to-switch-off screen, MiSTer returned to
 and pristine-reference images match MD5
 `0c4f774b4a2eccd5656e92f16119875f`; the golden gzip remains MD5
 `671894be51b1cd1e0c0c8fb4ec39173e`.
+
+## 29. Rejected generic AP040 branch-refill dispatch
+
+After resident opcode and immediate consumption, the focused phase-1 profile
+still spent 14,820 cycles in `S_FETCH`; 12,663 of those visits consumed an
+already complete branch-refill window. AP68040 commit `7a6579f` tested the
+broadest safe bypass: `go_pc` directly dispatched the first target opcode and
+seeded the following three words whenever the complete four-word window was
+valid, no request or acknowledge owned the memory port, and neither trace nor
+interrupt processing took priority. Commit `bc582ef` added source-state
+attribution to the testbench profiler.
+
+All AP68040 tests and the full-machine Verilator build passed. The focused
+phase-1 loop fell from 173,718 to 161,256 cycles, saving 12,462 cycles or
+7.17%; only 201 contested refill hits retained `S_FETCH`. The first 100
+SingleStepTests CPU rows fell from 32,841,873 to 32,784,319 cycles, saving
+57,554 cycles or 0.175%; all 1,696 field groups matched with zero real
+differences. Relative to the CMP checkpoint, the cumulative reductions were
+24.02% in the focused loop and 6.78% in the first-100 corpus.
+
+The seed-28 fit closed every timing domain, but the generic bypass was costly:
+
+| metric | resident immediate | generic refill dispatch | change |
+|---|---:|---:|---:|
+| fitted ALMs | 36,937 | 38,159 | +1,222 |
+| LABs used | 4,092 | 4,125 | +33 |
+| LABs free | 99 | 66 | -33 |
+| registers | 23,943 | 23,880 | -63 |
+| MLAB bits | 1,664 | 1,664 | 0 |
+| setup overall | +0.342 ns | +0.280 ns | pass |
+| setup CPU | +1.267 ns | +1.216 ns | pass |
+| setup SDRAM | +0.357 ns | +0.280 ns | pass |
+| hold overall | +0.249 ns | +0.199 ns | pass |
+| hold CPU / SDRAM | +0.256 / +0.442 ns | +0.260 / +0.449 ns | pass |
+
+Mac OS 7.5.5 booted normally and completed Speedometer 3.23 `Run ALL Tests`.
+The two timed intervals received no capture or input; only the required
+`Mac7-5-5` scratch-volume chooser was serviced between them.
+
+| Speedometer 3.23 PR Test | resident immediate | generic refill dispatch | change |
+|---|---:|---:|---:|
+| CPU | 5.088 | **5.148** | **+1.18%** |
+| Graphics | 5.718 | 5.818 | +1.75% |
+| Disk | 0.686 | 0.684 | -0.29% |
+| Math | 33.133 | 33.079 | -0.16% |
+| Old PR | 7.201 | 7.249 | +0.67% |
+| New PR | 2.349 | 2.356 | +0.30% |
+
+CPU benchmark average was 13.265, FPU average 2.665, and Color average 1.720.
+The CPU gain is real but too small to justify a 1,222-ALM increase and one
+third of the remaining LAB headroom. The generic implementation is therefore
+rejected; the parent submodule pointer remained on resident-immediate commit
+`c897d77` until the DBcc-only successor in section 30 passed. The generic
+source and profiler are preserved on AP68040 branch
+`wombat-inline-branch-refill` rather than discarded.
+
+The exact Quartus tree is
+`/home/alans/builds/wombat33_cpu_inlinebrf_seed28_20260904`. The preserved RBF
+is `/media/fat/_Unstable/Wombat33_CPU_inlinebrf_seed28_20260904.rbf`, MD5
+`2ff5c0f37f20d2fc70912a45a6c58cda`, SHA-256
+`c01da89326351a570c099f756dbbcdb68a06dfb3831a2c6392b6d5e3174be46a`.
+Result captures are
+`docs/perf/wombat33_cpu_inlinebrf_seed28_speedometer323_pr.png` and
+`docs/perf/wombat33_cpu_inlinebrf_seed28_speedometer323_complete.png`.
+
+Mac OS reached the safe-to-switch-off screen, MiSTer returned to `MENU`, and
+the disposable disk was restored from the golden. Both writable test copies
+match MD5 `0c4f774b4a2eccd5656e92f16119875f`; the golden gzip remains MD5
+`671894be51b1cd1e0c0c8fb4ec39173e`.
+
+## 30. Accepted AP040 DBcc-only branch-refill dispatch
+
+The generic refill experiment's source-state profiler showed that all 12,462
+useful direct dispatches in the focused loop came from `S_DBCC1`. That made a
+narrow follow-up possible: only a taken, decrementing DBcc with a complete
+resident target window can bypass `S_FETCH`. Trace and interrupt priority,
+odd-target handling, registered DBcc writeback, bus ownership, and the normal
+miss path are unchanged.
+
+The first narrow implementation duplicated the wide branch-buffer-to-queue
+writers. It passed simulation, but seed 28 grew to 37,142 ALMs and 4,133 LABs
+and failed SDRAM setup at -0.066 ns. AP68040 commit `c9ecf79` instead reuses
+the established `issue_ifetch` seeding path and consumes its first target word
+locally. This preserves the cycle saving while substantially reducing logic.
+
+All AP68040 tests and the full-machine Verilator build pass. The focused
+phase-1 loop falls from 173,718 to 161,256 cycles, saving 12,462 cycles or
+7.17%; 12,462 resident DBcc targets dispatch directly and only 201 contested
+refill hits retain `S_FETCH`. The first 100 SingleStepTests CPU rows fall from
+32,841,873 to 32,841,589 cycles, saving 284 cycles or 0.0009%; all 1,696
+architectural field groups match with zero real differences. Relative to the
+CMP checkpoint, the cumulative reductions are 24.02% in the focused loop and
+6.62% in the first-100 corpus.
+
+Placement remains seed-sensitive. Seed 28 passed with only +0.016 ns SDRAM
+setup slack; seed 29 failed that clock at -0.436 ns with -0.818 ns TNS. The
+accepted seed-30 fit closes every timing domain with comfortable margin:
+
+| metric | resident immediate, seed 28 | DBcc refill, seed 30 | change |
+|---|---:|---:|---:|
+| fitted ALMs | 36,937 | 37,063 | +126 |
+| LABs used | 4,092 | 4,122 | +30 |
+| LABs free | 99 | 69 | -30 |
+| registers | 23,943 | 23,929 | -14 |
+| MLAB bits | 1,664 | 1,664 | 0 |
+| setup overall | +0.342 ns | +0.512 ns | pass |
+| setup CPU | +1.267 ns | +1.510 ns | pass |
+| setup SDRAM | +0.357 ns | +0.778 ns | pass |
+| hold overall | +0.249 ns | +0.207 ns | pass |
+| hold CPU / SDRAM | +0.256 / +0.442 ns | +0.260 / +0.397 ns | pass |
+
+The source-identical seed-28 image completed the controlled Mac OS 7.5.5
+Speedometer 3.23 `Run ALL Tests` measurement. No capture or remote input
+occurred during either timed interval; only the required `Mac7-5-5` scratch
+volume prompt was serviced between them.
+
+| Speedometer 3.23 PR Test | resident immediate | DBcc refill | change |
+|---|---:|---:|---:|
+| CPU | 5.088 | **5.133** | **+0.88%** |
+| Graphics | 5.718 | 5.792 | +1.29% |
+| Disk | 0.686 | 0.688 | +0.29% |
+| Math | 33.133 | 33.051 | -0.25% |
+| Old PR | 7.201 | 7.234 | +0.46% |
+| New PR | 2.349 | 2.363 | +0.60% |
+
+CPU benchmark average is 13.230, FPU average 2.656, and Color average 1.724.
+This retains about three quarters of the generic candidate's hardware CPU gain
+while avoiding its 1,222-ALM expansion. It does still consume 30 LABs in the
+timing-clean placement, so this is the final narrow state-bypass checkpoint;
+future work must target staged overlap with a materially larger measured gain.
+
+The measured seed-28 RBF is
+`/media/fat/_Unstable/Wombat33_CPU_dbccbrf_reuse_seed28_20260904.rbf`, MD5
+`284864f09d559bd1e76852bb36304be3`, SHA-256
+`56ea14a2abd06c6c2d075cd7f74d4db1d7e0e01ddd7c79d12957ab9cc4cbdd54`.
+The accepted reproducible tree is
+`/home/alans/builds/wombat33_cpu_dbccbrf_reuse_seed30_20260904`; its final RBF
+is `/media/fat/_Unstable/Wombat33_CPU_dbccbrf_reuse_seed30_20260904.rbf`, MD5
+`f6aa3aad50c283b884132dffd4d7e157`, SHA-256
+`db6e2243c81710bcda96479058e72301fb323370e125f724b273618f00c60b99`.
+That exact image smoke-booted to full-color MacAtrium before a clean shutdown.
+Result captures are
+`docs/perf/wombat33_cpu_dbccbrf_seed28_speedometer323_complete.png`,
+`docs/perf/wombat33_cpu_dbccbrf_seed28_speedometer323_pr.png`, and
+`docs/perf/wombat33_cpu_dbccbrf_seed28_speedometer323_detail.png`.
+
+After both runs Mac OS reached the safe-to-switch-off screen and MiSTer
+returned to `MENU`. The disposable and pristine-reference disks both match
+MD5 `0c4f774b4a2eccd5656e92f16119875f`; the untouched golden gzip remains MD5
+`671894be51b1cd1e0c0c8fb4ec39173e`.

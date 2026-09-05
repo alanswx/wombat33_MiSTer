@@ -7,8 +7,8 @@ complete; do not repeat either completed DAFB hardware run.
 
 - Branch: `cpu-sdram-handoff-seed15`
 - Fork remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Accepted parent RTL commit: `9a81035` (`Advance AP68040 to resident immediate fast path`)
-- AP68040 submodule: clean at `c897d77` on `wombat-inline-imm-resident`
+- Accepted parent RTL commit: `e3477c7` (`Advance AP68040 to DBcc refill fast path`)
+- AP68040 submodule: clean at `c9ecf79` on `wombat-inline-dbcc-refill`
 - MiSTer `192.168.1.75`: Mac OS was shut down through MacAtrium and the menu
   core was loaded. It is safe to deploy another RBF.
 - Disposable disk currently matches MD5
@@ -264,6 +264,48 @@ pristine-reference disks both match MD5
 `671894be51b1cd1e0c0c8fb4ec39173e`. FPGA use is authorized for the next CPU
 experiment until the user revokes it.
 
+## Newly accepted DBcc branch-refill fast path
+
+The generic `go_pc` branch-refill bypass proved a 7.17% focused-loop cycle
+reduction and +1.18% hardware CPU PR, but was rejected because it added 1,222
+ALMs and 33 LABs. Source-state profiling showed all 12,462 useful focused hits
+came from `S_DBCC1`. AP68040 commit `c9ecf79` therefore limits direct target
+dispatch to DBcc and reuses `issue_ifetch` for queue seeding.
+
+Every pre-hardware gate passes: the complete AP68040 suite, full-machine
+Verilator build, and first 100 SingleStepTests rows. The focused loop falls
+from 173,718 to 161,256 cycles (-7.17%); the first-100 corpus is 32,841,589
+cycles with all 1,696 field groups matching and zero real differences. The
+controlled Speedometer 3.23 run scores CPU 5.133, Graphics 5.792, Disk 0.688,
+Math 33.051, Old PR 7.234, and New PR 2.363. CPU is 0.88% above the resident-
+immediate checkpoint.
+
+Seed 28 passed with only +0.016 ns SDRAM setup margin and seed 29 failed by
+0.436 ns. Seed 30 is the accepted placement: 37,063 ALMs, 4,122/4,191 LABs,
+23,929 registers, and zero setup/hold TNS. Setup is +0.512 ns overall, +1.510
+ns CPU, and +0.778 ns SDRAM; hold is +0.207 ns overall, +0.260 ns CPU, and
++0.397 ns SDRAM.
+
+Preserved artifacts:
+
+- AP68040 branch/commit: `wombat-inline-dbcc-refill` / `c9ecf79`
+- parent pointer/seed commit: `e3477c7`
+- Quartus tree:
+  `/home/alans/builds/wombat33_cpu_dbccbrf_reuse_seed30_20260904`
+- MiSTer RBF:
+  `/media/fat/_Unstable/Wombat33_CPU_dbccbrf_reuse_seed30_20260904.rbf`
+- RBF MD5: `f6aa3aad50c283b884132dffd4d7e157`
+- RBF SHA-256:
+  `db6e2243c81710bcda96479058e72301fb323370e125f724b273618f00c60b99`
+
+The exact seed-30 RBF smoke-booted to full-color MacAtrium and shut down
+cleanly. MiSTer is back at `MENU`; the disposable and pristine-reference disks
+match MD5 `0c4f774b4a2eccd5656e92f16119875f`, and the golden gzip matches
+`671894be51b1cd1e0c0c8fb4ec39173e`. The next active performance task is a
+measured one-entry, two-stage in-order front end for simple register ALU
+instructions. Do not spend the remaining 69 LABs on more unranked state
+bypasses.
+
 ## Working-tree ownership
 
 These pre-existing changes are user-owned and were deliberately not staged,
@@ -280,6 +322,6 @@ rewritten, cleaned, or deleted:
 Only `README.md`, `CPU_PERFORMANCE_TASKS.md`,
 `docs/PERFORMANCE_MEASUREMENTS.md`, this handoff, and the named performance
 screenshots belong in the documentation checkpoint following parent RTL
-commit `9a81035`.
+commit `e3477c7`.
 
 There is no `CLAUDE.md` in this repository or its git history at this stop.

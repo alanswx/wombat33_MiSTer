@@ -14,7 +14,10 @@ LABs, leaving 128 LABs free. The accepted inline-retirement front end consumes
 36 of those LABs and improves Speedometer CPU PR by 4.62%. Resident-immediate
 consumption then adds 233 ALMs but recovers seven LABs relative to that fit and
 improves CPU PR by another 2.07%. The trade remains worthwhile: the current fit
-is 36,937 ALMs and 4,092 LABs, with 99 LABs free.
+adds a DBcc-only resident-target dispatch for another 0.88% CPU PR and is
+37,063 ALMs and 4,122 LABs, with 69 LABs free. This is the last narrow
+state-bypass candidate to accept without first showing a substantially larger
+end-to-end gain; the remaining headroom is reserved for staged overlap.
 
 LAB availability remains the more urgent number. The MLAB-backed FPU register
 bank recovered 1,380 ALMs but only six LABs. Explicit CPU/scanout copies of the
@@ -50,25 +53,24 @@ that routing/packing structure matters alongside raw Boolean count.
 
 - Parent repository branch: `cpu-sdram-handoff-seed15`
 - Parent remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Parent RTL commit: `9a81035` (`Advance AP68040 to resident immediate fast path`)
-- AP68040 branch: `wombat-inline-imm-resident`
+- Parent RTL commit: `e3477c7` (`Advance AP68040 to DBcc refill fast path`)
+- AP68040 branch: `wombat-inline-dbcc-refill`
 - AP68040 remote: `https://github.com/alanswx/AP68040.git`
-- AP68040 commit: `c897d77` (`Document resident immediate fast path`; RTL is
-  `0a84732`)
-- Quartus seed: 28
+- AP68040 commit: `c9ecf79` (`Reuse refill queue seeding for DBcc dispatch`)
+- Quartus seed: 30
 - Exact preserved build:
-  `/home/alans/builds/wombat33_cpu_inlineimm_seed28_20260904`
+  `/home/alans/builds/wombat33_cpu_dbccbrf_reuse_seed30_20260904`
 - MiSTer RBF:
-  `/media/fat/_Unstable/Wombat33_CPU_inlineimm_seed28_20260904.rbf`
-- MD5: `396140cb1b45c213022ff64d8954e140`
-- SHA-256: `bccbaec9d1956eeccd651a9001316117c2165c2390455ccc0e997fd1436cb076`
-- Quartus: 36,937/41,910 ALMs; 4,092/4,191 LABs; zero setup/hold TNS
-- Setup slack: +0.342 ns overall, +0.357 ns SDRAM, +1.267 ns CPU
-- Hold slack: +0.249 ns overall, +0.256 ns CPU, +0.442 ns SDRAM
-- Controlled hardware PR: CPU 5.088, Graphics 5.718, Disk 0.686, Math
-  33.133, Old PR 7.201, New PR 2.349
-- Focused `bench_loop`: 173,718 cycles, 18.15% below the CMP checkpoint
-- First 100 SingleStepTests rows: 32,841,873 cycles, 1,696 field groups,
+  `/media/fat/_Unstable/Wombat33_CPU_dbccbrf_reuse_seed30_20260904.rbf`
+- MD5: `f6aa3aad50c283b884132dffd4d7e157`
+- SHA-256: `db6e2243c81710bcda96479058e72301fb323370e125f724b273618f00c60b99`
+- Quartus: 37,063/41,910 ALMs; 4,122/4,191 LABs; zero setup/hold TNS
+- Setup slack: +0.512 ns overall, +0.778 ns SDRAM, +1.510 ns CPU
+- Hold slack: +0.207 ns overall, +0.260 ns CPU, +0.397 ns SDRAM
+- Controlled hardware PR: CPU 5.133, Graphics 5.792, Disk 0.688, Math
+  33.051, Old PR 7.234, New PR 2.363
+- Focused `bench_loop`: 161,256 cycles, 24.02% below the CMP checkpoint
+- First 100 SingleStepTests rows: 32,841,589 cycles, 1,696 field groups,
   zero real differences
 
 The palette checkpoint remains the closest known-good fallback at parent
@@ -467,9 +469,11 @@ seed-27 tree and compare both synthesis hierarchy and fitted LAB/ALM totals.
   speculative fill while popping the queue. The initial broader version failed
   exception timing and allowed the MMU walker and CPU bus to overlap; these
   conservative ownership guards fix both failures. See measurement section 28.
-- [ ] Revisit DBcc only with a clearly isolated change. Its decrement state is
-  already collapsed and prefetched; approximately 13.1k remaining visits are
-  branch/retirement work, not the old redundant state.
+- [x] Revisit DBcc with a clearly isolated change. Source-state profiling
+  proved every useful resident-refill hit in the focused loop came from
+  `S_DBCC1`. The accepted path reuses `issue_ifetch`, saves 12,462 focused
+  cycles, raises hardware CPU PR from 5.088 to 5.133 (+0.88%), and avoids the
+  generic candidate's 1,222-ALM expansion. See measurement section 30.
 
 ## Priority 3: front-end overlap and real pipelining
 
@@ -496,12 +500,16 @@ retiring directly from `fetch_next` into `S_DECODE` removes the standalone
   state. Later-state callers retain the old boundary, and any outstanding or
   completing speculative fetch keeps the old path. Hardware CPU PR improves
   from 4.985 to 5.088 (+2.07%).
-- [ ] Target the remaining taken-branch/refill boundary only after adding a
-  focused branch-buffer test. `S_FETCH` still accounts for about 14.8k visits
-  in the new focused profile, so decoding an already resident redirect target
-  could approach another 7% synthetic win. Preserve IRQ/trace priority, kill
-  stale speculative fills, and keep DBcc writeback registered; the earlier
-  broad DBcc collapse froze at the Happy Mac.
+- [x] Measure the remaining taken-branch/refill boundary. The generic
+  `go_pc` bypass removed 12,462 focused cycles (7.17%) and raised hardware CPU
+  PR from 5.088 to 5.148 (+1.18%), but cost 1,222 ALMs and 33 LABs, leaving
+  only 66 LABs free. It is rejected on performance-per-area grounds and is
+  preserved on AP68040 branch `wombat-inline-branch-refill`; see measurement
+  section 29. Source-state profiling showed all 12,462 focused direct hits came
+  from `S_DBCC1`. The accepted DBcc-only follow-up reuses `issue_ifetch` queue
+  seeding, preserves the 161,256-cycle result, passes the AP suite/full-machine
+  build/first-100 corpus, and raises hardware CPU PR to 5.133 (+0.88%). Its
+  final seed-30 fit is 37,063 ALMs and 4,122 LABs with zero TNS; see section 30.
 - [ ] Audit every remaining direct architectural view used in `S_DECODE`
   before removing another boundary state. Register RAW/WAW and CCR operands
   consumed in later states already see committed data; prove this again for
@@ -513,7 +521,10 @@ retiring directly from `fetch_next` into `S_DECODE` removes the standalone
   instruction may update architectural state early.
 - [ ] Start with a two-stage in-order front end and only simple register ALU
   instructions. Flush on every unsupported or serializing instruction. Measure
-  before widening coverage.
+  before widening coverage. **This is now the active performance task.** First
+  add dispatch/retirement counters for the simple-register subset and prove a
+  one-entry predecode register can overlap decode with the current instruction
+  without allowing the younger operation to update architectural state.
 - [ ] Consider a small decoded micro-op queue only if one predecode register
   proves useful. Do not build a broad speculative machine; the expected win is
   hiding FETCH/DECODE occupancy, not reimplementing an out-of-order 68040.
