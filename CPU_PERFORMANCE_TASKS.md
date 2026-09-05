@@ -1,6 +1,6 @@
 # CPU performance task list and recovery record
 
-Last updated: 2026-09-04. This is the authoritative CPU-speed queue and the
+Last updated: 2026-09-05. This is the authoritative CPU-speed queue and the
 first file to read after a power loss or a new session. Measurements and
 screenshots remain in `docs/PERFORMANCE_MEASUREMENTS.md`.
 
@@ -18,6 +18,9 @@ adds a DBcc-only resident-target dispatch for another 0.88% CPU PR and is
 37,063 ALMs and 4,122 LABs, with 69 LABs free. This is the last narrow
 state-bypass candidate to accept without first showing a substantially larger
 end-to-end gain; the remaining headroom is reserved for staged overlap.
+The first staged-overlap probe, an exact `ADD.L Dn,Dn` predecode, was rejected:
+it cost 271 ALMs and 23 LABs for only +0.60% CPU PR and +0.18% CPU benchmark
+average. The accepted DBcc checkpoint and its 69 free LABs remain unchanged.
 
 LAB availability remains the more urgent number. The MLAB-backed FPU register
 bank recovered 1,380 ALMs but only six LABs. Explicit CPU/scanout copies of the
@@ -519,12 +522,24 @@ retiring directly from `fetch_next` into `S_DECODE` removes the standalone
   independently executing instructions. Exceptions, trace, interrupts, bus
   faults, and restartable write faults must remain precise; no later
   instruction may update architectural state early.
-- [ ] Start with a two-stage in-order front end and only simple register ALU
-  instructions. Flush on every unsupported or serializing instruction. Measure
-  before widening coverage. **This is now the active performance task.** First
-  add dispatch/retirement counters for the simple-register subset and prove a
-  one-entry predecode register can overlap decode with the current instruction
-  without allowing the younger operation to update architectural state.
+- [x] Test a one-entry predecode on a bounded simple-register subset. The exact
+  resident `ADD.L Dn,Dn` candidate passes all simulation gates, saves 8.06% in
+  the focused loop, and closes seed-30 timing, but saves only 0.0034% in the
+  first-100 corpus and improves hardware CPU PR by just 0.60%. It costs 271
+  ALMs and 23 LABs, leaving only 46 LABs free, so it is rejected and preserved
+  on AP68040 branch `wombat-predecode-regalu`; see measurement section 31.
+- [ ] **Active:** profile the actual Speedometer 3.23 CPU interval at opcode-pair
+  and sequencer-state granularity before choosing another pipeline target. The
+  focused loop overpredicted the ADD predecode benefit by more than an order of
+  magnitude. Rank candidates by dynamic removable cycles in the measured
+  workload, then require a predicted multi-percent CPU-average gain before
+  spending the accepted checkpoint's remaining 69 LABs.
+- [ ] If the measured profile supports it, test a shared one-entry decoded
+  control register that overlaps generic `S_DECODE` work without duplicating a
+  complete opcode-specific execution path. Keep execution and retirement
+  in-order, flush on every unsupported or serializing instruction, and prevent
+  the younger operation from changing architectural state before the older one
+  retires.
 - [ ] Consider a small decoded micro-op queue only if one predecode register
   proves useful. Do not build a broad speculative machine; the expected win is
   hiding FETCH/DECODE occupancy, not reimplementing an out-of-order 68040.
@@ -557,6 +572,11 @@ so these are secondary unless profiling moves the bottleneck back to memory.
 - A broad direct register-register ALU retirement change combined with further
   DBcc collapsing passed simulation and Quartus timing but froze at the Happy
   Mac. It is rejected. Bisect one opcode family and one removed state at a time.
+- Exact `ADD.L Dn,Dn` predecode is also rejected. Its synthetic focused-loop
+  saving was 8.06%, but the controlled hardware CPU-average gain was only
+  0.18% while the fit consumed 271 ALMs and 23 LABs. Do not widen this path
+  until an actual Speedometer CPU-interval profile identifies enough dynamic
+  coverage to predict a materially larger end-to-end result.
 - Broad direct memory acknowledgement froze during Speedometer Disk even when
   the pre-adapter retained-line bypass was disabled. Preserve registered
   completion and adapter ownership/order checks.

@@ -50,6 +50,14 @@ CPU PR from 5.088 to **5.133**. See
 measurements and [`CPU_PERFORMANCE_TASKS.md`](CPU_PERFORMANCE_TASKS.md) for the
 live, power-loss-safe work queue and exact recovery instructions.
 
+A subsequent one-entry `ADD.L Dn,Dn` predecode experiment was timing-clean and
+cut the focused synthetic loop by another 8.06%, but improved the controlled
+hardware CPU average by only 0.18% while consuming 271 ALMs and 23 LABs. It is
+preserved for analysis but rejected; the accepted checkpoint and **5.133** CPU
+PR remain unchanged. The next step is to profile the actual Speedometer CPU
+interval at opcode-pair and sequencer-state granularity before selecting a
+broader shared decode-overlap path.
+
 ## Testbench (`SingleStepTests/`)
 
 Per-instruction CPU / FPU / MMU benches captured against MAME's

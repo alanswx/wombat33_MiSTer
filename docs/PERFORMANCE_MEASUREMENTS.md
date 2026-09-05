@@ -1534,3 +1534,78 @@ After both runs Mac OS reached the safe-to-switch-off screen and MiSTer
 returned to `MENU`. The disposable and pristine-reference disks both match
 MD5 `0c4f774b4a2eccd5656e92f16119875f`; the untouched golden gzip remains MD5
 `671894be51b1cd1e0c0c8fb4ec39173e`.
+
+## 31. Rejected one-entry `ADD.L Dn,Dn` predecode
+
+The first staged-overlap experiment captured an exact resident
+`ADD.L Dn,Dn` at retirement and dispatched it without a separate `S_DECODE`
+visit. A one-sided forwarding path lets a preceding load supply the source
+operand; a destination dependency waits one capture edge. Unsupported,
+serializing, faulting, interrupt, and trace cases retain the ordinary state
+sequence. The source and directed tests are preserved at AP68040 commit
+`8eaa12d` on branch `wombat-predecode-regalu`.
+
+The complete AP68040 suite and full-machine Verilator build pass. The focused
+phase-1 loop falls from 161,256 to 148,258 cycles, saving 12,998 cycles or
+8.06%; 12,800 exact ADD operations take the inline path. Relative to the CMP
+checkpoint, the cumulative focused-loop reduction is 63,980 cycles or 30.15%.
+The first 100 SingleStepTests CPU rows fall only from 32,841,589 to 32,840,479
+cycles, saving 1,110 cycles or 0.0034%. All 1,696 architectural field groups
+match with zero real differences; 204 reported changes are test-layout deltas,
+not architectural mismatches.
+
+An initial two-sided forwarding version grew the CPU hierarchy by 458 ALMs and
+failed seed-30 setup at -0.369 ns; seed 31 also failed at -0.699 ns. The final
+one-sided version fits and closes every timing domain, but still spends scarce
+placement headroom:
+
+| metric | accepted DBcc, seed 30 | ADD predecode, seed 30 | change |
+|---|---:|---:|---:|
+| fitted ALMs | 37,063 | 37,334 | +271 |
+| LABs used | 4,122 | 4,145 | +23 |
+| LABs free | 69 | 46 | -23 |
+| registers | 23,929 | 23,984 | +55 |
+| setup overall | +0.512 ns | +0.354 ns | pass |
+| setup CPU | +1.510 ns | +1.262 ns | pass |
+| setup SDRAM | +0.778 ns | +0.739 ns | pass |
+| hold overall | +0.207 ns | +0.177 ns | pass |
+| hold CPU / SDRAM | +0.260 / +0.397 ns | +0.256 / +0.439 ns | pass |
+
+Mac OS 7.5.5 booted normally and completed Speedometer 3.23 `Run ALL Tests`.
+No capture or remote input occurred during either timed interval; only the
+required `Mac7-5-5` scratch-volume chooser was serviced between them.
+
+| Speedometer 3.23 PR Test | accepted DBcc | ADD predecode | change |
+|---|---:|---:|---:|
+| CPU | 5.133 | **5.164** | **+0.60%** |
+| Graphics | 5.792 | 5.566 | -3.90% |
+| Disk | 0.688 | 0.686 | -0.29% |
+| Math | 33.051 | 33.133 | +0.25% |
+| Old PR | 7.234 | 7.186 | -0.66% |
+| New PR | 2.363 | 2.348 | -0.63% |
+
+CPU benchmark average is 13.254 versus 13.230 (+0.18%); FPU average is 2.704
+versus 2.656, and Color average is 1.723 versus 1.724. The focused loop is
+strongly biased toward the newly handled load/ADD sequence, while neither the
+first-100 corpus nor the full hardware benchmark sees a material gain. The
+candidate is therefore rejected: +271 ALMs and 23 LABs are not justified by a
+0.60% CPU PR movement and 0.18% CPU-average movement. The accepted parent
+submodule pointer remains at `c9ecf79`.
+
+The exact Quartus tree is
+`/home/alans/builds/wombat33_cpu_addl_predecode_seed30_20260904`. The preserved
+RBF is
+`/media/fat/_Unstable/Wombat33_CPU_addl_predecode_seed30_20260904.rbf`, MD5
+`28d57a5d1d6adc6f220edc15a340fef9`, SHA-256
+`88ff81cb31e97da1081f6e973ec95609b83ff3939ae6ee290127e290561d5afb`.
+Result captures are:
+
+- `docs/perf/wombat33_cpu_addl_predecode_seed30_speedometer323_complete.png`
+- `docs/perf/wombat33_cpu_addl_predecode_seed30_speedometer323_results.png`
+- `docs/perf/wombat33_cpu_addl_predecode_seed30_speedometer323_pr.png`
+- `docs/perf/wombat33_cpu_addl_predecode_seed30_speedometer323_detail.png`
+
+After the run Mac OS reached the safe-to-switch-off screen and MiSTer returned
+to `MENU`. The disposable and pristine-reference disks both match MD5
+`0c4f774b4a2eccd5656e92f16119875f`; the untouched golden gzip remains MD5
+`671894be51b1cd1e0c0c8fb4ec39173e`.

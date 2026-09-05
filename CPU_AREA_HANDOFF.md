@@ -1,4 +1,4 @@
-# CPU/area optimization handoff — 2026-09-04
+# CPU/area optimization handoff — 2026-09-05
 
 Read this file first, then `CPU_PERFORMANCE_TASKS.md`. The area milestone is
 complete; do not repeat either completed DAFB hardware run.
@@ -301,10 +301,57 @@ Preserved artifacts:
 The exact seed-30 RBF smoke-booted to full-color MacAtrium and shut down
 cleanly. MiSTer is back at `MENU`; the disposable and pristine-reference disks
 match MD5 `0c4f774b4a2eccd5656e92f16119875f`, and the golden gzip matches
-`671894be51b1cd1e0c0c8fb4ec39173e`. The next active performance task is a
-measured one-entry, two-stage in-order front end for simple register ALU
-instructions. Do not spend the remaining 69 LABs on more unranked state
-bypasses.
+`671894be51b1cd1e0c0c8fb4ec39173e`. A measured one-entry, two-stage in-order
+front-end experiment followed; the section below records why it was rejected.
+Do not spend the remaining 69 LABs on more unranked state bypasses.
+
+## Rejected one-entry ADD predecode
+
+AP68040 branch `wombat-predecode-regalu`, commit `8eaa12d`, is the preserved
+first staged-overlap experiment. It captures an exact resident
+`ADD.L Dn,Dn` at retirement, bypasses the following standalone `S_DECODE`, and
+has a one-sided source-forwarding path for the hot load/ADD sequence. It is not
+part of the accepted parent checkpoint.
+
+Every pre-hardware gate passes. The focused phase-1 loop falls from 161,256 to
+148,258 cycles (-8.06%), with 12,800 exact inline ADDs. The first 100
+SingleStepTests rows, however, fall only from 32,841,589 to 32,840,479
+(-0.0034%); all 1,696 architectural groups match with zero real differences.
+The seed-30 fit closes all setup and hold domains but grows to 37,334 ALMs and
+4,145/4,191 LABs, consuming 271 ALMs and 23 of the accepted checkpoint's 69
+free LABs. Setup is +0.354 ns overall, +1.262 ns CPU, and +0.739 ns SDRAM;
+hold is +0.177 ns overall, +0.256 ns CPU, and +0.439 ns SDRAM.
+
+The controlled Speedometer 3.23 run scores CPU 5.164, Graphics 5.566, Disk
+0.686, Math 33.133, Old PR 7.186, and New PR 2.348. CPU benchmark average is
+13.254, only 0.18% above the accepted 13.230; CPU PR is only 0.60% higher.
+That end-to-end result does not justify the area, so the candidate is rejected.
+The accepted parent pointer remains AP68040 `c9ecf79`.
+
+Preserved experiment artifacts:
+
+- AP68040 branch/commit: `wombat-predecode-regalu` / `8eaa12d`
+- Quartus tree:
+  `/home/alans/builds/wombat33_cpu_addl_predecode_seed30_20260904`
+- MiSTer RBF:
+  `/media/fat/_Unstable/Wombat33_CPU_addl_predecode_seed30_20260904.rbf`
+- RBF MD5: `28d57a5d1d6adc6f220edc15a340fef9`
+- RBF SHA-256:
+  `88ff81cb31e97da1081f6e973ec95609b83ff3939ae6ee290127e290561d5afb`
+- Result captures: `docs/perf/wombat33_cpu_addl_predecode_seed30_` followed by
+  `speedometer323_complete.png`, `speedometer323_results.png`,
+  `speedometer323_pr.png`, and `speedometer323_detail.png`
+
+Mac OS reached the safe-to-switch-off screen after the run and MiSTer is back
+at `MENU`. The disposable and pristine-reference disks both match MD5
+`0c4f774b4a2eccd5656e92f16119875f`; the untouched golden gzip remains
+`671894be51b1cd1e0c0c8fb4ec39173e`.
+
+The next active task is no longer another hand-selected ALU bypass. First
+profile the actual Speedometer 3.23 CPU interval at opcode-pair and sequencer-
+state granularity, because the focused loop overstated this candidate's value.
+Only then choose a shared decode-overlap mechanism whose measured dynamic
+coverage predicts a multi-percent end-to-end gain.
 
 ## Working-tree ownership
 
