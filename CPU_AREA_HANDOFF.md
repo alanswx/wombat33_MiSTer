@@ -7,8 +7,8 @@ complete; do not repeat either completed DAFB hardware run.
 
 - Branch: `cpu-sdram-handoff-seed15`
 - Fork remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Accepted parent RTL commit: `f846901` (`Advance AP68040 to instruction lookahead`)
-- AP68040 submodule: clean at `8951fd2` on `wombat-icache-lookahead`
+- Accepted parent RTL commit: `c6c6d91` (`Integrate upstream AP68040 correctness fixes`)
+- AP68040 submodule: clean at `299cb36` on `wombat-upstream-fixes`
 - MiSTer `192.168.1.75`: Mac OS reached the safe-to-switch-off screen and the
   menu core was loaded. It is safe to deploy another RBF.
 - Disposable and pristine-reference disks currently match MD5
@@ -426,8 +426,46 @@ Instrument `S_MRD`/`S_MWR` into D-cache hits, misses, fills, stores, and ack
 latency. If internal lookup is the cost, try a bounded registered request or
 early-hit response; if stores dominate, measure an ordered one-entry store
 buffer. Preserve MMU translation, snoops, precise faults, DMA visibility, and
-registered external completion. With only 39 LABs free, require a predicted
+registered external completion. With 73 LABs free, require a predicted
 multi-percent CPU-average win or pair the change with a new area reclaim.
+
+## Integrated upstream AP68040 correctness fixes
+
+Upstream AP68040 `c6a9c63` contains a NeXTSTEP MMU regression (`16b674a`) and
+two correctness fixes (`a8a50ce`). The latter blocks ordinary cache reads while
+a displaced `store_inv_lost` invalidation is pending and prepares the required
+BUSY frame, packed-decimal operand payload, and FPIAR before trapping an
+unsupported packed-decimal FPU operation. These were integrated on top of the
+accepted I-cache lookahead as AP commits `9996357` and `299cb36`, then recorded
+in the parent at `c6c6d91`.
+
+The complete AP suite, full-machine Verilator build, focused loop, first 100 CPU
+rows, all 270 FPU rows, and all 8 save/restore rows pass. Differential results
+remain zero and the measured cycles are unchanged: 160,650 focused and
+32,841,589 first-100. Seed 32 was rejected at -0.321 ns CPU setup. Seed 33 is
+accepted at 37,131 ALMs, 4,118/4,191 LABs, and zero TNS: setup +0.145 ns
+overall/CPU and +0.911 ns SDRAM; hold +0.244 ns overall, +0.434 ns CPU, and
++0.256 ns SDRAM.
+
+The exact RBF booted Mac OS 7.5.5 in full color and completed every Speedometer
+3.23 group. Because a status capture occurred during late FPU/Color timing, the
+run is a functional soak rather than a new controlled speed measurement; keep
+the prior CPU average 13.588 and CPU PR 5.195 as the performance baseline. Mac
+OS shut down safely, MiSTer returned to `MENU`, the disposable disk was restored,
+and both disk copies again match MD5 `0c4f774b4a2eccd5656e92f16119875f`.
+The golden gzip remains `671894be51b1cd1e0c0c8fb4ec39173e`.
+
+Preserved artifacts:
+
+- AP branch/commit: `wombat-upstream-fixes` / `299cb36`
+- parent commit: `c6c6d91`
+- Quartus tree:
+  `/home/alans/builds/wombat33_cpu_upstream_fixes_seed33_20260905`
+- MiSTer RBF:
+  `/media/fat/_Unstable/Wombat33_CPU_upstream_fixes_seed33_20260905.rbf`
+- RBF MD5: `6147a2cc478f084c1ea77c2bb418811a`
+- RBF SHA-256:
+  `cc1088e7639bf0662a4a6d59558fe77c333ff8e5037c6251c55117f59df25a68`
 
 ## Working-tree ownership
 
@@ -443,8 +481,7 @@ rewritten, cleaned, or deleted:
 - generated `verilator/obj_dir_tb_*` directories
 
 Only `README.md`, `CPU_PERFORMANCE_TASKS.md`,
-`docs/PERFORMANCE_MEASUREMENTS.md`, this handoff, and the named performance
-screenshots belong in the documentation checkpoint following parent RTL
-commit `f846901`.
+`docs/PERFORMANCE_MEASUREMENTS.md`, and this handoff belong in the documentation
+checkpoint following parent RTL commit `c6c6d91`.
 
 There is no `CLAUDE.md` in this repository or its git history at this stop.

@@ -117,14 +117,10 @@ data is never clobbered:
 
 See `tools/misterdeploy/README.md` for the launcher's full flag set.
 
-> **The slot-0 seed does nothing today.** `wombat33.sv`'s CONF_STR declares the disk
-> as `"S0,HDAVHD,Mount SCSI disk;"`. In MiSTer's option parser the letter after `S`
-> is a flag: `SC0` sets `store_name`, which is what makes the Main write and later
-> restore `config/<core>.s<N>`. A plain `S0` mounts identically when you pick a file
-> in the OSD, but the mount is never remembered — so `Wombat33.s0` is written by the
-> deploy and then ignored, and the disk must be mounted by hand every boot. Every
-> sibling core (`MacLC`, `MacLCII`, `MacIIvi`, `MacPlus`, `LBMacTwo`) uses `SC0`.
-> Changing `S0` → `SC0` needs a full rebuild; until then, mount from the OSD.
+> **The slot-0 seed is active.** `wombat33.sv` declares
+> `"SC0,HDAVHD,Mount SCSI disk;"`; the `C` flag tells MiSTer's Main to remember and
+> restore `config/Wombat33.s0`. A seeded path therefore auto-mounts on core start.
+> A plain `S0` would still mount a manually selected file but would not remember it.
 >
 > MGL is not a workaround: a `<file type="s" index="0" .../>` entry pointing at the
 > image is parsed by the Main (`type=S index=0 path=…`) but comes back `valid=F`

@@ -1709,3 +1709,75 @@ Mac OS reached the safe-to-switch-off screen after the run, MiSTer returned to
 disposable and pristine-reference disks both match MD5
 `0c4f774b4a2eccd5656e92f16119875f`; the golden gzip matches MD5
 `671894be51b1cd1e0c0c8fb4ec39173e`.
+
+## 33. Upstream AP68040 cache/FPU correctness integration
+
+Upstream AP68040 advanced to `c6a9c63` on 2026-09-05. Its functional change
+`a8a50ce` fixes two bugs: a cache read could race a displaced pending store
+invalidation, and an unsupported packed-decimal FPU operation could raise its
+exception without first preparing the BUSY frame, operand payload, and FPIAR
+expected by the handler. Commit `16b674a` also adds a NeXTSTEP MMU regression
+covering supervisor transparent translation, SRP selection, a retargeted
+pointer descriptor plus `PFLUSH`, and U/M-bit writebacks.
+
+Those upstream commits were integrated on top of the accepted instruction
+lookahead as AP68040 commits `9996357` and `299cb36`. The cache conflict kept
+Wombat's write-hit update and lookahead invalidation behavior while adding the
+upstream `store_inv_lost` read guard. The FPU conflict kept the MLAB-backed
+register-file paths while adopting upstream's exception-state capture.
+
+All logic-level gates pass:
+
+- complete AP68040 suite, including cache race T13, MMU checks 200--212, and
+  packed-decimal FPU test 650 in all three memory phases;
+- full-machine Verilator build;
+- focused phase-1 loop: exactly 160,650 cycles;
+- first 100 SingleStepTests CPU rows: exactly 32,841,589 cycles, 1,696 field
+  groups, zero real differences;
+- all 270 FPU rows: 122,289,740 cycles, 5,000 field groups, zero real
+  differences;
+- all 8 save/restore rows: 4,508,359 cycles, 8 field groups, zero real
+  differences.
+
+Seed 32 was rejected without deployment because CPU setup fell to -0.321 ns.
+Seed 33 is timing-clean:
+
+| metric | I-cache lookahead, seed 32 | upstream fixes, seed 33 | change |
+|---|---:|---:|---:|
+| fitted ALMs | 37,357 | **37,131** | -226 |
+| LABs used | 4,152 | **4,118** | -34 |
+| LABs free | 39 | **73** | +34 |
+| fitted registers | 24,026 | 24,035 | +9 |
+| setup overall | +0.115 ns | **+0.145 ns** | pass |
+| setup CPU | +0.785 ns | **+0.145 ns** | pass |
+| setup SDRAM | +0.115 ns | **+0.911 ns** | pass |
+| setup HDMI | +0.553 ns | **+0.482 ns** | pass |
+| hold overall | +0.213 ns | **+0.244 ns** | pass |
+| hold CPU | +0.250 ns | **+0.434 ns** | pass |
+| hold SDRAM | +0.413 ns | **+0.256 ns** | pass |
+
+Every setup and hold domain has zero TNS. The 226-ALM/34-LAB movement is a
+post-fit placement result, not an RTL area-reclaim claim. Simulated cycle
+counts are unchanged, so the controlled I-cache-lookahead hardware scores in
+section 32 remain the performance baseline.
+
+The exact RBF booted Mac OS 7.5.5 in full color and completed all six
+Speedometer 3.23 groups. A status capture landed during the late FPU/Color
+timing, so this run is deliberately recorded only as a functional soak, not a
+controlled speed comparison. Mac OS then reached the safe-to-switch-off
+screen, MiSTer returned to `MENU`, and the disposable image was restored from
+the golden gzip. Both disk copies match MD5
+`0c4f774b4a2eccd5656e92f16119875f`; the golden gzip remains
+`671894be51b1cd1e0c0c8fb4ec39173e`.
+
+Preserved artifacts:
+
+- AP68040 branch/commit: `wombat-upstream-fixes` / `299cb36`
+- parent pointer/seed commit: `c6c6d91`
+- Quartus tree:
+  `/home/alans/builds/wombat33_cpu_upstream_fixes_seed33_20260905`
+- MiSTer RBF:
+  `/media/fat/_Unstable/Wombat33_CPU_upstream_fixes_seed33_20260905.rbf`
+- RBF MD5: `6147a2cc478f084c1ea77c2bb418811a`
+- RBF SHA-256:
+  `cc1088e7639bf0662a4a6d59558fe77c333ff8e5037c6251c55117f59df25a68`

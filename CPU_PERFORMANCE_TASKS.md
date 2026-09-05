@@ -19,11 +19,13 @@ adds a DBcc-only resident-target dispatch for another 0.88% CPU PR and is
 instruction fetch as a broad dynamic cost rather than another isolated opcode
 family. The accepted one-longword sequential I-cache lookahead adds 294 ALMs
 and 30 LABs, reaches 37,357 ALMs and 4,152 LABs (39 free), and improves the
-hardware CPU benchmark average by 2.71% and CPU PR by 1.21%.
+hardware CPU benchmark average by 2.71% and CPU PR by 1.21%. Integrating the
+upstream cache-race and packed-decimal FPU-frame fixes is cycle-neutral; its
+timing-clean seed-33 placement uses 37,131 ALMs and 4,118 LABs (73 free).
 The first staged-overlap probe, an exact `ADD.L Dn,Dn` predecode, was rejected:
 it cost 271 ALMs and 23 LABs for only +0.60% CPU PR and +0.18% CPU benchmark
 average. The accepted lookahead is the first profile-directed overlap step;
-with only 39 LABs free, the next speed change must either be very compact or be
+with 73 LABs free, the next speed change must either be very compact or be
 paired with another area reclaim.
 
 LAB availability remains the more urgent number. The MLAB-backed FPU register
@@ -60,35 +62,63 @@ that routing/packing structure matters alongside raw Boolean count.
 
 - Parent repository branch: `cpu-sdram-handoff-seed15`
 - Parent remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Parent RTL commit: `f846901` (`Advance AP68040 to instruction lookahead`)
-- AP68040 branch: `wombat-icache-lookahead`
+- Parent RTL commit: `c6c6d91` (`Integrate upstream AP68040 correctness fixes`)
+- AP68040 branch: `wombat-upstream-fixes`
 - AP68040 remote: `https://github.com/alanswx/AP68040.git`
-- AP68040 commit: `8951fd2` (`Add sequential instruction cache lookahead`)
-- Quartus seed: 32
+- AP68040 commit: `299cb36` (upstream cache race and FPU frame fixes)
+- Quartus seed: 33
 - Exact preserved build:
-  `/home/alans/builds/wombat33_cpu_icache_lookahead_seed32_20260905`
+  `/home/alans/builds/wombat33_cpu_upstream_fixes_seed33_20260905`
 - MiSTer RBF:
-  `/media/fat/_Unstable/Wombat33_CPU_icache_lookahead_seed32_20260905.rbf`
-- MD5: `202f64a6d77495db9f090b57eda9efc8`
-- SHA-256: `b41ba46f55bc77796c69b59a4cbd48bf093694acf0e1c6d0b918c8cd1bcafaec`
-- Quartus: 37,357/41,910 ALMs; 4,152/4,191 LABs; zero setup/hold TNS
-- Setup slack: +0.115 ns overall, +0.115 ns SDRAM, +0.785 ns CPU
-- Hold slack: +0.213 ns overall, +0.250 ns CPU, +0.413 ns SDRAM
-- Controlled hardware PR: CPU 5.195, Graphics 6.074, Disk 0.680, Math
+  `/media/fat/_Unstable/Wombat33_CPU_upstream_fixes_seed33_20260905.rbf`
+- MD5: `6147a2cc478f084c1ea77c2bb418811a`
+- SHA-256: `cc1088e7639bf0662a4a6d59558fe77c333ff8e5037c6251c55117f59df25a68`
+- Quartus: 37,131/41,910 ALMs; 4,118/4,191 LABs; zero setup/hold TNS
+- Setup slack: +0.145 ns overall/CPU, +0.911 ns SDRAM, +0.482 ns HDMI
+- Hold slack: +0.244 ns overall, +0.434 ns CPU, +0.256 ns SDRAM
+- Controlled performance baseline: CPU 5.195, Graphics 6.074, Disk 0.680, Math
   34.011, Old PR 7.437, New PR 2.362
-- Hardware CPU benchmark average: 13.588, up 2.71% from 13.230
+- Controlled CPU benchmark average: 13.588, up 2.71% from 13.230
+- Integrated hardware: Mac OS full-color boot and all six Speedometer groups
+  passed as a functional soak; no new performance delta is claimed
 - Focused `bench_loop`: 160,650 cycles, 0.376% below the DBcc checkpoint
 - First 100 SingleStepTests rows: 32,841,589 cycles, 1,696 field groups,
   zero real differences
 
-The palette checkpoint remains the closest known-good fallback at parent
-`3a960b5`, AP68040 `8231eec`, exact build
-`/home/alans/builds/wombat33_dafb_palette_m10k_seed27_20260903`, and MiSTer RBF
-`Wombat33_DAFB_palette_m10k_seed27_20260903.rbf` (MD5
-`c43a310d2c39171e4be7f781904405c4`). Do not overwrite either checkpoint.
+The performance-control fallback remains parent `f846901`, AP68040 `8951fd2`,
+exact build `/home/alans/builds/wombat33_cpu_icache_lookahead_seed32_20260905`,
+and MiSTer RBF `Wombat33_CPU_icache_lookahead_seed32_20260905.rbf` (MD5
+`202f64a6d77495db9f090b57eda9efc8`). Do not overwrite either checkpoint.
 Experiments use the disposable remote tree and a separately named RBF. The
 disposable Mac disk is always restored from the compressed golden after a safe
 guest shutdown.
+
+## Completed 2026-09-05: upstream AP68040 correctness sync
+
+- [x] Replay upstream's NeXTSTEP MMU loadable-kernel-server fault shape,
+  including supervisor transparent-translation windows, SRP selection,
+  pointer retarget plus `PFLUSH`, and descriptor U/M-bit writeback checks.
+- [x] Block ordinary cache reads while a displaced `store_inv_lost`
+  invalidation is pending, and retain the local store-hit update plus
+  instruction-lookahead invalidation behavior. The directed cache race is T13.
+- [x] Prepare the required BUSY frame, packed-decimal operand payload, and
+  command-time FPIAR when trapping unsupported packed-decimal FPU operations.
+  Upstream FPU test 650 passes in all three memory phases.
+- [x] Run the complete AP suite, full-machine Verilator build, first 100 CPU
+  rows, all 270 FPU rows, and all 8 save/restore rows. Every differential
+  corpus reports zero real differences; the focused and first-100 cycle counts
+  remain exactly 160,650 and 32,841,589.
+- [x] Reject seed 32 at -0.321 ns CPU setup, then accept seed 33 with zero TNS:
+  37,131 ALMs, 4,118 LABs, +0.145 ns setup overall/CPU, +0.911 ns SDRAM setup,
+  +0.244 ns hold overall, +0.434 ns CPU hold, and +0.256 ns SDRAM hold.
+- [x] Boot Mac OS 7.5.5 in full color and complete every Speedometer group as
+  a hardware functional soak. Shut down safely, return to `MENU`, restore the
+  disposable disk, and verify both disk copies at MD5
+  `0c4f774b4a2eccd5656e92f16119875f` and the golden gzip at
+  `671894be51b1cd1e0c0c8fb4ec39173e`.
+
+This sync fixes correctness bugs and does not introduce a performance claim.
+Keep the controlled I-cache-lookahead scores as the speed baseline.
 
 ## Completed 2026-09-05: sequential instruction-cache lookahead
 
@@ -614,7 +644,7 @@ optimization is not confused with already-adequate SDRAM bandwidth.
   waiting on internal lookup, prototype a one-entry registered data request or
   early hit response that preserves MMU translation, snoops, byte lanes,
   faults, and the registered external completion path. Target at least a 2%
-  CPU-average gain within the 39 free LABs; otherwise reclaim area first.
+  CPU-average gain within the 73 free LABs; otherwise reclaim area first.
 - [ ] Measure whether write-through cache stores can retire into a small ordered
   store buffer while the external write completes. Do this only after the hit
   breakdown above, and require load-after-store forwarding, I/D snoop ordering,

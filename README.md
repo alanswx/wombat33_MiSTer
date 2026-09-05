@@ -20,7 +20,7 @@ bash scripts/deploy_screenshot.sh   # push + seed boot.rom/SCSI mount + launch
 ```
 
 The core mounts its boot ROM from `games/Wombat33/boot.rom` and its main
-SCSI disk from OSD slot `S0`; `BUILD.md` covers seeding both.
+SCSI disk from persistent OSD slot `SC0`; `BUILD.md` covers seeding both.
 
 ## Performance work
 
@@ -31,8 +31,8 @@ score to **5.195**, with the complete AP68040 suite, the Wombat Verilator
 model, the first 100 SingleStepTests rows, Quartus timing, and a full hardware
 PR run used as the acceptance gate.
 
-The current accepted RTL checkpoint is parent commit `f846901` with AP68040
-submodule commit `8951fd2`. Moving the two-read-port FPU register bank into
+The current integrated RTL checkpoint is parent commit `c6c6d91` with AP68040
+submodule commit `299cb36`. Moving the two-read-port FPU register bank into
 mirrored MLABs, then replacing the DAFB palette's unintended 6,144-register
 read mirror with explicit M10K views, and finally consolidating DAFB's 17
 timing words in one MLAB, created the room needed for CPU work. Decode-time
@@ -46,10 +46,13 @@ cut the focused loop by 24.02% and the first-100 differential corpus by 6.62%.
 A one-longword sequential I-cache lookahead now serves the next instruction
 directly when it is in the same 16-byte cache line. It covers 64.48% of dynamic
 dispatches in the measured Speedometer CPU interval and raises the hardware CPU
-benchmark average from 13.230 to **13.588** (+2.71%). The final seed-32 fit uses
-37,357 ALMs and 4,152 LABs (39 free), closes every timing domain with +0.115 ns
-worst setup and +0.213 ns worst hold slack, and raises controlled hardware CPU
-PR from 5.133 to **5.195** (+1.21%). See
+benchmark average from 13.230 to **13.588** (+2.71%). AP68040's subsequent
+upstream cache-invalidation-race and packed-decimal FPU-frame fixes are now
+integrated without changing simulated cycle counts. The final seed-33 fit uses
+37,131 ALMs and 4,118 LABs (73 free), closes every timing domain with +0.145 ns
+worst setup and +0.244 ns worst hold slack, and passed the full hardware soak.
+The controlled hardware CPU PR remains **5.195** because the upstream sync is a
+correctness release, not a new speed claim. See
 [`docs/PERFORMANCE_MEASUREMENTS.md`](docs/PERFORMANCE_MEASUREMENTS.md) for
 measurements and [`CPU_PERFORMANCE_TASKS.md`](CPU_PERFORMANCE_TASKS.md) for the
 live, power-loss-safe work queue and exact recovery instructions.
