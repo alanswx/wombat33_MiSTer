@@ -146,8 +146,13 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # 37,357 ALMs, 4,152/4,191 LABs, +0.115 ns worst setup (+0.785 ns CPU,
 # +0.115 ns SDRAM), and +0.213 ns worst hold (+0.250 ns CPU, +0.413 ns
 # SDRAM). Seed 30 failed setup by 0.128 ns; seed 31 failed setup by 0.090 ns
-# and hold by 0.222 ns. Keep seed 32 for the accepted placement.
-set_global_assignment -name SEED 32
+# and hold by 0.222 ns. Seed 32 is the accepted placement for that checkpoint.
+# The 2026-09-05 upstream AP68040 cache-invalidation/FPU-frame fixes moved the
+# seed-32 CPU setup path to -0.321 ns, so that RBF was rejected without deploy.
+# Seed 33 closes the integrated tree at 37,131 ALMs and 4,118/4,191 LABs, with
+# +0.145 ns worst setup (+0.145 ns CPU, +0.911 ns SDRAM) and +0.244 ns worst
+# hold (+0.434 ns CPU, +0.256 ns SDRAM), all zero TNS. Keep seed 33.
+set_global_assignment -name SEED 33
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
