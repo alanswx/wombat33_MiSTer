@@ -15,12 +15,16 @@ LABs, leaving 128 LABs free. The accepted inline-retirement front end consumes
 consumption then adds 233 ALMs but recovers seven LABs relative to that fit and
 improves CPU PR by another 2.07%. The trade remains worthwhile: the current fit
 adds a DBcc-only resident-target dispatch for another 0.88% CPU PR and is
-37,063 ALMs and 4,122 LABs, with 69 LABs free. This is the last narrow
-state-bypass candidate to accept without first showing a substantially larger
-end-to-end gain; the remaining headroom is reserved for staged overlap.
+37,063 ALMs and 4,122 LABs, with 69 LABs free. Profiling then identified
+instruction fetch as a broad dynamic cost rather than another isolated opcode
+family. The accepted one-longword sequential I-cache lookahead adds 294 ALMs
+and 30 LABs, reaches 37,357 ALMs and 4,152 LABs (39 free), and improves the
+hardware CPU benchmark average by 2.71% and CPU PR by 1.21%.
 The first staged-overlap probe, an exact `ADD.L Dn,Dn` predecode, was rejected:
 it cost 271 ALMs and 23 LABs for only +0.60% CPU PR and +0.18% CPU benchmark
-average. The accepted DBcc checkpoint and its 69 free LABs remain unchanged.
+average. The accepted lookahead is the first profile-directed overlap step;
+with only 39 LABs free, the next speed change must either be very compact or be
+paired with another area reclaim.
 
 LAB availability remains the more urgent number. The MLAB-backed FPU register
 bank recovered 1,380 ALMs but only six LABs. Explicit CPU/scanout copies of the
@@ -56,23 +60,24 @@ that routing/packing structure matters alongside raw Boolean count.
 
 - Parent repository branch: `cpu-sdram-handoff-seed15`
 - Parent remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Parent RTL commit: `e3477c7` (`Advance AP68040 to DBcc refill fast path`)
-- AP68040 branch: `wombat-inline-dbcc-refill`
+- Parent RTL commit: `f846901` (`Advance AP68040 to instruction lookahead`)
+- AP68040 branch: `wombat-icache-lookahead`
 - AP68040 remote: `https://github.com/alanswx/AP68040.git`
-- AP68040 commit: `c9ecf79` (`Reuse refill queue seeding for DBcc dispatch`)
-- Quartus seed: 30
+- AP68040 commit: `8951fd2` (`Add sequential instruction cache lookahead`)
+- Quartus seed: 32
 - Exact preserved build:
-  `/home/alans/builds/wombat33_cpu_dbccbrf_reuse_seed30_20260904`
+  `/home/alans/builds/wombat33_cpu_icache_lookahead_seed32_20260905`
 - MiSTer RBF:
-  `/media/fat/_Unstable/Wombat33_CPU_dbccbrf_reuse_seed30_20260904.rbf`
-- MD5: `f6aa3aad50c283b884132dffd4d7e157`
-- SHA-256: `db6e2243c81710bcda96479058e72301fb323370e125f724b273618f00c60b99`
-- Quartus: 37,063/41,910 ALMs; 4,122/4,191 LABs; zero setup/hold TNS
-- Setup slack: +0.512 ns overall, +0.778 ns SDRAM, +1.510 ns CPU
-- Hold slack: +0.207 ns overall, +0.260 ns CPU, +0.397 ns SDRAM
-- Controlled hardware PR: CPU 5.133, Graphics 5.792, Disk 0.688, Math
-  33.051, Old PR 7.234, New PR 2.363
-- Focused `bench_loop`: 161,256 cycles, 24.02% below the CMP checkpoint
+  `/media/fat/_Unstable/Wombat33_CPU_icache_lookahead_seed32_20260905.rbf`
+- MD5: `202f64a6d77495db9f090b57eda9efc8`
+- SHA-256: `b41ba46f55bc77796c69b59a4cbd48bf093694acf0e1c6d0b918c8cd1bcafaec`
+- Quartus: 37,357/41,910 ALMs; 4,152/4,191 LABs; zero setup/hold TNS
+- Setup slack: +0.115 ns overall, +0.115 ns SDRAM, +0.785 ns CPU
+- Hold slack: +0.213 ns overall, +0.250 ns CPU, +0.413 ns SDRAM
+- Controlled hardware PR: CPU 5.195, Graphics 6.074, Disk 0.680, Math
+  34.011, Old PR 7.437, New PR 2.362
+- Hardware CPU benchmark average: 13.588, up 2.71% from 13.230
+- Focused `bench_loop`: 160,650 cycles, 0.376% below the DBcc checkpoint
 - First 100 SingleStepTests rows: 32,841,589 cycles, 1,696 field groups,
   zero real differences
 
@@ -84,6 +89,44 @@ The palette checkpoint remains the closest known-good fallback at parent
 Experiments use the disposable remote tree and a separately named RBF. The
 disposable Mac disk is always restored from the compressed golden after a safe
 guest shutdown.
+
+## Completed 2026-09-05: sequential instruction-cache lookahead
+
+The measured Speedometer CPU interval showed 167,686,915 raw instruction-fetch
+requests and 10.6% cache-state occupancy at the accepted DBcc checkpoint. A
+one-longword lookahead now retains the next sequential word on an I-cache hit,
+provided it remains inside the current 16-byte line. An exact physical-address
+and way match can acknowledge the following instruction request directly from
+idle; hits may chain and survive unrelated D-cache traffic. Reset, `CINV`, a
+nonmatching instruction request, and every unsafe boundary clear the entry.
+There is no speculative bus request and no speculative PC update.
+
+The simulation Speedometer CPU average rises from 13.550 to 13.968 (+3.08%).
+The candidate records 96,214,523 lookahead hits, equal to 64.48% of dynamic
+dispatches; raw instruction fetches fall to 151,112,038 and cache-state
+occupancy falls to 5.7%. Total profiled CPU clocks fall from 1,856.5 million to
+1,797.5 million, while clocks per dispatch fall from 12.37 to 12.05.
+
+All acceptance gates pass: the complete AP68040 reset, double-fault, walker
+CDC, 16-bit bus-gap, timeout, cache-snoop, integer, and exception suites; the
+full-machine Verilator build; the focused loop; and the first 100
+SingleStepTests rows. The focused loop saves 606 cycles (0.376%); the
+first-100 run remains exactly 32,841,589 cycles with all 1,696 field groups
+matching and zero real differences.
+
+Quartus seeds 30 and 31 were rejected for timing. Seed 32 closes every setup
+and hold domain with zero TNS at 37,357 ALMs, 4,152/4,191 LABs, 24,026 fitted
+registers, and 428 RAM blocks. Against the DBcc checkpoint this costs 294 ALMs
+and 30 LABs. The controlled hardware `Run ALL Tests` result is CPU 5.195,
+Graphics 6.074, Disk 0.680, Math 34.011, Old PR 7.437, and New PR 2.362. The
+CPU benchmark average rises from 13.230 to 13.588 (+2.71%); CPU PR rises 1.21%.
+
+The exact RBF booted Mac OS 7.5.5, completed every Speedometer 3.23 test, and
+reached the safe-to-switch-off screen. MiSTer is back at `MENU`. The disposable
+and pristine-reference disks both match MD5
+`0c4f774b4a2eccd5656e92f16119875f`, and the golden gzip matches
+`671894be51b1cd1e0c0c8fb4ec39173e`. See measurement section 32 and the
+accepted-checkpoint block above for exact source and artifact identities.
 
 ## Completed 2026-09-03: DAFB palette in explicit M10K mirrors
 
@@ -528,12 +571,16 @@ retiring directly from `fetch_next` into `S_DECODE` removes the standalone
   first-100 corpus and improves hardware CPU PR by just 0.60%. It costs 271
   ALMs and 23 LABs, leaving only 46 LABs free, so it is rejected and preserved
   on AP68040 branch `wombat-predecode-regalu`; see measurement section 31.
-- [ ] **Active:** profile the actual Speedometer 3.23 CPU interval at opcode-pair
-  and sequencer-state granularity before choosing another pipeline target. The
-  focused loop overpredicted the ADD predecode benefit by more than an order of
-  magnitude. Rank candidates by dynamic removable cycles in the measured
-  workload, then require a predicted multi-percent CPU-average gain before
-  spending the accepted checkpoint's remaining 69 LABs.
+- [x] Profile the actual Speedometer 3.23 CPU interval before choosing another
+  pipeline target. The accepted baseline executes about 150 million dispatches
+  at 12.37 clocks/dispatch. Instruction-fetch/cache occupancy was broad enough
+  to justify a shared cache optimization, while the focused loop overpredicted
+  the rejected ADD predecode by more than an order of magnitude.
+- [x] Add one sequential I-cache lookahead word. It hits on 64.48% of dynamic
+  dispatches, cuts simulated cache-state occupancy from 10.6% to 5.7%, and
+  improves the hardware CPU benchmark average by 2.71%. The exact physical
+  match, line-boundary guard, invalidation rules, and directed T12 cache test
+  are accepted at AP68040 `8951fd2`; see measurement section 32.
 - [ ] If the measured profile supports it, test a shared one-entry decoded
   control register that overlaps generic `S_DECODE` work without duplicating a
   complete opcode-specific execution path. Keep execution and retirement
@@ -550,8 +597,11 @@ retiring directly from `fetch_next` into `S_DECODE` removes the standalone
 ## Priority 4: remaining memory/cache ideas
 
 The integrated path already measures 52.4 MB/s sequentially and a 304 ns line
-fill, inside the real Quadra 800 bandwidth range. CPU sequencing now dominates,
-so these are secondary unless profiling moves the bottleneck back to memory.
+fill, inside the real Quadra 800 bandwidth range. The new I-cache lookahead
+removes much of the instruction-side occupancy; the remaining profile is now
+dominated by data-side `S_MRD`/`S_MWR` activity. First separate internal
+D-cache hit/lookup delay from true external misses so an internal CPU/cache
+optimization is not confused with already-adequate SDRAM bandwidth.
 
 - [ ] Reduce cache-miss critical-word latency without reviving combinational
   direct acknowledgement. Two broader direct-ack variants froze during the
@@ -559,8 +609,16 @@ so these are secondary unless profiling moves the bottleneck back to memory.
 - [ ] Evaluate a safe early cache-fill acknowledgement only if subsequent words
   can complete coherently while the CPU continues and redirects/faults remain
   correct.
-- [ ] Improve D-cache hit/lookup overlap if profiles show `S_MRD` is waiting on
-  internal cache states rather than external SDRAM.
+- [ ] **Active:** instrument D-cache hits, misses, fills, stores, and
+  acknowledgement latency during the Speedometer CPU interval. If `S_MRD` is
+  waiting on internal lookup, prototype a one-entry registered data request or
+  early hit response that preserves MMU translation, snoops, byte lanes,
+  faults, and the registered external completion path. Target at least a 2%
+  CPU-average gain within the 39 free LABs; otherwise reclaim area first.
+- [ ] Measure whether write-through cache stores can retire into a small ordered
+  store buffer while the external write completes. Do this only after the hit
+  breakdown above, and require load-after-store forwarding, I/D snoop ordering,
+  fault precision, DMA visibility, and a clean drain at serializing operations.
 - [ ] Consider copyback only with a real dirty-line snoop/writeback design.
   External DMA and the MMU walker's U/M-bit writes must not invalidate and lose
   dirty CPU data.
@@ -624,8 +682,8 @@ return the MiSTer to its menu, and restore:
 Never load a core while the guest is booting or running. It hard-resets the
 FPGA while HFS is mounted writable.
 
-The earlier temporary reservation of the MiSTer for another FPGA project was
-explicitly lifted on 2026-09-04. FPGA use is authorized for the continuing CPU
+The temporary reservation of the MiSTer for another FPGA project was
+explicitly lifted again on 2026-09-05. FPGA use is authorized for the continuing CPU
 plan until the user revokes it; still perform the timing, safe-shutdown, and
 disk-restore gates above before every deployment.
 

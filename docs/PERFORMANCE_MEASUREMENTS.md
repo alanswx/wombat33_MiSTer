@@ -1609,3 +1609,103 @@ After the run Mac OS reached the safe-to-switch-off screen and MiSTer returned
 to `MENU`. The disposable and pristine-reference disks both match MD5
 `0c4f774b4a2eccd5656e92f16119875f`; the untouched golden gzip remains MD5
 `671894be51b1cd1e0c0c8fb4ec39173e`.
+
+## 32. Accepted sequential instruction-cache lookahead
+
+The actual Speedometer 3.23 CPU interval, rather than the focused synthetic
+loop, selected this target. At the accepted DBcc checkpoint the profile records
+167,686,915 raw instruction-fetch requests and 10.6% cache-state occupancy.
+AP68040 commit `8951fd2` adds one private lookahead longword to `ap040_cache`.
+On a sequential I-cache hit that remains inside the current 16-byte line, the
+cache records the following physical word and way. An exact request can then be
+acknowledged directly from idle, successive hits may chain, and unrelated data
+traffic does not consume the entry. Reset, `CINV`, a nonmatching instruction
+request, and every unsafe line or ownership case clear it. The mechanism never
+starts speculative bus traffic and never advances architectural PC.
+
+Directed cache-snoop test T12 checks correct byte lanes, chaining, survival
+across data traffic, and absence of extra bus beats. The complete AP68040 reset,
+double-fault, walker-CDC, 16-bit bus-gap, timeout, cache-snoop, integer, and
+exception suites pass. Full-machine Verilator passes. The focused loop changes
+from 161,256 to 160,650 cycles (-606, -0.376%). The first 100 SingleStepTests
+rows are exactly unchanged at 32,841,589 cycles; all 1,696 architectural field
+groups match with zero real differences.
+
+The unperturbed local Speedometer CPU run shows the broad-workload effect:
+
+| profiled metric | accepted DBcc | I-cache lookahead | change |
+|---|---:|---:|---:|
+| CPU benchmark average | 13.550 | **13.968** | **+3.08%** |
+| profiled CPU clocks | 1,856.5 M | 1,797.5 M | -3.18% |
+| dynamic dispatches | 150.059 M | 149.213 M | -0.56% |
+| clocks per dispatch | 12.37 | 12.05 | -2.59% |
+| raw instruction fetches | 167,686,915 | 151,112,038 | -9.88% |
+| cache-state occupancy | 10.6% | 5.7% | -4.9 points |
+
+The candidate records 96,214,523 lookahead hits, equal to 64.48% of dynamic
+dispatches. This explains why the real benchmark moves while the focused loop
+barely does: the optimization covers ordinary instruction streams broadly
+rather than one hot opcode sequence.
+
+Quartus seeds 30 and 31 are rejected. Seed 30 fails setup at -0.128 ns; seed 31
+fails setup at -0.090 ns and hold at -0.222 ns. Seed 32 closes all domains:
+
+| metric | accepted DBcc, seed 30 | I-cache lookahead, seed 32 | change |
+|---|---:|---:|---:|
+| fitted ALMs | 37,063 | 37,357 | +294 |
+| LABs used | 4,122 | 4,152 | +30 |
+| LABs free | 69 | 39 | -30 |
+| fitted registers | 23,929 | 24,026 | +97 |
+| setup overall | +0.512 ns | +0.115 ns | pass |
+| setup CPU | +1.510 ns | +0.785 ns | pass |
+| setup SDRAM | +0.778 ns | +0.115 ns | pass |
+| hold overall | +0.207 ns | +0.213 ns | pass |
+| hold CPU / SDRAM | +0.260 / +0.397 ns | +0.250 / +0.413 ns | pass |
+
+The seed-32 fit uses 3,135,384 block-memory bits and 428 RAM blocks, with zero
+setup or hold TNS. The exact timing-clean RBF booted Mac OS 7.5.5 and completed
+Speedometer 3.23 `Run ALL Tests`; no capture or remote input occurred during
+the timed interval.
+
+| Speedometer 3.23 result | accepted DBcc | I-cache lookahead | change |
+|---|---:|---:|---:|
+| CPU benchmark average | 13.230 | **13.588** | **+2.71%** |
+| CPU PR | 5.133 | **5.195** | **+1.21%** |
+| Graphics PR | 5.792 | 6.074 | +4.87% |
+| Disk PR | 0.688 | 0.680 | -1.16% |
+| Math PR | 33.051 | 34.011 | +2.90% |
+| Old PR | 7.234 | 7.437 | +2.81% |
+| New PR | 2.363 | 2.362 | -0.04% |
+| FPU average | 2.656 | 2.722 | +2.48% |
+| Color average | 1.724 | 1.748 | +1.39% |
+
+The 12 hardware Benchmark Mix timings are KWhetstone 317.460 s, Dhrystone
+5059.021 s, Towers 2.167 s, Quick 1.400 s, Bubble 2.000 s, Queens 1.450 s,
+Puzzle 3.483 s, Permutations 3.750 s, FFT 6.700 s, FP Matrix 3.283 s, Integer
+Matrix 1.550 s, and Sieve 3.500 s. Their average is 13.588.
+
+![Speedometer 3.23 lookahead completion](perf/wombat33_cpu_icache_lookahead_seed32_speedometer323_complete.png)
+
+![Speedometer 3.23 lookahead results](perf/wombat33_cpu_icache_lookahead_seed32_speedometer323_results.png)
+
+![Speedometer 3.23 lookahead PR](perf/wombat33_cpu_icache_lookahead_seed32_speedometer323_pr.png)
+
+Preserved artifacts:
+
+- AP68040 branch/commit: `wombat-icache-lookahead` / `8951fd2`
+- parent pointer/seed commit: `f846901`
+- Quartus tree:
+  `/home/alans/builds/wombat33_cpu_icache_lookahead_seed32_20260905`
+- MiSTer RBF:
+  `/media/fat/_Unstable/Wombat33_CPU_icache_lookahead_seed32_20260905.rbf`
+- RBF MD5: `202f64a6d77495db9f090b57eda9efc8`
+- RBF SHA-256:
+  `b41ba46f55bc77796c69b59a4cbd48bf093694acf0e1c6d0b918c8cd1bcafaec`
+- Additional detail capture:
+  `docs/perf/wombat33_cpu_icache_lookahead_seed32_speedometer323_detail.png`
+
+Mac OS reached the safe-to-switch-off screen after the run, MiSTer returned to
+`MENU`, and the disposable image was restored from the golden gzip. The
+disposable and pristine-reference disks both match MD5
+`0c4f774b4a2eccd5656e92f16119875f`; the golden gzip matches MD5
+`671894be51b1cd1e0c0c8fb4ec39173e`.

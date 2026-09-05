@@ -7,11 +7,11 @@ complete; do not repeat either completed DAFB hardware run.
 
 - Branch: `cpu-sdram-handoff-seed15`
 - Fork remote: `https://github.com/alanswx/wombat33_MiSTer.git`
-- Accepted parent RTL commit: `e3477c7` (`Advance AP68040 to DBcc refill fast path`)
-- AP68040 submodule: clean at `c9ecf79` on `wombat-inline-dbcc-refill`
-- MiSTer `192.168.1.75`: Mac OS was shut down through MacAtrium and the menu
-  core was loaded. It is safe to deploy another RBF.
-- Disposable disk currently matches MD5
+- Accepted parent RTL commit: `f846901` (`Advance AP68040 to instruction lookahead`)
+- AP68040 submodule: clean at `8951fd2` on `wombat-icache-lookahead`
+- MiSTer `192.168.1.75`: Mac OS reached the safe-to-switch-off screen and the
+  menu core was loaded. It is safe to deploy another RBF.
+- Disposable and pristine-reference disks currently match MD5
   `0c4f774b4a2eccd5656e92f16119875f`.
 - Golden restore source:
   `/media/fat/games/Wombat33/backup/MacAtrium-7.5.5-fullcolor_speedtest_golden_20260902.hda.gz`
@@ -326,7 +326,8 @@ The controlled Speedometer 3.23 run scores CPU 5.164, Graphics 5.566, Disk
 0.686, Math 33.133, Old PR 7.186, and New PR 2.348. CPU benchmark average is
 13.254, only 0.18% above the accepted 13.230; CPU PR is only 0.60% higher.
 That end-to-end result does not justify the area, so the candidate is rejected.
-The accepted parent pointer remains AP68040 `c9ecf79`.
+The parent pointer therefore remained at AP68040 `c9ecf79` for the profiling
+step that followed.
 
 Preserved experiment artifacts:
 
@@ -347,11 +348,86 @@ at `MENU`. The disposable and pristine-reference disks both match MD5
 `0c4f774b4a2eccd5656e92f16119875f`; the untouched golden gzip remains
 `671894be51b1cd1e0c0c8fb4ec39173e`.
 
-The next active task is no longer another hand-selected ALU bypass. First
-profile the actual Speedometer 3.23 CPU interval at opcode-pair and sequencer-
-state granularity, because the focused loop overstated this candidate's value.
-Only then choose a shared decode-overlap mechanism whose measured dynamic
-coverage predicts a multi-percent end-to-end gain.
+The next active task was no longer another hand-selected ALU bypass. Profiling
+the actual Speedometer 3.23 CPU interval found a broad instruction-fetch cost;
+the accepted section below records the resulting shared cache optimization.
+
+## Newly accepted sequential I-cache lookahead
+
+AP68040 commit `8951fd2` adds a private one-longword instruction lookahead to
+`ap040_cache`. A sequential hit inside the same 16-byte line records the next
+physical word and way. An exact following request can be acknowledged directly
+from idle, hits may chain, and unrelated data traffic does not consume the
+entry. Reset, `CINV`, nonmatching instruction traffic, unsafe line boundaries,
+and all ordinary miss behavior retain conservative semantics. The path never
+issues a speculative external bus transaction or advances architectural PC.
+
+Directed cache test T12 covers byte lanes, chained hits, survival across D
+traffic, and absence of extra bus beats. The full AP reset, double-fault,
+walker-CDC, 16-bit bus-gap, timeout, cache-snoop, integer, and exception suites
+pass. Full-machine Verilator passes. The focused loop falls from 161,256 to
+160,650 cycles (-606, -0.376%). The first 100 SingleStepTests rows remain
+exactly 32,841,589 cycles with all 1,696 field groups matching and zero real
+differences.
+
+The local Speedometer 3.23 CPU benchmark average rises from 13.550 to 13.968
+(+3.08%). Profiling reports 96,214,523 lookahead hits, equal to 64.48% of
+dynamic dispatches; raw instruction fetches fall from 167,686,915 to
+151,112,038 and cache-state occupancy falls from 10.6% to 5.7%. Profiled CPU
+clocks fall from 1,856.5 million to 1,797.5 million and clocks per dispatch
+fall from 12.37 to 12.05.
+
+Quartus seed 30 failed setup by 0.128 ns. Seed 31 failed setup by 0.090 ns and
+hold by 0.222 ns. Seed 32 is accepted: 37,357 ALMs, 4,152/4,191 LABs, 24,026
+fitted registers, 3,135,384 block-memory bits, 428 RAM blocks, and zero setup
+or hold TNS. Setup is +0.115 ns overall, +0.785 ns CPU, +0.115 ns SDRAM, and
++0.553 ns HDMI. Hold is +0.213 ns overall, +0.250 ns CPU, and +0.413 ns SDRAM.
+Against the DBcc checkpoint the candidate costs 294 ALMs and 30 LABs, leaving
+39 LABs free.
+
+The timing-clean RBF booted Mac OS 7.5.5 and completed Speedometer 3.23
+`Run ALL Tests` without capture or input during timing:
+
+| metric | accepted DBcc | I-cache lookahead | change |
+|---|---:|---:|---:|
+| CPU benchmark average | 13.230 | **13.588** | **+2.71%** |
+| CPU PR | 5.133 | **5.195** | **+1.21%** |
+| Graphics PR | 5.792 | 6.074 | +4.87% |
+| Disk PR | 0.688 | 0.680 | -1.16% |
+| Math PR | 33.051 | 34.011 | +2.90% |
+| Old PR | 7.234 | 7.437 | +2.81% |
+| New PR | 2.363 | 2.362 | -0.04% |
+| FPU average | 2.656 | 2.722 | +2.48% |
+| Color average | 1.724 | 1.748 | +1.39% |
+
+Preserved artifacts:
+
+- AP68040 branch/commit: `wombat-icache-lookahead` / `8951fd2`
+- parent pointer/seed commit: `f846901`
+- Quartus tree:
+  `/home/alans/builds/wombat33_cpu_icache_lookahead_seed32_20260905`
+- MiSTer RBF:
+  `/media/fat/_Unstable/Wombat33_CPU_icache_lookahead_seed32_20260905.rbf`
+- RBF MD5: `202f64a6d77495db9f090b57eda9efc8`
+- RBF SHA-256:
+  `b41ba46f55bc77796c69b59a4cbd48bf093694acf0e1c6d0b918c8cd1bcafaec`
+- Result captures: `docs/perf/wombat33_cpu_icache_lookahead_seed32_` followed by
+  `speedometer323_complete.png`, `speedometer323_results.png`,
+  `speedometer323_pr.png`, and `speedometer323_detail.png`
+
+Mac OS reached the safe-to-switch-off screen, MiSTer returned to `MENU`, and
+the disposable disk was overwritten from the golden gzip. The disposable and
+pristine-reference disks both match MD5
+`0c4f774b4a2eccd5656e92f16119875f`; the golden gzip matches
+`671894be51b1cd1e0c0c8fb4ec39173e`.
+
+The next active task is data-side rather than broader instruction pipelining.
+Instrument `S_MRD`/`S_MWR` into D-cache hits, misses, fills, stores, and ack
+latency. If internal lookup is the cost, try a bounded registered request or
+early-hit response; if stores dominate, measure an ordered one-entry store
+buffer. Preserve MMU translation, snoops, precise faults, DMA visibility, and
+registered external completion. With only 39 LABs free, require a predicted
+multi-percent CPU-average win or pair the change with a new area reclaim.
 
 ## Working-tree ownership
 
@@ -369,6 +445,6 @@ rewritten, cleaned, or deleted:
 Only `README.md`, `CPU_PERFORMANCE_TASKS.md`,
 `docs/PERFORMANCE_MEASUREMENTS.md`, this handoff, and the named performance
 screenshots belong in the documentation checkpoint following parent RTL
-commit `e3477c7`.
+commit `f846901`.
 
 There is no `CLAUDE.md` in this repository or its git history at this stop.

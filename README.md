@@ -27,12 +27,12 @@ SCSI disk from OSD slot `S0`; `BUILD.md` covers seeding both.
 The memory path now measures **52.4 MB/s** for sequential integrated reads and
 **304 ns** for a 16-byte fill, putting bandwidth inside the real Quadra 800's
 50--65 MB/s range. CPU-side work has since raised the Speedometer 3.23 CPU PR
-score to **5.133**, with the complete AP68040 suite, the Wombat Verilator
+score to **5.195**, with the complete AP68040 suite, the Wombat Verilator
 model, the first 100 SingleStepTests rows, Quartus timing, and a full hardware
 PR run used as the acceptance gate.
 
-The current accepted RTL checkpoint is parent commit `e3477c7` with AP68040
-submodule commit `c9ecf79`. Moving the two-read-port FPU register bank into
+The current accepted RTL checkpoint is parent commit `f846901` with AP68040
+submodule commit `8951fd2`. Moving the two-read-port FPU register bank into
 mirrored MLABs, then replacing the DAFB palette's unintended 6,144-register
 read mirror with explicit M10K views, and finally consolidating DAFB's 17
 timing words in one MLAB, created the room needed for CPU work. Decode-time
@@ -43,9 +43,13 @@ now retires a resident queued opcode directly into decode, consumes resident
 immediate words there when bus ownership is unambiguous, and dispatches a
 resident DBcc target without the generic refill boundary. Together these steps
 cut the focused loop by 24.02% and the first-100 differential corpus by 6.62%.
-The final seed-30 fit uses 37,063 ALMs and 4,122 LABs (69 free), closes every
-timing domain with +0.778 ns SDRAM setup slack, and raises controlled hardware
-CPU PR from 5.088 to **5.133**. See
+A one-longword sequential I-cache lookahead now serves the next instruction
+directly when it is in the same 16-byte cache line. It covers 64.48% of dynamic
+dispatches in the measured Speedometer CPU interval and raises the hardware CPU
+benchmark average from 13.230 to **13.588** (+2.71%). The final seed-32 fit uses
+37,357 ALMs and 4,152 LABs (39 free), closes every timing domain with +0.115 ns
+worst setup and +0.213 ns worst hold slack, and raises controlled hardware CPU
+PR from 5.133 to **5.195** (+1.21%). See
 [`docs/PERFORMANCE_MEASUREMENTS.md`](docs/PERFORMANCE_MEASUREMENTS.md) for
 measurements and [`CPU_PERFORMANCE_TASKS.md`](CPU_PERFORMANCE_TASKS.md) for the
 live, power-loss-safe work queue and exact recovery instructions.
@@ -53,10 +57,12 @@ live, power-loss-safe work queue and exact recovery instructions.
 A subsequent one-entry `ADD.L Dn,Dn` predecode experiment was timing-clean and
 cut the focused synthetic loop by another 8.06%, but improved the controlled
 hardware CPU average by only 0.18% while consuming 271 ALMs and 23 LABs. It is
-preserved for analysis but rejected; the accepted checkpoint and **5.133** CPU
-PR remain unchanged. The next step is to profile the actual Speedometer CPU
-interval at opcode-pair and sequencer-state granularity before selecting a
-broader shared decode-overlap path.
+preserved for analysis but rejected. Profiling the real Speedometer interval led
+instead to the accepted I-cache lookahead above. The next active target is the
+remaining data-side `S_MRD`/`S_MWR` occupancy: measure internal cache-hit delay
+separately from external SDRAM misses, then prototype a bounded D-cache
+request/lookup overlap without weakening registered bus completion or precise
+fault behavior.
 
 ## Testbench (`SingleStepTests/`)
 
