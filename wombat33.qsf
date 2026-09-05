@@ -142,7 +142,11 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 # 28 with 36,592 ALMs, 4,080/4,191 LABs, +0.291 ns worst setup (+0.862 ns CPU,
 # +0.291 ns SDRAM), and +0.243 ns worst hold. Seed 27 is smaller but rejected:
 # its SDRAM setup slack is -0.453 ns with -0.692 ns TNS.
-set_global_assignment -name SEED 28
+# The accepted DBcc branch-refill fast path closes cleanly at seed 30 with
+# 37,063 ALMs, 4,122/4,191 LABs, +0.512 ns worst setup (+1.510 ns CPU,
+# +0.778 ns SDRAM), and +0.207 ns worst hold. Seed 28 passed with only
+# +0.016 ns SDRAM setup margin; seed 29 failed SDRAM setup by 0.436 ns.
+set_global_assignment -name SEED 30
 
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
